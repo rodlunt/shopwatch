@@ -182,6 +182,36 @@ def observation_from_json_ld(html: str, expected_model: str | None = None) -> Ob
     return obs
 
 
+#: Markers of a bot-protection interstitial. These pages return HTTP 200, so without
+#: this check a block is indistinguishable from a product page that has no price, and
+#: the run reports "unresolved" for a retailer that never answered at all.
+BLOCK_MARKERS = (
+    "pardon our interruption",          # Imperva / Incapsula
+    "_incapsula_resource",
+    "request unsuccessful. incapsula",
+    "attention required! | cloudflare",  # Cloudflare
+    "cf-browser-verification",
+    "checking your browser before accessing",
+    "just a moment...",
+    "px-captcha",                        # PerimeterX
+    "/_sec/cp_challenge/",               # Akamai
+    "enable javascript and cookies to continue",
+)
+
+
+def detect_block(html: str) -> str | None:
+    """Return the marker that identifies an interstitial, or None for a real page.
+
+    Deliberately narrow. A false positive here hides a genuine price, so only markers
+    that belong to a challenge page's own chrome are listed.
+    """
+    lowered = html[:20000].lower()
+    for marker in BLOCK_MARKERS:
+        if marker in lowered:
+            return marker
+    return None
+
+
 class RetailerAdapter:
     """Base adapter. Subclasses normally only override `parse`."""
 
@@ -216,6 +246,10 @@ class RetailerAdapter:
             raise FetchError("403: retailer blocked the request (bot protection)")
         if response.status_code != 200:
             raise FetchError(f"HTTP {response.status_code}")
+        marker = detect_block(response.text)
+        if marker:
+            # A 200 carrying a challenge page is a block, not an empty product page.
+            raise FetchError(f"bot-protection interstitial (matched {marker!r})")
         return response.text
 
     def parse(self, html: str, expected_model: str | None = None) -> Observation:

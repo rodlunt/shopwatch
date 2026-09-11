@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app import retailers
 from app.retailers import base, crowdshop
 
@@ -88,3 +90,61 @@ def test_every_adapter_declares_what_it_cannot_read():
 def test_unknown_adapter_slug_returns_none_rather_than_raising():
     assert retailers.get_adapter("not_a_retailer") is None
     assert retailers.get_adapter(None) is None
+
+
+# A trimmed copy of what harveynorman.com.au actually returned on 2026-09-11: an
+# Imperva/Incapsula challenge served with HTTP 200.
+INCAPSULA_CHALLENGE = """
+<!DOCTYPE html><html><head><noscript><title>Pardon Our Interruption</title></noscript>
+<meta name="robots" content="noindex, nofollow"></head>
+<body><h1>Pardon Our Interruption</h1>
+<p>As you were browsing something about your browser made us think you were a bot.</p>
+<script src="/_Incapsula_Resource?SWJIYLWA=719d34d31c8e3a6e6fffd425f7e032f3"></script>
+</body></html>
+"""
+
+CLOUDFLARE_CHALLENGE = """
+<html><head><title>Just a moment...</title></head>
+<body><div id="cf-browser-verification">Checking your browser before accessing the site.</div>
+</body></html>
+"""
+
+
+def test_a_challenge_page_is_detected_not_read_as_an_empty_product():
+    assert base.detect_block(INCAPSULA_CHALLENGE) == "pardon our interruption"
+    # Which Cloudflare marker matches first is an implementation detail; that one does is not.
+    assert base.detect_block(CLOUDFLARE_CHALLENGE) is not None
+
+
+def test_a_real_product_page_is_not_mistaken_for_a_challenge():
+    """The control. Without this the detector could pass by flagging everything."""
+    assert base.detect_block(PRODUCT_PAGE) is None
+    assert base.detect_block(NO_PRICE_PAGE) is None
+    assert base.detect_block(RANGE_PAGE) is None
+
+
+def test_fetch_raises_on_a_challenge_page_served_with_http_200(monkeypatch):
+    """A block must reach the watcher as an error, never as an unresolved price."""
+
+    class FakeResponse:
+        status_code = 200
+        text = INCAPSULA_CHALLENGE
+
+    monkeypatch.setattr(base, "requests", type("R", (), {"get": staticmethod(lambda *a, **k: FakeResponse())}))
+    adapter = retailers.get_adapter("harvey_norman")
+    adapter.config.request_delay = 0
+    with pytest.raises(base.FetchError, match="bot-protection interstitial"):
+        adapter.fetch("https://www.harveynorman.com.au/anything")
+
+
+def test_fetch_returns_the_body_for_a_real_page(monkeypatch):
+    """The other half of the control: the same path must succeed on a genuine page."""
+
+    class FakeResponse:
+        status_code = 200
+        text = PRODUCT_PAGE
+
+    monkeypatch.setattr(base, "requests", type("R", (), {"get": staticmethod(lambda *a, **k: FakeResponse())}))
+    adapter = retailers.get_adapter("harvey_norman")
+    adapter.config.request_delay = 0
+    assert "HW-Q930H/XY" in adapter.fetch("https://www.harveynorman.com.au/anything")

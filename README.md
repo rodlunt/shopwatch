@@ -353,7 +353,9 @@ class MyRetailerAdapter(RetailerAdapter):
 
 Rules for adapters: return `None` for anything you could not determine, never a plausible
 guess and never `0`. Do not defeat CAPTCHAs or anti-bot measures. Keep `never_scrapable`
-honest, it is what tells the UI a field is a manual one.
+honest, it is what tells the UI a field is a manual one. If the retailer serves a
+challenge page with HTTP 200, add its marker to `BLOCK_MARKERS` in `retailers/base.py`
+so the block surfaces as an error rather than as an empty product page.
 
 ## Adding a category
 
@@ -374,7 +376,7 @@ or add an entry to `CATEGORY_PROFILES` in `app/seed.py` and re-run `python -m ap
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest        # 77 tests
+.venv/bin/python -m pytest        # 81 tests
 .venv/bin/python -m ruff check .
 ```
 
@@ -390,15 +392,33 @@ alert suppression on trivial moves, and migration/backup safety.
 
 Read this before trusting an empty field.
 
-* **Freight is not scrapable at any of the seeded retailers.** Every one of them quotes
-  delivery at checkout against a postcode. Freight is a manual field by design, which is
-  why an unresolved freight is ranked with a penalty rather than assumed to be zero.
+### What was actually measured
+
+Probed from an Australian residential IP on 2026-09-11 with the adapters' own `fetch()`.
+This is a snapshot, not a permanent fact: re-run `python -m app.price_watch --json` and
+read `/api/price-watch/runs` rather than trusting this table.
+
+| Retailer | Result | Meaning |
+|---|---|---|
+| Crowdshop | 200, 273 KB | fetches fine |
+| Harvey Norman | 200 carrying an **Imperva/Incapsula challenge** | blocked |
+| Appliance Central | **403** | blocked |
+| JB Hi-Fi | not established | the URL probed was a guess and 404'd |
+| The Good Guys | not established | as above |
+
+**Harvey Norman is the instructive one.** It returns HTTP 200 with a "Pardon Our
+Interruption" interstitial, so a naive adapter parses it, finds no price, and reports
+`unresolved` — identical to what it reports for a product page that genuinely has no
+price. `retailers.base.detect_block()` catches that family of pages and raises
+`FetchError` instead, so a block reaches the run as an **error**, which is what it is.
+Add a marker there if a new retailer starts doing the same.
+
+### Structural limits, which no amount of scraping fixes
+
+* **Freight is not scrapable at any of the seeded retailers.** Every one quotes delivery
+  at checkout against a postcode. Freight is a manual field by design, which is why an
+  unresolved freight is ranked with a penalty rather than assumed to be zero.
 * **Store pickup is not scrapable** for the same reason: it needs a store selection.
-* **Harvey Norman, JB Hi-Fi and The Good Guys front their pages with bot protection.**
-  A plain request frequently returns a challenge or a 403. The adapter records the error
-  and leaves the previous value intact; it does not try to defeat the protection. In
-  practice those three are maintained by hand or by pasting research through
-  `/api/import`.
 * **Crowdshop quotes a price guide range** on some listings. The low end becomes the
   headline figure and the full range is kept in `price_guide`. Its displayed `$0` delivery
   is not treated as confirmed free shipping.
@@ -412,3 +432,42 @@ Read this before trusting an empty field.
 * **Playwright is not used.** If a retailer genuinely needs a headless browser, add it as
   an optional dependency in that adapter alone; the rest of the stack stays on
   `requests` + `BeautifulSoup`.
+
+### Filling a blocked retailer by hand, with a browser
+
+A blocked retailer is filled by a person reading the page in a normal browser and posting
+what they saw. Claude-in-Chrome is a convenient way to do that leg, but it is a **manual
+research lane, not an adapter**: it needs a live session and a desktop browser, and the
+watch runs headless on the server from cron, so it can never be what fills these on a
+schedule.
+
+The distinction that matters: a person driving a browser occasionally to read a public
+product page is ordinary use. Wiring a *scheduled* job to drive a real browser so it stops
+looking like automation is anti-bot evasion, and this project does not do it. That is also
+the route that gets an account blocked rather than a price.
+
+The values land through the normal import path, so they are recorded honestly:
+
+```bash
+curl -X POST http://SERVER-IP:8477/api/import \
+  -H 'Content-Type: application/json' -d '{
+    "source": "claude-in-chrome",
+    "findings": [{
+      "model": "HW-Q930H/XY",
+      "retailer": "Harvey Norman",
+      "price": 1695,
+      "freight": null,
+      "stock": "In stock",
+      "source_url": "https://www.harveynorman.com.au/...",
+      "checked_at": "2026-09-11T12:00:00Z",
+      "verification": {"model": true, "price": true}
+    }]
+  }'
+```
+
+That writes state `IMPORTED` with `source = claude-in-chrome`, **not** `LIVE`. The
+distinction is the point: `LIVE` means an adapter read the page itself, and a value a
+human transcribed should never claim to be that. It also leaves the field unlocked, so if
+the retailer ever becomes scrapable the automated run takes it back. Lock it only when the
+value is one a scraper could never get right anyway, such as a negotiated price or a
+freight figure confirmed at checkout.
