@@ -32,7 +32,11 @@ OLD=$(git -C "$REPO" rev-parse HEAD)
 
 # Fetch the one commit by its id. Asking for the SHA itself means a branch that
 # moved between CI passing and this running cannot substitute another commit.
-git -C "$REPO" fetch --quiet "$SRC" "$SHA" || fail "cannot fetch $SHA from $SRC"
+# safe.directory: this runs as root against a workspace owned by the runner
+# user, which git otherwise refuses to read as dubious ownership. Scoped to the
+# one path the caller passed, never a global wildcard.
+git -C "$REPO" -c safe.directory="$SRC" fetch --quiet "$SRC" "$SHA" \
+    || fail "cannot fetch $SHA from $SRC"
 git -C "$REPO" cat-file -e "${SHA}^{commit}" || fail "$SHA is not a commit after fetch"
 git -C "$REPO" checkout --quiet --detach "$SHA" || fail "cannot check out $SHA"
 
