@@ -153,17 +153,27 @@ class ImapSource:
                 if status != "OK":
                     log.warning("cannot open folder %s", folder)
                     continue
-                # IMAP dates are unquoted; a malformed search yields None, not an error.
-                criteria = "ALL"
+                # Filter on the server, one search per retailer domain. Fetching every
+                # message in INBOX and Trash just to read the From header pulls hundreds
+                # of megabytes and takes minutes; the first live run never finished.
+                # IMAP dates are unquoted, and a malformed search yields an empty result
+                # set rather than an error, so a None result is a failure not "none found".
+                date_clause = ""
                 if since:
                     from datetime import datetime
                     when = datetime.strptime(since, "%Y-%m-%d").strftime("%d-%b-%Y")
-                    criteria = f"(SINCE {when})"
-                status, data = conn.search(None, criteria)
-                if status != "OK" or not data or data[0] is None:
-                    log.warning("search failed in %s (criteria %s)", folder, criteria)
-                    continue
-                for uid in data[0].split():
+                    date_clause = f" SINCE {when}"
+
+                uids: list[bytes] = []
+                for domain in sorted(RETAILERS):
+                    criteria = f'(FROM "{domain}"{date_clause})'
+                    status, data = conn.search(None, criteria)
+                    if status != "OK" or not data or data[0] is None:
+                        log.warning("search failed in %s for %s", folder, domain)
+                        continue
+                    uids.extend(data[0].split())
+
+                for uid in dict.fromkeys(uids):
                     status, fetched = conn.fetch(uid, "(RFC822)")
                     if status != "OK" or not fetched:
                         continue
