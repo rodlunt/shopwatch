@@ -245,6 +245,35 @@ A regex gate runs first, so only emails carrying an actual offer reach the model
 `claude-opus-5`; `--model claude-haiku-4-5` is cheaper again. Extraction runs at effort
 `low`, which is the right setting for reading marketing copy.
 
+### When it runs, and why
+
+Once a day at **10:00 Brisbane**, chosen from 383 retailer emails spanning 163 days
+rather than picked out of the air.
+
+```
+BY HOUR (Brisbane)                    BY DAY
+  06:00    4  #                         Mon   45  ###########################
+  07:00   24  #####                     Tue   44  ###########################
+  08:00  202  ####################      Wed   44  ###########################
+  09:00   44  ##########                Thu   71  ###########################################
+  10:00   14  ###                       Fri   73  ############################################
+  12:00   18  ####                      Sat   67  ########################################
+  17:00   12  ###                       Sun   39  ########################
+  20:00   14  ###
+```
+
+**70% arrive between 07:00 and 09:59, and 202 of 383 at 08:00 exactly.** Nothing at all
+lands between 21:00 and 06:00. Both retailers behave the same way: JB Hi-Fi peaks at
+08:00 (150 of 317), The Good Guys at 08:00 (52 of 66).
+
+A run at 10:00 puts the entire morning batch through within three hours of arrival. The
+afternoon stragglers wait until tomorrow, which costs nothing: these offers run for days,
+not hours.
+
+Thursday to Saturday is the promo window and Sunday is quietest, but every weekday still
+carries 39-73 emails over the period. **Skipping days is not worth it** - restricting to
+Thu-Sat would have missed 133 of 383.
+
 ### Running it on a timer
 
 ```ini
