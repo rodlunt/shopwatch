@@ -51,25 +51,26 @@ Shipped 10 PRs (#11 to #22). The substantial ones:
   engine did not, so a rejected listing could still push "act on it" to your phone.
 - **#22 The deploy installs its own host scripts** (above).
 
-## Open follow-ups: 10 issues, all from the session-end code review
+## Open follow-ups: none
 
-Filed 2026-09-11 with verification evidence and confidence labels on each.
+All ten issues from the session-end code review were closed the same night across
+five PRs (#36 to #40), one per file domain:
 
 | | |
 |---|---|
-| **#26** | deploy's no-rebuild paths exit 0 without checking the container is alive |
-| **#29** | axis bands overlap when an intermediate price target is NULL |
-| **#30** | a product with prices but no targets draws no axis at all |
-| **#25** | a price tie marks two listings as best (matches on value, not id) |
-| **#28** | un-ruling a listing destroys the record of why it was ruled out |
-| **#23** | wheel zoom over the axis traps page scrolling |
-| **#24** | `role="img"` hides every plotted price from assistive tech |
-| **#27** | 120s health budget can be shorter than the first healthcheck probe |
-| **#31** | en dash in cluster label, dead `_label` guard, lane fallback overlaps |
-| **#32** | no test coverage for the ruled-out API endpoint |
+| #29, #30 | axis bands overlapped when a middle target was NULL; no axis drawn without targets |
+| #25, #24 | best marker matched price not listing; axis was invisible to assistive tech |
+| #23, #31 | wheel and touch both trapped page scrolling; en dash, dead guard, lane fallback |
+| #28, #32 | un-ruling destroyed the reason; endpoint had no tests |
+| #27 | healthcheck first probe landed past the deploy's own wait |
 
-**#26 is the one to do first.** It is the same class as the two fixed today: a path that
-reports success without having checked anything.
+Two were the same shape as the bugs found earlier that day: something reporting success
+while not doing its job. #23 had two causes where the issue named one, so fixing only
+the wheel would have closed it looking resolved while touch users hit the identical wall.
+
+**Not every new test is a control.** Several pass against the pre-fix code by design and
+are regression guards; the PRs say which is which. #27 remains **LIKELY** rather than
+VERIFIED: it was read off the configured intervals, not reproduced.
 
 ## The buying decision
 
