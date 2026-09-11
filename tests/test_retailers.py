@@ -262,3 +262,53 @@ def test_every_separator_the_retailer_actually_uses_still_parses():
 def test_the_model_inside_a_longer_page_title_still_matches():
     """One-directional containment: a page wrapping the model in a title is fine."""
     assert base.model_matches("HW-Q930H/XY", "Samsung HW-Q930H/XY Soundbar")
+
+
+# ---------------------------- the page's own product, not a carousel entry
+
+def _two_blocks(first: str, second: str) -> str:
+    return (
+        '<html>'
+        '<script type="application/ld+json">{"@type": "Product", ' + first + '}</script>'
+        '<script type="application/ld+json">{"@type": "Product", ' + second + '}</script>'
+        '</html>'
+    )
+
+
+CAROUSEL = '"sku": "111111", "offers": {"@type": "Offer", "price": "249.00"}'
+REAL = '"mpn": "HW-Q930H/XY", "offers": {"@type": "Offer", "price": "1699.00"}'
+STUB = '"name": "Samsung"'
+
+
+def test_a_leading_carousel_block_does_not_win():
+    """Retailers emit recommendation Products before their own. The old loop took the
+    first and broke, so a carousel entry's price was written to the listing, and with
+    merchant numbers no longer compared it would land without raising a mismatch."""
+    obs = base.observation_from_json_ld(_two_blocks(CAROUSEL, REAL),
+                                        expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0, "the page's own product must win"
+    assert obs.model_on_page == "HW-Q930H/XY"
+    assert not any("mismatch" in w for w in obs.warnings), obs.warnings
+
+
+def test_a_leading_stub_block_does_not_swallow_the_price():
+    """A Product block with no offers used to break the loop, leaving the price
+    unresolved forever while the real block below was never examined."""
+    obs = base.observation_from_json_ld(_two_blocks(STUB, REAL),
+                                        expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0
+    assert "advertised_price" not in obs.unresolved
+
+
+def test_with_no_expected_model_the_first_priced_block_wins():
+    """Control: the selection must still work when there is nothing to match against."""
+    obs = base.observation_from_json_ld(_two_blocks(CAROUSEL, REAL))
+    assert obs.advertised_price == 249.0, "first priced block, in document order"
+
+
+def test_a_single_product_page_is_unaffected():
+    """Control: the ordinary case must not change."""
+    obs = base.observation_from_json_ld(
+        '<html><script type="application/ld+json">{"@type": "Product", ' + REAL + '}</script></html>',
+        expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0 and obs.model_on_page == "HW-Q930H/XY"

@@ -168,39 +168,79 @@ AVAILABILITY = {
 }
 
 
+def _read_product_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Pull the fields we care about out of one schema.org Product block."""
+    found: dict[str, Any] = {"identifier": None, "key": None, "price": None, "stock": None}
+
+    # Ordered so a manufacturer identifier wins when the page publishes both.
+    # schema.org already draws the line this code needs: mpn and model name the
+    # manufacturer's product, sku and productID are the merchant's own numbering.
+    for key in ("mpn", "model", "productID", "sku"):
+        value = block.get(key)
+        if isinstance(value, str) and value.strip():
+            found["identifier"] = value.strip()
+            found["key"] = key
+            break
+
+    offers = block.get("offers")
+    offers = offers if isinstance(offers, list) else [offers]
+    for offer in offers:
+        if not isinstance(offer, dict):
+            continue
+        price = parse_price(offer.get("price") or offer.get("lowPrice"))
+        if price is not None and found["price"] is None:
+            found["price"] = price
+        availability = str(offer.get("availability") or "").split("/")[-1].lower()
+        if availability and found["stock"] is None:
+            found["stock"] = AVAILABILITY.get(availability, availability)
+    return found
+
+
 def observation_from_json_ld(html: str, expected_model: str | None = None) -> Observation:
-    """Generic schema.org Product/Offer reader, which most AU retailers still publish."""
+    """Generic schema.org Product/Offer reader, which most AU retailers still publish.
+
+    Picks a block rather than taking the first one and stopping. Retailers commonly
+    emit a recommendation or carousel Product before the page's own, and the old loop
+    broke after the first Product whether or not it had yielded anything: a leading
+    stub with no offers left the price unresolved forever while the real block below
+    was never examined, and a leading carousel entry had ITS price written to the
+    listing. With merchant stock numbers no longer compared, that could happen without
+    raising a mismatch, so the wrong product's price would land silently.
+
+    Preference order: a block whose manufacturer identifier matches what we expect,
+    then the first block that actually carries a price, then the first Product at all
+    so its identifier is still recorded.
+    """
     obs = Observation()
+    candidates = []
     for block in json_ld_blocks(html):
         types = block.get("@type")
         types = types if isinstance(types, list) else [types]
         if not any(str(t).lower() == "product" for t in types if t):
             continue
+        candidates.append(_read_product_block(block))
 
-        # Ordered so a manufacturer identifier wins when the page publishes both.
-        # schema.org already draws the line this code needs: mpn and model name the
-        # manufacturer's product, sku and productID are the merchant's own numbering.
-        for key in ("mpn", "model", "productID", "sku"):
-            value = block.get(key)
-            if isinstance(value, str) and value.strip():
-                obs.model_on_page = value.strip()
-                obs.model_on_page_key = key
-                break
+    chosen = None
+    if expected_model:
+        chosen = next(
+            (c for c in candidates
+             if c["key"] in MANUFACTURER_KEYS and model_matches(expected_model, c["identifier"])),
+            None,
+        )
+    if chosen is None:
+        chosen = next((c for c in candidates if c["price"] is not None), None)
+    if chosen is None and candidates:
+        chosen = candidates[0]
 
-        offers = block.get("offers")
-        offers = offers if isinstance(offers, list) else [offers]
-        for offer in offers:
-            if not isinstance(offer, dict):
-                continue
-            price = parse_price(offer.get("price") or offer.get("lowPrice"))
-            if price is not None and obs.advertised_price is None:
-                obs.advertised_price = price
-            availability = str(offer.get("availability") or "").split("/")[-1].lower()
-            if availability and obs.stock_status is None:
-                obs.stock_status = AVAILABILITY.get(availability, availability)
-        break
+    if chosen:
+        obs.model_on_page = chosen["identifier"]
+        obs.model_on_page_key = chosen["key"]
+        obs.advertised_price = chosen["price"]
+        obs.stock_status = chosen["stock"]
+
     if obs.advertised_price is None:
         obs.mark_unresolved("advertised_price")
+
     # Only compare an identifier that claims to be the manufacturer's. A merchant
     # stock number is not a wrong model, it is a different kind of number, and
     # comparing it produced a permanent red fault tag on two correct listings.
