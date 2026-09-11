@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% import "_product.html" as c with context %}
-{% block title %}{{ product.name }} — Shopwatch{% endblock %}
+{% block title %}{{ product.name }} | Shopwatch{% endblock %}
 
 {% block content %}
 {% call c.card(product, linked=false) %}
@@ -102,7 +102,7 @@
       {% for h in history %}
       <tr>
         <td class="muted">{{ h.observed_at|dt }}</td>
-        <td>{{ h.retailer_name or '—' }}</td>
+        <td>{{ h.retailer_name or '-' }}</td>
         <td class="r num">{{ h.advertised_price|money }}</td>
         <td class="r num">{% if h.freight_resolved %}{{ h.freight|money }}{% else %}<span class="unresolved">unknown</span>{% endif %}</td>
         <td class="r num"><b>{{ h.delivered_price|money }}</b></td>
@@ -128,7 +128,7 @@
                     data-advertised="{{ l.advertised_price if l.advertised_price is not none else '' }}"
                     data-freight="{{ l.freight if l.freight is not none else '' }}"
                     data-condition="{{ l.condition }}">{{ l.retailer_name }}
-              {%- if l.delivered_price is not none %} — {{ l.delivered_price|money }}{% endif %}</option>
+              {%- if l.delivered_price is not none %}, {{ l.delivered_price|money }}{% endif %}</option>
           {% endfor %}
         </select>
       </label>

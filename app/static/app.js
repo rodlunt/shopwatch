@@ -3,7 +3,7 @@
 
 const MONEY = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD',
   minimumFractionDigits: 0, maximumFractionDigits: 2 });
-const money = v => (v === null || v === undefined || v === '') ? '—' : MONEY.format(v);
+const money = v => (v === null || v === undefined || v === '') ? '-' : MONEY.format(v);
 
 const CLASS_STYLE = {
   HISTORICAL_LOW: 'good', EXCELLENT: 'good', TRIGGER_MET: 'warn',
