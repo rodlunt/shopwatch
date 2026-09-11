@@ -1,7 +1,10 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-jinja2==3.1.5
-python-multipart==0.0.20
-requests==2.32.3
-beautifulsoup4==4.12.3
+# Floors, not pins: every one of these is the version that closes a published
+# advisory found by the audit job on its first run. Dependabot moves them forward.
+fastapi>=0.121.0
+uvicorn[standard]>=0.34.0
+jinja2>=3.1.5
+python-multipart>=0.0.31
+requests>=2.33.0
+beautifulsoup4>=4.12.3
 anthropic>=1.0
+starlette>=1.3.1
