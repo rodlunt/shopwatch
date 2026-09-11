@@ -424,17 +424,19 @@ Migrations are forward-only and run on boot, so a deploy never wipes the databas
 
 There is no manual deploy path by design. To ship, merge to `main`.
 
-### Alerting is off until you turn it on
+### Alerting is on
 
-`/srv/prod/shopwatch/.env` ships with `SHOPWATCH_NTFY_URL` empty, so nothing publishes
-anywhere. To switch it on, create a topic and fill in the URL plus the publish token from
-`/root/.ntfy_pub_token` (the server rejects unauthenticated publishes with a 403, so a
-missing token means silent failure at the server, which the app reports as
-`[ALERT-FAILURE]` and a non-zero exit).
+`SHOPWATCH_ALERTS_ENABLED` is `"true"` in the compose file, and `/srv/prod/shopwatch/.env`
+carries a non-empty `SHOPWATCH_NTFY_URL` and `SHOPWATCH_NTFY_TOKEN`. Both are rendered from
+the SOPS vault at `smart-home:opti-stacks/shopwatch/secrets.sops.env` by `sops-render.sh`.
+Never hand-edit that file: a hand-edited secret is one nothing can rotate.
 
-Note this cuts across the house "ntfy is for faults only" policy: a price alert is not a
-fault. That is a deliberate decision to make, not a default to inherit, which is why the
-value ships empty.
+The server rejects unauthenticated publishes with a 403, so a missing or wrong token would
+fail at the server rather than in the app. The app reports that as `[ALERT-FAILURE]` and a
+non-zero exit instead of swallowing it.
+
+This cuts across the house "ntfy is for faults only" policy: a price alert is not a fault.
+That was a deliberate decision, made in #7, not a default inherited by accident.
 
 ### Scheduling the watch
 
