@@ -255,6 +255,40 @@ function toggleRegion(button, region) {
 }
 
 document.addEventListener('click', async event => {
+  const ruleOutOpen = event.target.closest('[data-rule-out-open]');
+  if (ruleOutOpen) {
+    const id = ruleOutOpen.dataset.ruleOutOpen;
+    const form = document.querySelector(`[data-rule-out-form="${id}"]`);
+    if (form) {
+      form.hidden = false;
+      ruleOutOpen.hidden = true;
+      const input = form.querySelector('[data-rule-out-reason]');
+      if (input) input.focus();
+    }
+    return;
+  }
+  const ruleOut = event.target.closest('[data-rule-out]');
+  if (ruleOut) {
+    const id = ruleOut.dataset.ruleOut;
+    const input = document.querySelector(`[data-rule-out-reason="${id}"]`);
+    const reason = input ? input.value.trim() : '';
+    try {
+      await api(`/api/retailers/${id}/ruled-out`,
+        { method: 'POST', body: { ruled_out: true, reason } });
+      location.reload();
+    } catch (err) { toast(`Could not rule it out: ${err.message}`, 'bad'); }
+    return;
+  }
+  const ruleIn = event.target.closest('[data-rule-in]');
+  if (ruleIn) {
+    try {
+      await api(`/api/retailers/${ruleIn.dataset.ruleIn}/ruled-out`,
+        { method: 'POST', body: { ruled_out: false } });
+      location.reload();
+    } catch (err) { toast(`Could not put it back: ${err.message}`, 'bad'); }
+    return;
+  }
+
   const detailBtn = event.target.closest('[data-toggle-detail]');
   if (detailBtn) {
     const region = document.getElementById(`detail-${detailBtn.dataset.toggleDetail}`);
@@ -526,6 +560,7 @@ const AXIS_MIN_SPAN = 20;        // never zoom past a $20 window: the dots would
 const LANE_HEIGHT = 30;
 const LANE_COUNT = 3;
 const CLUSTER_GAP = 26;          // px between dot centres below which they are one marker
+const LABEL_PAD = 12;            // px of clear air each side of a label before it is a collision
 
 function axisMoney(value) {
   return '$' + Math.round(value).toLocaleString('en-AU');
@@ -612,7 +647,7 @@ function setupAxis(root) {
         lead.el._label = label.innerHTML;
       }
 
-      const half = (label ? label.offsetWidth : 60) / 2 + 6;
+      const half = (label ? label.offsetWidth : 60) / 2 + LABEL_PAD;
       let lane = laneEnds.findIndex(end => lead.centre - half > end);
       if (lane === -1) lane = LANE_COUNT - 1;
       laneEnds[lane] = lead.centre + half;
