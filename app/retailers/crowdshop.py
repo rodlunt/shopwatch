@@ -12,11 +12,26 @@ import re
 
 from .base import Observation, RetailerAdapter, observation_from_json_ld, parse_price, register
 
-#: The en dash in this character class is DELIBERATE and must not be "cleaned up".
-#: It is matching a dash that appears in the retailer's own HTML ("$100-$200" written
-#: with an en dash), not one we write. The house ban on en and em dashes governs output,
-#: not input we have to parse. Deleting it stops Crowdshop price ranges parsing.
-RANGE_RE = re.compile(r"\$?\s*(\d[\d,]*(?:\.\d{2})?)\s*[-–to]{1,2}\s*\$?\s*(\d[\d,]*(?:\.\d{2})?)")
+#: A price guide written as a range, e.g. "$869 - $889" or "$869 to $889".
+#:
+#: BOTH sides must carry a currency symbol. Without that this matched any "N to M"
+#: anywhere in the page text and took the first hit, so "Dispatch 3 to 5 business days"
+#: yielded a range of 3 to 5 and parse() promoted $3 as the advertised price. That is
+#: the adapter inventing a figure, and because the historical low never rises again it
+#: would have been permanent.
+#:
+#: The separator is an alternation, not a character class. `[-–to]{1,2}` meant "one or
+#: two of the characters -, en dash, t, o in any order", so "$100 tt $200" and
+#: "$100 oo $200" both matched.
+#:
+#: The en dash is DELIBERATE and must not be "cleaned up": it matches a dash in the
+#: retailer's own HTML, not one we write, and the house ban governs output rather than
+#: input we parse. Removing it would stop en-dash ranges parsing and nothing else,
+#: since hyphen and "to" are separately handled. An earlier version of this comment
+#: claimed removing it broke all range parsing, which was wrong.
+RANGE_RE = re.compile(
+    r"\$\s*(\d[\d,]*(?:\.\d{2})?)\s*(?:-|–|to)\s*\$\s*(\d[\d,]*(?:\.\d{2})?)"
+)
 
 
 @register
