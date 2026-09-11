@@ -108,6 +108,13 @@ def evaluate_product(
             delivered = listing["delivered"]
             if not delivered.known:
                 continue
+            # A ruled-out listing never alerts. best_listing() already refuses to
+            # nominate one, and an alert engine that disagrees with the board is worse
+            # than either: the page shows the price struck through while the phone says
+            # act on it. Price watching deliberately continues for a ruled-out listing
+            # so the history keeps accruing; pushing that history at you does not.
+            if listing.get("ruled_out"):
+                continue
             if (listing["condition"] or "NEW").upper() not in allowed:
                 continue
             if rule["require_resolved"] and not delivered.resolved:
@@ -153,6 +160,10 @@ def _protection_alerts(conn: sqlite3.Connection, product: Mapping[str, Any]) -> 
     for listing in product["listings"]:
         delivered = listing["delivered"]
         if not delivered.known or not delivered.resolved:
+            continue
+        # Same rule as the buy alerts: a listing you have rejected cannot be the
+        # evidence for chasing a price guarantee against it.
+        if listing.get("ruled_out"):
             continue
         if delivered.value >= paid:
             continue
