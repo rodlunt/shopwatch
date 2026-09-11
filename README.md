@@ -43,6 +43,39 @@ Thresholds are inclusive, evaluated best first, and expressed as delivered price
 An unresolved listing that is *above* target still reads `ABOVE TARGET`, because freight
 can only make it worse.
 
+### The three states a listing can be in
+
+| State | On the board | On the axis | Can it be the answer |
+|---|---|---|---|
+| **Active** | yes | yes | yes |
+| **Ruled out** | yes, struck through | yes, struck through | **no** |
+| **Deactivated** | no | no | no |
+
+`active = 0` means *this is not a real listing*: a duplicate, a wrong model, something
+entered by mistake. It disappears.
+
+`ruled_out = 1` means *this is real and I will not buy it*. It stays listed and stays
+plotted, in its true position, but `best_listing()` skips it, so it can never drive the
+verdict or the best-price marker.
+
+The distinction exists because neither of the other two states fits a real listing you
+have decided against. Crowdshop is the case that forced it: **$869 is genuinely the
+cheapest price anyone advertises**, but it is a group-buy whose freight is only costed
+after the purchase closes, so it can never become a delivered price. Deactivating it
+would have hidden the cheapest number on the board with no explanation. Leaving it alone
+had the verdict reading *"Unconfirmed. Crowdshop shows $869..."* for hours after that
+price had been rejected, because cheapest and best were being treated as the same
+question and they are not.
+
+Ruling out records a reason (`ruled_out_reason`) and a timestamp, and is reversible from
+the listing detail. The reason is stored rather than remembered, because *why did we
+discount this* is the question the next session asks.
+
+**A ruled-out listing is still price-watched.** The price watch keys off `active`, not
+`ruled_out`, so a retailer you have dismissed keeps being checked and its history keeps
+accruing. That is deliberate: "it would need to be a lot cheaper" is only actionable if
+something is still watching for a lot cheaper.
+
 ---
 
 ## Where things live
@@ -571,7 +604,8 @@ what would fire without sending anything.
 | `PATCH` | `/api/retailers/{listing_id}` | inline edit; **locks the field as MANUAL** |
 | `POST` | `/api/retailers/{listing_id}/clear-override` | `{"field": "freight"}` or `{"field": "all"}` |
 | `POST` | `/api/retailers/{listing_id}/verification` | `{"aspect": "freight", "status": "VERIFIED"}` |
-| `DELETE` | `/api/retailers/{listing_id}` | deactivates the listing |
+| `POST` | `/api/retailers/{listing_id}/ruled-out` | `{"ruled_out": true, "reason": "..."}`; stays visible, never the answer |
+| `DELETE` | `/api/retailers/{listing_id}` | deactivates the listing, which hides it |
 | `GET` | `/api/price-history/{product_id}` | observations, newest first |
 | `POST` | `/api/price-watch/run` | `{"product_id": 1, "send_alerts": true}` |
 | `GET` | `/api/price-watch/runs` | recent runs with per-listing results |
