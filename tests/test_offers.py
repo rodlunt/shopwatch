@@ -539,3 +539,24 @@ def test_a_broader_search_does_not_widen_what_gets_read():
     """The search is loose on purpose; retailer_for stays strict."""
     assert mailwatch.retailer_for("Fake <deals@harveynorman.evil.com>") is None
     assert mailwatch.retailer_for("HN <x@harveynorman.com.au>") == "Harvey Norman"
+
+
+def test_mail_that_arrived_but_carried_no_offer_is_reported():
+    """'scanned 0' cannot tell an empty inbox from an inbox full of brand noise."""
+    import email.message
+
+    def msgs():
+        for subject, body in (("Welcome to Harvey Norman", "Thanks for joining."),
+                              ("20% off everything", "20% off everything this weekend")):
+            m = email.message.EmailMessage()
+            m["From"] = '"Harvey Norman" <do_not_reply@harveynorman.com.au>'
+            m["Subject"] = subject
+            m["Message-ID"] = f"<{subject}@x>"
+            m.set_content(body)
+            yield m
+
+    gated: list = []
+    found = mailwatch.candidates(msgs(), gated=gated)
+    assert len(found) == 1, "only the one with an offer is worth a model call"
+    assert len(gated) == 1
+    assert "Harvey Norman: Welcome to Harvey Norman" in gated[0]
