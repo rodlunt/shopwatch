@@ -151,6 +151,12 @@ the live file, and removes the stale `-wal`/`-shm` pair.
 
 ## Watching retailer email for offers
 
+**Who actually sends.** Of the retailers on the board, only two email this account at
+all: JB Hi-Fi (341 messages) and The Good Guys (66). Harvey Norman, Appliance Central,
+Bing Lee and Crowdshop send **nothing** - they sit in the allowlist inert. Appliance
+Central is worth subscribing to, since they hold the best confirmed price on the board.
+
+
 The price scrapers can only see product pages, and the discounts that matter are not on
 them. Measured on a real corpus of 204 retailer emails: **not one mentioned a tracked
 model**, but 67 carried a quantified offer, and those offers are where the money is -
@@ -207,6 +213,46 @@ Three things learned the hard way against the real account, all of them now in t
 The local Thunderbird mbox still works (`--dry-run` with no `--imap`) and is the better
 source for a one-off backfill of history, since the server copy only holds what has not
 been cleared out.
+
+### Reading the artwork
+
+Retailer marketing puts the numbers in pictures, so `--render` (or `SHOPWATCH_RENDER=1`)
+adds a second pass: render the email with headless Chrome and read the offer off the
+screenshot.
+
+Measured on a live Good Guys email. Extracted text is 4,301 characters containing `20%`
+three times and **zero** occurrences of `Ends`, `13/09/2026` or `11.59` - those are
+pixels. Side by side:
+
+| | text pass | render pass |
+|---|---|---|
+| amount | 20 | 20 |
+| expires | *nothing* | **2026-09-13** |
+| confidence | medium | high |
+
+Without it the board recorded that offer as never expiring, when it actually died two
+days later.
+
+It only runs when the text pass comes back **weak** - a real offer with no amount or no
+deadline. A complete offer never renders, and a product announcement never renders
+however prettily it is drawn, so most mail still costs a single text call. A failed
+render degrades to the text answer rather than discarding it.
+
+Chrome runs in a container (`zenika/alpine-chrome`), so nothing is installed on the host
+and it can see only the one directory it is handed. The screenshot is deleted as soon as
+it has been read.
+
+Two limits, both found by trying:
+
+* **It only works while the offer is live.** The hero images are served from a live URL
+  and swapped when the offer ends - an August email now renders as "This offer has
+  ended" rather than what it once said. Useless for a backfill, fine for a daily job.
+* **It cannot avoid the tracking pixel.** The images carry the offer, so they have to
+  load, and loading them tells the retailer the mail was opened. On a schedule, that is
+  a slightly different signal from opening it yourself.
+
+There is no text shortcut, either: the "View Online" link was checked and its hosted page
+is the same image-based email, 1,427 characters of text with none of the offer in it.
 
 ### Clearing the inbox as it goes
 
