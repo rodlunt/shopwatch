@@ -1,0 +1,42 @@
+name: Deploy
+
+# The only path to production. A commit reaches opti through this workflow or
+# not at all: the bare repo that used to accept push-to-deploy now rejects
+# pushes. `workflow_run` fires after CI finishes, whatever its result, so the
+# guard below is what makes a red commit undeployable.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+# Deploys must not overlap, and a queued one must not be dropped: cancelling
+# here would leave the newer commit built and the older one running.
+concurrency:
+  group: deploy-shopwatch
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    # `conclusion` is the whole CI workflow, so test, lint and audit all passed.
+    # Anything else, including `cancelled` from the concurrency group upstream,
+    # fails this test and no deploy happens.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: [self-hosted, opti-shopwatch]
+    steps:
+      # The commit CI actually verified, not whatever main points at now.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Deploy the verified commit
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: sudo /usr/local/bin/shopwatch-deploy "$GITHUB_WORKSPACE" "$SHA"
