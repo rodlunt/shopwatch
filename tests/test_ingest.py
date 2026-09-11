@@ -189,3 +189,24 @@ def test_csv_export_has_one_row_per_listing(seeded):
     lines = [line for line in csv_text.splitlines() if line.strip()]
     assert len(lines) == 6, "header plus the five seeded listings"
     assert "HW-Q930H/XY" in csv_text
+
+
+def test_import_stores_hostile_text_verbatim_so_the_view_layer_must_escape(seeded):
+    """Pins the contract between the layers.
+
+    Findings are pasted in from wherever research came from, so retailer names and source
+    labels are untrusted text. The store deliberately does NOT strip or sanitise them:
+    mangling a retailer's real name to dodge a rendering bug is the wrong fix, and a
+    half-sanitised value is worse than an honest one. Escaping is the renderer's job,
+    which is why the templates autoescape and app.js builds nodes rather than markup.
+    """
+    payload = '<img src=x onerror="alert(1)">Evil Co'
+    with connect(seeded) as conn:
+        report = ingest.import_finding(
+            conn,
+            {"model": "HW-Q930H/XY", "retailer": payload, "price": 700, "freight": 0,
+             "source": "<script>alert(2)</script>"},
+        )
+        assert report["retailer"] == payload, "stored exactly as given, not silently rewritten"
+        prov = provenance.provenance_map(conn, report["listing_id"])["advertised_price"]
+        assert prov["source"] == "<script>alert(2)</script>"
