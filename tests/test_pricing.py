@@ -269,3 +269,49 @@ def test_a_ruled_out_listing_is_still_plotted():
     ])
     plotted = {p["retailer"]: p["ruled_out"] for p in scale["points"]}
     assert plotted == {"Crowdshop": True, "Appliance Central": False}
+
+
+# ------------------------------------- bands tile whatever targets actually exist
+
+
+def test_bands_still_tile_when_the_middle_target_is_missing():
+    """Every target column is nullable and all three inputs are optional.
+
+    Naming a fixed predecessor meant a band whose predecessor was NULL fell back to
+    the left edge and painted over its neighbour, so a price in historical-low
+    territory rendered as merely on target.
+    """
+    scale = pricing.threshold_scale(
+        {"historical_low_price": 800, "trigger_price": 900}, 869, CONTENDERS)
+    bands = scale["bands"]
+    assert [b["label"] for b in bands] == ["historical low", "on target", "above target"]
+    assert bands[0]["from"] == 0 and bands[-1]["to"] == 100
+    for earlier, later in zip(bands, bands[1:], strict=False):
+        assert earlier["to"] == later["from"], "an overlap reads as the wrong territory"
+
+
+def test_bands_tile_when_only_the_dearest_target_is_set():
+    scale = pricing.threshold_scale({"trigger_price": 900}, 869, CONTENDERS)
+    bands = scale["bands"]
+    assert bands[0]["label"] == "on target" and bands[0]["from"] == 0
+    for earlier, later in zip(bands, bands[1:], strict=False):
+        assert earlier["to"] == later["from"]
+
+
+# ------------------------------- an axis needs something to plot, not a target
+
+
+def test_prices_without_any_target_still_draw_an_axis():
+    """Adding a product and its listings before deciding a trigger is a normal order
+    of work. Three prices are worth comparing against each other even with no line
+    drawn yet."""
+    scale = pricing.threshold_scale({}, None, CONTENDERS)
+    assert scale is not None, "prices with no targets must still plot"
+    assert len(scale["points"]) == 3
+    assert scale["marks"] == [] and scale["bands"] == []
+
+
+def test_nothing_at_all_still_means_no_axis():
+    """The early return has to survive: an empty axis is worse than no axis."""
+    assert pricing.threshold_scale({}, None, []) is None
+    assert pricing.threshold_scale({}, None) is None
