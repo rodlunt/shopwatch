@@ -16,9 +16,49 @@ STACK=/srv/prod/shopwatch
 REPO="$STACK/repo"
 CONTAINER=shopwatch
 
+# Overridable so the install path can be exercised by a test without touching the
+# real ones. Production never sets these.
+BIN=${SHOPWATCH_BIN:-/usr/local/bin/shopwatch-deploy}
+HOOK=${SHOPWATCH_HOOK:-/root/shopwatch.git/hooks/pre-receive}
+
 fail() { echo "shopwatch-deploy: $*" >&2; exit 1; }
 
-[ $# -eq 2 ] || fail "usage: shopwatch-deploy <source-repo> <sha>"
+# --------------------------------------------------------------- install mode
+#
+# These scripts are versioned in the repo but execute from an install path, so
+# editing the repo copy changed nothing in production and nothing said so: the
+# deploy went green, the container stayed healthy, and the script that actually
+# ran was whatever had last been copied across by hand.
+#
+# So the deploy installs them from the commit CI verified, before using them.
+# Written to a temp file and renamed rather than overwritten in place: the shell
+# reads this file incrementally, and rewriting it under a running process is how
+# you get a script that executes half of one version and half of another.
+if [ "${1:-}" = "--install-from" ]; then
+    [ $# -eq 2 ] || fail "usage: shopwatch-deploy --install-from <source-repo>"
+    SRC=$2
+    [ -f "$SRC/deploy/shopwatch-deploy" ] || fail "no deploy script at $SRC/deploy"
+    [ -f "$SRC/deploy/pre-receive" ] || fail "no pre-receive at $SRC/deploy"
+
+    install_one() {
+        src=$1; dst=$2
+        [ -e "$dst" ] || { echo "shopwatch-deploy: $dst absent, creating"; }
+        tmp="$dst.installing.$$"
+        cp "$src" "$tmp" || fail "cannot stage $dst"
+        chmod 0755 "$tmp" || fail "cannot chmod $dst"
+        mv -f "$tmp" "$dst" || fail "cannot install $dst"
+        want=$(sha256sum "$src" | cut -d" " -f1)
+        got=$(sha256sum "$dst" | cut -d" " -f1)
+        [ "$want" = "$got" ] || fail "installed $dst does not match source after copy"
+        echo "shopwatch-deploy: installed $dst ($(echo "$got" | cut -c1-12))"
+    }
+
+    install_one "$SRC/deploy/shopwatch-deploy" "$BIN"
+    install_one "$SRC/deploy/pre-receive" "$HOOK"
+    exit 0
+fi
+
+[ $# -eq 2 ] || fail "usage: shopwatch-deploy <source-repo> <sha>, or --install-from <source-repo>"
 SRC=$1
 SHA=$2
 
