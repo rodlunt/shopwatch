@@ -1,0 +1,18 @@
+name: Chore, ops or docs
+description: Housekeeping, deployment, documentation, or a question
+labels: [chore]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs doing
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will you know it is done? One testable line is enough for a chore.
+    validations:
+      required: true

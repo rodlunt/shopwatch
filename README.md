@@ -45,6 +45,26 @@ can only make it worse.
 
 ---
 
+## Where things live
+
+| | |
+|---|---|
+| Live | https://shop.yourdomain.example (LAN only, `basic_auth`) |
+| Code | GitHub `rodlunt/shopwatch` (private) |
+| Deploy | push to the `opti` remote; see **Deployed on opti** |
+| Secrets | `SECURITY.md` names every lane |
+| Tests | `.venv/bin/python -m pytest` and `.venv/bin/python -m ruff check .` |
+
+**Two remotes, on purpose.** `origin` is GitHub and holds the history, issues and CI.
+`opti` is a bare repo on the server whose `post-receive` hook rebuilds the container.
+Pushing to `opti` deploys; pushing to `origin` does not.
+
+⚠ **CI does not gate the deploy.** The house standard is a `workflow_run` gate so a push
+that fails lint or tests can never reach production. That is not possible here while opti
+deploys from its own bare repo rather than from GitHub: CI is advisory, and a broken push
+to `opti` will deploy. Closing that means making opti pull from GitHub instead, which is
+a deliberate change nobody has made yet.
+
 ## Architecture
 
 ```
