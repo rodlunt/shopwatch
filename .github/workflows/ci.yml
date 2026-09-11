@@ -51,4 +51,7 @@ jobs:
           python-version: "3.12"
       - run: pip install pip-audit
       # Its own job, so a transitive advisory cannot silently stop the tests running.
-      - run: pip-audit -r requirements.txt --strict
+      # Both files: the first run audited only the runtime deps and missed a live
+      # advisory in pytest, which Dependabot then found. A gate with a blind spot
+      # reports the same clean pass as a gate with nothing to find.
+      - run: pip-audit -r requirements.txt -r requirements-dev.txt --strict
