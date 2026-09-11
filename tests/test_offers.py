@@ -149,6 +149,7 @@ def test_an_offer_that_actually_crosses_the_trigger(conn):
     assert m["basis_delivered"] == 2450.0
     assert m["projected_delivered"] == 1950.0
     assert m["crosses_trigger"] is True
+    assert m["rationale"].startswith("Would take Bing Lee from $2,450 to $1,950")
     assert "under your $2,200 trigger" in m["rationale"]
 
 

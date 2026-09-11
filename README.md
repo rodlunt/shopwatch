@@ -170,23 +170,41 @@ python -m app.mailwatch --since 2026-09-01 --limit 20
 
 ### How it is wired
 
-It runs on the machine where Thunderbird already lives, reading the local mail store
-directly - **no mail credentials anywhere**, because Thunderbird has already fetched the
-messages. The board runs on opti, so findings are posted over HTTP:
+It runs **on opti**, reusing credentials that were already there for the job-search
+`/check-seek` pipeline, so nothing new is stored anywhere:
 
-```dotenv
-SHOPWATCH_URL=https://shop.home.lunt.au
-SHOPWATCH_USER=rodney
-SHOPWATCH_PASSWORD=...            # the vhost's basic_auth password
-ANTHROPIC_API_KEY=sk-ant-...      # only this machine needs it
+| Needs | Where it already lives | Why |
+|---|---|---|
+| Mail access | `ICLOUD_EMAIL` / `ICLOUD_APP_PASSWORD` in `/srv/prod/career/runner.env` | Proven: that runner has been polling on it every 15 minutes |
+| The model | `CLAUDE_BIN` + `CLAUDE_CODE_OAUTH_TOKEN`, same file | career drives headless Claude Code, so extraction costs nothing beyond the subscription and needs **no `ANTHROPIC_API_KEY`** |
+
+```bash
+ssh root@100.115.75.8
+set -a; . /srv/prod/career/runner.env; set +a
+cd /srv/prod/shopwatch/repo
+export PYTHONPATH=$PWD SHOPWATCH_DB=/tmp/mw.db \
+       SHOPWATCH_URL="http://$(docker inspect shopwatch --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'):8477"
+/srv/prod/shopwatch/mailwatch-venv/bin/python -m app.mailwatch --imap --cli --since 2026-09-01
 ```
 
-Without `SHOPWATCH_URL` the command refuses to run rather than quietly filing everything
-into a local database nobody looks at. `--local` opts into that deliberately.
+Caddy holds the basic_auth, so on the docker network the app answers directly and the
+job needs no password of its own.
 
-A watcher does not need to be more available than you are: if the laptop is shut you are
-not shopping that week either. The cost of that choice is real though - offers are
-short-dated ("Ends 11.59pm Saturday"), so a long weekend closed means a missed sale.
+Three things learned the hard way against the real account, all of them now in the code:
+
+* **Trash matters more than INBOX.** INBOX holds 12 messages; Trash holds 4,828, of which
+  225 are from JB Hi-Fi. Rodney swipe-deletes mail he has skimmed, so both are read -
+  the same conclusion `extract-seek-alerts.py` reached.
+* **Search on the server.** The first live run fetched every message in both folders just
+  to read a From header and never finished. One SEARCH per retailer domain, then fetch
+  only the matches.
+* **A `None` result set is ambiguous on iCloud** - it means both "no matches" and "that
+  search was malformed". Each folder now runs a control search that must return
+  something before an empty per-domain result is believed to be a real zero.
+
+The local Thunderbird mbox still works (`--dry-run` with no `--imap`) and is the better
+source for a one-off backfill of history, since the server copy only holds what has not
+been cleared out.
 
 ### Two rules it will not break
 
