@@ -90,3 +90,41 @@ def test_alert_body_states_when_a_delivered_price_is_provisional():
         url=None, listing_id=1, reason="under target", resolved=False,
     )
     assert "freight unresolved" in alert.body()
+
+
+# ------------------------------------------------------- ruled out never alerts
+
+
+def test_a_ruled_out_listing_does_not_alert(seeded):
+    """The board refuses to nominate a ruled-out listing. The phone must agree.
+
+    An alert engine that disagrees with the board is worse than either on its own:
+    the page shows the price struck through while ntfy says act on it, and you have
+    no way to tell which one is lying.
+    """
+    with connect(seeded) as conn:
+        _, listing = crowdshop_listing(conn)
+        provenance.set_field(conn, listing["id"], "freight", 25.0, state=provenance.MANUAL)
+        conn.commit()
+        assert len(alerts.evaluate_all(conn)) == 1, "control: it alerts while in the running"
+
+        conn.execute(
+            "UPDATE listings SET ruled_out = 1, ruled_out_reason = ? WHERE id = ?",
+            ("group-buy, freight never quotable", listing["id"]),
+        )
+        conn.commit()
+        assert alerts.evaluate_all(conn) == [], "ruled out must not reach the phone"
+
+
+def test_putting_it_back_in_the_running_alerts_again(seeded):
+    """Ruling out is reversible, so the suppression has to be too."""
+    with connect(seeded) as conn:
+        _, listing = crowdshop_listing(conn)
+        provenance.set_field(conn, listing["id"], "freight", 25.0, state=provenance.MANUAL)
+        conn.execute("UPDATE listings SET ruled_out = 1 WHERE id = ?", (listing["id"],))
+        conn.commit()
+        assert alerts.evaluate_all(conn) == []
+
+        conn.execute("UPDATE listings SET ruled_out = 0 WHERE id = ?", (listing["id"],))
+        conn.commit()
+        assert len(alerts.evaluate_all(conn)) == 1
