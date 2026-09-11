@@ -150,36 +150,72 @@ def test_fetch_returns_the_body_for_a_real_page(monkeypatch):
     assert "HW-Q930H/XY" in adapter.fetch("https://www.harveynorman.com.au/anything")
 
 
-# ------------------------------------- a retailer stock number is not a mismatch
+# --------------------------- a merchant stock number is not a manufacturer model
 
-JSON_LD = """
-<html><script type="application/ld+json">
-{"@type": "Product", "sku": "%s", "offers": {"@type": "Offer", "price": "1699.00",
- "availability": "https://schema.org/InStock"}}
-</script></html>
-"""
+def _ld(identifiers: str) -> str:
+    """A minimal schema.org Product block. `identifiers` is raw JSON key/value text.
 
-
-def test_a_retailer_stock_number_is_not_a_model_mismatch():
-    """JB Hi-Fi shows 893039 and The Good Guys 50098655 on the right product page.
-
-    Flagging those put a red fault tag on two correct listings, so the first
-    scheduled run would have made the board look broken rather than working.
+    Synthesised rather than captured, deliberately, because the point under test is
+    which schema.org KEY carries the value, and a captured page pins only one shape.
+    The captured-page fixture elsewhere in this file covers what a real page looks
+    like; this one covers the key permutations that page cannot show all of.
     """
-    obs = base.observation_from_json_ld(JSON_LD % "893039", expected_model="HW-Q930H/XY")
+    return (
+        '<html><script type="application/ld+json">'
+        '{"@type": "Product", ' + identifiers + ','
+        '"offers": {"@type": "Offer", "price": "1699.00",'
+        ' "availability": "https://schema.org/InStock"}}'
+        "</script></html>"
+    )
+
+
+def test_a_merchant_stock_number_is_not_compared_against_the_model():
+    """JB Hi-Fi publishes sku 893039 on the right product page, and The Good Guys
+    50098655. Comparing those tagged two correct listings as faults."""
+    obs = base.observation_from_json_ld(_ld('"sku": "893039"'), expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0, "control: the page was parsed at all"
+    assert obs.model_on_page_key == "sku"
+    assert not any("mismatch" in w for w in obs.warnings), obs.warnings
+
+
+def test_an_alphanumeric_stock_number_is_also_not_compared():
+    """The earlier fix skipped digits-only identifiers, so a retailer numbering its
+    stock SAM-893039 still raised a permanent false mismatch. The key decides now."""
+    obs = base.observation_from_json_ld(_ld('"sku": "SAM-893039"'), expected_model="HW-Q930H/XY")
     assert obs.advertised_price == 1699.0, "control: the page was parsed at all"
     assert not any("mismatch" in w for w in obs.warnings), obs.warnings
 
 
-def test_a_genuinely_different_model_still_flags():
-    """The check still has to catch the thing it exists for: a different product."""
-    obs = base.observation_from_json_ld(JSON_LD % "HW-Q930F/XY", expected_model="HW-Q930H/XY")
-    assert any("mismatch" in w for w in obs.warnings), "a real mismatch must still flag"
+def test_a_manufacturer_part_number_is_still_compared():
+    """The check must survive. Skipping every numeric identifier disabled it outright
+    for the two retailers it was meant to help."""
+    obs = base.observation_from_json_ld(_ld('"mpn": "HW-Q930F/XY"'), expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0, "control: the page was parsed at all"
+    assert any("mismatch" in w for w in obs.warnings), "a wrong mpn must flag"
 
 
-def test_the_same_model_punctuated_differently_is_not_a_mismatch():
-    obs = base.observation_from_json_ld(JSON_LD % "HW Q930H XY", expected_model="HW-Q930H/XY")
-    assert not any("mismatch" in w for w in obs.warnings)
+def test_a_manufacturer_key_wins_when_the_page_publishes_both():
+    obs = base.observation_from_json_ld(
+        _ld('"sku": "893039", "mpn": "HW-Q930F/XY"'), expected_model="HW-Q930H/XY")
+    assert obs.model_on_page_key == "mpn"
+    assert any("mismatch" in w for w in obs.warnings)
+
+
+def test_a_dropped_regional_suffix_is_the_same_product():
+    obs = base.observation_from_json_ld(_ld('"mpn": "HW-Q930H"'), expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0, "control: the page was parsed at all"
+    assert not any("mismatch" in w for w in obs.warnings), obs.warnings
+
+
+@pytest.mark.parametrize("found", ["HW-Q930", "XY", "930", "Q9"])
+def test_a_substring_of_the_model_is_not_the_model(found):
+    """model_matches accepted a substring either way, so HW-Q930 (a different
+    soundbar) passed, and so did any two characters that happened to appear."""
+    assert not base.model_matches("HW-Q930H/XY", found)
+
+
+def test_the_same_model_punctuated_differently_still_matches():
+    assert base.model_matches("HW-Q930H/XY", "HW Q930H XY")
 
 
 # ------------------------------------- the price guide must not invent a figure
@@ -221,3 +257,8 @@ def test_every_separator_the_retailer_actually_uses_still_parses():
         ("<p>$1,049.00-$1,199.00</p>", (1049.0, 1199.0)),
     ):
         assert crowdshop._price_range(text) == want, text
+
+
+def test_the_model_inside_a_longer_page_title_still_matches():
+    """One-directional containment: a page wrapping the model in a title is fine."""
+    assert base.model_matches("HW-Q930H/XY", "Samsung HW-Q930H/XY Soundbar")
