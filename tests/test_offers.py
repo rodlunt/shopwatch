@@ -397,3 +397,17 @@ def test_nothing_processed_means_nothing_moved():
 def test_the_default_folder_list_is_inbox_only():
     """Trash is 4,800 messages of already-deleted mail; the job does not need it."""
     assert mailwatch.ImapSource("x@me.com", "pw").folders == ["INBOX"]
+
+
+def test_a_run_reports_what_it_looked_in_not_just_what_it_found():
+    """A watcher that says 'scanned 0' forever reads the same as a dead one.
+
+    The folder totals come from the control search, so an empty inbox and an
+    unreachable mailbox produce visibly different output.
+    """
+    summary = mailwatch.RunSummary()
+    summary.folders = {"INBOX": 13}
+    assert summary.as_dict()["folders"] == {"INBOX": 13}
+    assert mailwatch.RunSummary().as_dict()["folders"] == {}, (
+        "no totals means no folder answered, which the CLI reports as a warning"
+    )
