@@ -274,3 +274,46 @@ def test_html_bodies_are_flattened_to_readable_text():
     text = mailwatch.body_text(msg)
     assert "20% off" in text
     assert "evil()" not in text and "<b>" not in text
+
+
+# ------------------------------------------------- the headless Claude Code extractor
+
+
+def test_cli_output_is_parsed_and_validated():
+    reply = '''{"is_offer": true, "kind": "percent_off", "amount": 20,
+      "spend_threshold": null, "applies_to": "a wide range",
+      "categories": ["storewide"], "excludes": "Apple", "code": null,
+      "expires": "2026-09-13", "requires_signup": true, "confidence": "medium",
+      "summary": "20% off a wide range"}'''
+    result = offers.parse_cli_output(reply)
+    assert result.error is None
+    assert result.offer.amount == 20
+    assert result.offer.categories == ["storewide"]
+
+
+def test_cli_output_survives_a_code_fence_and_surrounding_prose():
+    reply = ('Here is the extraction:\n```json\n'
+             '{"is_offer": false, "kind": "none", "amount": null, "spend_threshold": null,'
+             ' "applies_to": "", "categories": [], "excludes": null, "code": null,'
+             ' "expires": null, "requires_signup": false, "confidence": "high",'
+             ' "summary": "Product announcement, no offer."}\n```\nHope that helps.')
+    result = offers.parse_cli_output(reply)
+    assert result.error is None
+    assert result.offer.is_offer is False
+
+
+def test_a_reply_that_is_not_json_is_an_error_not_a_crash():
+    """The control: garbage in must produce a reported error, never a false offer."""
+    result = offers.parse_cli_output("I could not read that email, sorry.")
+    assert result.offer is None
+    assert "no JSON" in result.error
+
+
+def test_a_reply_missing_required_fields_is_rejected():
+    result = offers.parse_cli_output('{"is_offer": true, "kind": "percent_off"}')
+    assert result.offer is None
+    assert "did not match the schema" in result.error
+
+
+def test_an_empty_reply_is_an_error():
+    assert offers.parse_cli_output("").offer is None
