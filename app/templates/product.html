@@ -12,6 +12,7 @@
   {% else %}
     <button id="btn-mark-purchased" class="primary">I bought this</button>
   {% endif %}
+  <button id="btn-give-up-product" data-product="{{ product.id }}" class="danger">Give up on this</button>
 {% endcall %}
 
 {% if product.purchase %}
