@@ -1,22 +1,58 @@
 {# The product card: answer, then scale, then contenders, then forensics on demand. #}
 
+{# The axis. Thresholds and what each stretch MEANS sit above the line, contenders
+   below it, so neither ever sits on the line or on each other. Positions are rendered
+   server-side for the full domain and recomputed from data-value when zoomed, so the
+   axis is readable with JavaScript off, just not zoomable. #}
 {% macro ruler(product) %}
   {% set s = product.scale %}
   {% if s %}
-  <div class="ruler">
-    <div class="ruler-track">
+  <div class="axis" data-axis data-lo="{{ s.lo }}" data-hi="{{ s.hi }}">
+
+    <div class="axis-head">
+      <p class="axis-window" data-axis-window>{{ s.lo|money }} to {{ s.hi|money }}</p>
+      <div class="axis-controls" data-axis-controls hidden>
+        <button type="button" data-axis-zoom="targets">Targets</button>
+        <button type="button" data-axis-zoom="out" aria-label="Zoom out">&minus;</button>
+        <button type="button" data-axis-zoom="in" aria-label="Zoom in">+</button>
+        <button type="button" data-axis-zoom="fit">Fit</button>
+      </div>
+    </div>
+
+    <div class="axis-plot" data-axis-plot tabindex="0"
+         role="img" aria-label="Price axis from {{ s.lo|money }} to {{ s.hi|money }}, {{ s.points|length }} retailers plotted">
+
+      <div class="axis-bands">
+        {% for b in s.bands %}
+          <span class="axis-band tone-{{ b.tone }}" data-band
+                data-from="{{ b.from }}" data-to="{{ b.to }}"
+                style="left: {{ b.from }}%; width: {{ b.width }}%">
+            <em>{{ b.label }}</em>
+          </span>
+        {% endfor %}
+      </div>
+
       {% for m in s.marks %}
-        <span class="ruler-mark" style="left: {{ m.pos }}%">
-          <i></i><span>{{ m.label }}<b>{{ m.value|money }}</b></span>
+        <span class="axis-threshold" data-threshold data-value="{{ m.value }}" style="left: {{ m.pos }}%">
+          <b>{{ m.value|money }}</b>
+          <span>{{ m.label }}</span>
         </span>
       {% endfor %}
-      {% if s.best %}
-        <span class="ruler-best {{ product.tone }}" style="left: {{ s.best.pos }}%">
-          <b>{{ s.best.value|money }}</b>
-          <small>{{ product.best_retailer }}{% if not product.best_resolved %}, freight unknown{% endif %}</small>
+
+      <div class="axis-line" aria-hidden="true"></div>
+
+      {% for pt in s.points %}
+        <span class="axis-point{{ ' is-best' if s.best and pt.value == s.best.value else '' }}{{ ' is-open' if not pt.resolved else '' }}"
+              data-point data-value="{{ pt.value }}" style="left: {{ pt.pos }}%"
+              title="{{ pt.retailer }} {{ pt.value|money }}{{ ' before freight' if not pt.resolved else '' }}">
           <i></i>
+          <span class="axis-label">
+            <b>{{ pt.value|money }}</b>
+            {{ pt.retailer }}{% if not pt.resolved %} <em>before freight</em>{% endif %}
+          </span>
         </span>
-      {% endif %}
+      {% endfor %}
+
     </div>
   </div>
   {% endif %}

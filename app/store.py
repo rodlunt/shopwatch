@@ -251,7 +251,7 @@ def product_view(
     product["listings"] = listings
     product["category_fields"] = category_fields(conn, product["category"])
 
-    product["scale"] = pricing.threshold_scale(product, product["best_delivered"])
+    product["scale"] = pricing.threshold_scale(product, product["best_delivered"], listings)
 
     purchase = latest_purchase(conn, product_id)
     product["purchase"] = purchase

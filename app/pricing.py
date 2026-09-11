@@ -6,7 +6,7 @@ Headline price is informational only.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -166,13 +166,24 @@ def best_listing(rows: list[Mapping[str, Any]], penalty: float = 60.0) -> Mappin
 # --------------------------------------------------------------------------- scale
 
 
-def threshold_scale(targets: Mapping[str, Any], best: Any = None) -> dict[str, Any] | None:
-    """Positions (0-100) for plotting targets and the current best on one axis.
+def threshold_scale(
+    targets: Mapping[str, Any],
+    best: Any = None,
+    listings: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Positions (0-100) for plotting targets, every contender, and the current best.
 
     The three price targets are the whole point of the product, so they get shown as a
     scale rather than as three numbers in a row: "how far off are we" is the question,
     and a distance is easier to see than to calculate. Returns None when there is nothing
     to plot, so the caller can leave the space empty instead of drawing an empty axis.
+
+    `listings` puts every priced contender on the same axis. That widens the domain a
+    long way, because the dearest retailer is usually double the cheapest, which is
+    exactly why the axis is zoomable in the browser: at full extent the three targets
+    sit on top of each other. `lo`/`hi` are returned so the client can re-map a zoomed
+    window from each item's raw value rather than from a position it would have to
+    un-project first.
     """
     marks = []
     for key, label in (
@@ -187,7 +198,26 @@ def threshold_scale(targets: Mapping[str, Any], best: Any = None) -> dict[str, A
         return None
 
     best_value = best.value if isinstance(best, Delivered) else _num(best)
+
+    # Every contender that has a price goes on the axis. One without a price is not
+    # plotted at all rather than being pinned somewhere arbitrary: a dot on a price
+    # axis is a claim about a number, and there is no number.
+    points = []
+    for listing in listings or ():
+        value = _num(listing.get("delivered_price"))
+        if value is None:
+            continue
+        points.append({
+            "id": listing.get("id"),
+            "retailer": listing.get("retailer_name") or "?",
+            "value": value,
+            "resolved": bool(listing.get("delivered_resolved")),
+            "classification": listing.get("classification"),
+        })
+    points.sort(key=lambda pt: pt["value"])
+
     values = [m["value"] for m in marks] + ([best_value] if best_value is not None else [])
+    values += [pt["value"] for pt in points]
     lo, hi = min(values), max(values)
     span = hi - lo
     # A flat span (single threshold, or best exactly on it) would divide by zero and
@@ -200,12 +230,64 @@ def threshold_scale(targets: Mapping[str, Any], best: Any = None) -> dict[str, A
 
     for mark in marks:
         mark["pos"] = pos(mark["value"])
+    for point in points:
+        point["pos"] = pos(point["value"])
+
     return {
         "marks": marks,
+        "points": points,
+        "bands": _bands(targets, pos, lo, hi),
         "best": {"value": best_value, "pos": pos(best_value)} if best_value is not None else None,
         "lo": round(lo, 2),
         "hi": round(hi, 2),
     }
+
+
+#: What each stretch of the axis means. Only the two that would change a decision are
+#: toned; everything above the trigger is the ordinary state and stays grey, which is
+#: the same rule the stylesheet follows: colour here means act, never decoration.
+BAND_SPEC = (
+    ("historical_low_price", "historical low", "act", None),
+    ("excellent_price", "excellent", "act", "historical_low_price"),
+    ("trigger_price", "on target", "close", "excellent_price"),
+)
+
+
+def _bands(
+    targets: Mapping[str, Any],
+    pos: Any,
+    lo: float,
+    hi: float,
+) -> list[dict[str, Any]]:
+    """Contiguous regions of the axis, left to right, each with what it means.
+
+    A band is drawn from the previous threshold (or the left edge) up to its own
+    threshold, so the bands tile the axis without gaps. A missing target simply does
+    not produce a band rather than collapsing the ones around it.
+    """
+    bands = []
+    for key, label, tone, after in BAND_SPEC:
+        upper = _num(targets.get(key))
+        if upper is None:
+            continue
+        lower = _num(targets.get(after)) if after else None
+        start = pos(lower) if lower is not None else 0.0
+        end = pos(upper)
+        if end <= start:
+            continue
+        bands.append({
+            "key": key, "label": label, "tone": tone,
+            "from": round(start, 2), "to": round(end, 2),
+            "width": round(end - start, 2),
+        })
+    if bands:
+        last = max(b["to"] for b in bands)
+        if last < 100:
+            bands.append({
+                "key": "above", "label": "above target", "tone": "quiet",
+                "from": last, "to": 100.0, "width": round(100 - last, 2),
+            })
+    return bands
 
 
 def verdict_line(product: Mapping[str, Any]) -> tuple[str, str]:
