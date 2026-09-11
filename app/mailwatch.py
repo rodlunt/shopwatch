@@ -147,6 +147,17 @@ DISPLAY_NAMES = {
 }
 
 
+def mail_alert_retailers() -> set[str]:
+    """Retailer names this watcher can actually turn into a parsed offer.
+
+    The single source of truth for "does mailwatch understand this retailer's alert
+    email", so a caller (the product wizard) reads it here rather than keeping its own
+    copy that could drift the moment RETAILERS changes. Deliberately not persisted to
+    the database: the database would then be a second copy of exactly this fact.
+    """
+    return set(RETAILERS.values())
+
+
 def unmatched_retailer(sender: str) -> tuple[str, str] | None:
     """A sender whose NAME is a watched retailer but whose domain is not on the list.
 

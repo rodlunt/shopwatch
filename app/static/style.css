@@ -455,6 +455,10 @@ button, .btn {
   border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
   text-decoration: none; display: inline-block;
 }
+/* An author `display` rule on a type selector otherwise beats the UA [hidden] rule
+   regardless of specificity, since origin (author vs user-agent) is compared before
+   specificity in the cascade - so a hidden button silently stayed visible. */
+button[hidden], .btn[hidden] { display: none; }
 button:hover, .btn:hover { border-color: var(--muted); }
 button:focus-visible, .btn:focus-visible, a:focus-visible {
   outline: 2px solid var(--close); outline-offset: 2px;
@@ -485,6 +489,33 @@ dialog > footer { padding: 13px 20px; border-top: 1px solid var(--rule); display
 .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-soft); }
 .form-grid label.wide { grid-column: 1 / -1; }
 .form-grid label small { color: var(--muted); font-size: 11.5px; }
+
+/* ------------------------------------------------------------- wizard (multi-step) */
+
+.wizard-step-count { font-weight: 400; color: var(--muted); font-size: 12.5px; margin-left: 6px; }
+.wizard-tier { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
+  margin: 0 0 10px; }
+.wizard-warning { background: var(--fault-bg); color: var(--fault); border-radius: 8px;
+  padding: 9px 12px; font-size: 13px; margin-top: 10px; }
+.wizard-retailer-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.wizard-retailer-row { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+  border: 1px solid var(--rule-soft); border-radius: 8px; font-size: 13px; }
+.wizard-retailer-row .name { flex: 1; }
+.wizard-retailer-row .cap { font-size: 11.5px; color: var(--muted); }
+.wizard-progress { list-style: none; padding: 0; margin: 12px 0 0; display: flex;
+  flex-direction: column; gap: 6px; }
+.wizard-progress li { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+  border: 1px solid var(--rule-soft); border-radius: 8px; font-size: 13px; }
+.wizard-progress .icon { width: 1.1em; text-align: center; flex: none; }
+.wizard-progress li[data-outcome="found"] .icon { color: var(--act); }
+.wizard-progress li[data-outcome="needs_manual_check"] .icon,
+.wizard-progress li[data-outcome="blocked"] .icon,
+.wizard-progress li[data-outcome="timed_out"] .icon { color: var(--fault); }
+.wizard-progress li[data-outcome="pending"] .icon { color: var(--muted); }
+.wizard-progress .note { color: var(--muted); font-size: 12px; }
+.wizard-suggestion { margin-top: 14px; padding: 12px; border: 1px solid var(--rule-soft);
+  border-radius: 8px; font-size: 13px; }
+.wizard-suggestion .num { font-weight: 600; }
 
 #toast { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #toast div {

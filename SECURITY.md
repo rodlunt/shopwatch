@@ -36,6 +36,12 @@ It holds no payment details, no card numbers and no retailer account credentials
   OAuth token. It stores no credential of its own, and the local Thunderbird path needs
   none at all.
 
+- **The product wizard's research runner** (`deploy/research-runner.py`, not yet wired
+  into opti) reuses the same `/srv/prod/career/runner.env` Claude Code OAuth token as
+  the mail watcher, for the same reason: nothing new to store or rotate. It runs as its
+  own host-level script, never inside the `shopwatch` container - the container this
+  API serves from never holds this credential and never gains new outbound egress.
+
 ## If this is an active incident
 
 Rotate in this order: the `basic_auth` hash (`CADDY_HASH_SHOPWATCH` in the caddy SOPS

@@ -17,10 +17,12 @@ from . import (
     __version__,
     alerts,
     ingest,
+    mailwatch,
     offers,
     price_watch,
     pricing,
     provenance,
+    research,
     retailers,
     store,
 )
@@ -31,7 +33,15 @@ BASE_DIR = Path(__file__).parent
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Apply migrations on boot. Never destructive: an existing database is left alone."""
+    """Apply migrations on boot. Never destructive: an existing database is left alone.
+
+    Deliberately does NOT reconcile research_jobs here. The host-level runner that does
+    a job's real work is a separate process on opti, independent of this container - an
+    ordinary redeploy only replaces this container and never touches it, so a RUNNING
+    job at container startup is not evidence of anything gone wrong. Staleness is judged
+    purely by elapsed time (`research.reconcile_stale`, called from every job read),
+    which is correct regardless of *why* nothing has reported back yet.
+    """
     migrate()
     yield
 
@@ -186,6 +196,42 @@ def healthz() -> dict[str, Any]:
 def api_products(include_archived: bool = False, status: str | None = None) -> Any:
     with session() as conn:
         return jsonable(store.list_products(conn, include_archived, status))
+
+
+@app.get("/api/products/check-model")
+def api_check_model(model: str = Query(...)) -> Any:
+    """Deterministic model-confirmation check for the wizard.
+
+    Free and instant: catches a typo'd duplicate before the wizard ever reaches its
+    costed research step. Says nothing about whether the model NUMBER ITSELF is a real,
+    correct SKU - only whether shopwatch already has a product matching it once
+    punctuation and case are normalised (store.normalise_model).
+    """
+    with session() as conn:
+        existing = store.product_by_model(conn, model)
+    return {
+        "normalised": store.normalise_model(model),
+        "duplicate_of": (
+            {"id": existing["id"], "name": existing["name"], "model": existing["model"]}
+            if existing else None
+        ),
+    }
+
+
+@app.get("/api/products/{product_id}/price-suggestion")
+def api_price_suggestion(product_id: int) -> Any:
+    """"Work it out for me": a same-day suggestion from whatever real listings exist.
+
+    Returns null below pricing.suggest_price_target's floor - "not enough data yet" is
+    the honest answer for a brand-new product, not a number from one listing dressed up
+    as a target.
+    """
+    with session() as conn:
+        product = store.get_product(conn, product_id)
+        if product is None:
+            raise HTTPException(404, "no such product")
+        listings = store.listings_for_product(conn, dict(product))
+    return pricing.suggest_price_target(listings)
 
 
 @app.post("/api/products", status_code=201)
@@ -577,6 +623,90 @@ def api_price_watch_runs(limit: int = 20) -> Any:
     return runs
 
 
+# --------------------------------------------------------------- research jobs (wizard)
+#
+# Deliberately its own resource, not folded into /api/price-watch: that pair means a
+# synchronous adapter scrape that always completes before the request returns. A
+# research job is asynchronous, Claude-driven, and can take real minutes - conflating
+# the two "a run happened" concepts under one prefix would cost every future reader.
+
+
+@app.post("/api/research-jobs", status_code=202)
+def api_create_research_job(payload: dict = Body(...)) -> Any:
+    product_id = payload.get("product_id")
+    retailer_ids = payload.get("retailer_ids") or []
+    if not product_id:
+        raise HTTPException(400, "product_id is required")
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        try:
+            job_id = research.create_job(conn, product_id, retailer_ids)
+        except research.JobAlreadyRunning as exc:
+            raise HTTPException(
+                409, f"a research job is already active for this product: job {exc.job_id}"
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(research.get_job(conn, job_id))
+
+
+@app.get("/api/research-jobs/{job_id}")
+def api_get_research_job(job_id: int) -> Any:
+    with session() as conn:
+        job = research.get_job(conn, job_id)
+        if job is None:
+            raise HTTPException(404, "no such research job")
+        return jsonable(job)
+
+
+@app.post("/api/research-jobs/claim")
+def api_claim_research_job() -> Any:
+    """Called only by the host-level research runner, never by the wizard UI.
+
+    Atomically claims the oldest QUEUED job. Returns null when there is nothing to do -
+    the runner is expected to poll this on its own interval, the same shape mailwatch
+    already uses for its own host-side polling.
+    """
+    with session() as conn:
+        job = research.claim_next_queued(conn)
+        return jsonable(job)
+
+
+@app.post("/api/research-jobs/{job_id}/results")
+def api_report_research_result(job_id: int, payload: dict = Body(...)) -> Any:
+    """Called only by the host-level research runner, one call per retailer outcome."""
+    retailer_id = payload.get("retailer_id")
+    status = payload.get("status")
+    if not retailer_id or not status:
+        raise HTTPException(400, "retailer_id and status are required")
+    with session() as conn:
+        if research.get_job(conn, job_id) is None:
+            raise HTTPException(404, "no such research job")
+        try:
+            research.report_result(
+                conn, job_id, retailer_id, status,
+                listing_id=payload.get("listing_id"), note=payload.get("note"),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(research.get_job(conn, job_id))
+
+
+@app.post("/api/research-jobs/{job_id}/complete")
+def api_complete_research_job(job_id: int, payload: dict = Body(...)) -> Any:
+    """Called only by the host-level research runner, exactly once per job."""
+    status = payload.get("status")
+    with session() as conn:
+        if research.get_job(conn, job_id) is None:
+            raise HTTPException(404, "no such research job")
+        try:
+            research.complete_job(conn, job_id, status, error=payload.get("error"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(research.get_job(conn, job_id))
+
+
 @app.post("/api/alerts/evaluate")
 def api_evaluate_alerts(payload: dict = Body(default={})) -> Any:
     """Dry run of the alert rules: what would fire right now, without sending anything."""
@@ -626,15 +756,42 @@ def api_backup() -> Any:
     return {"backup": str(path), "at": utcnow()}
 
 
+@app.post("/api/retailers", status_code=201)
+def api_create_retailer(payload: dict = Body(...)) -> Any:
+    """Ensure a retailer exists with no listing attached yet.
+
+    For the wizard: a retailer chosen for research doesn't have a price yet, so there is
+    nothing to hang a listing off. store.ensure_retailer already makes this idempotent -
+    naming an existing retailer just returns it.
+    """
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    with session() as conn:
+        row = dict(store.ensure_retailer(conn, name))
+    row["adapter_available"] = row["adapter"] in retailers.available_adapters()
+    return row
+
+
 @app.get("/api/retailers")
 def api_retailers() -> Any:
+    """One place to read everything shopwatch knows about a retailer's automatability.
+
+    Each fact still comes from its own authoritative source (the adapter registry for
+    scraping, mailwatch's own domain map for mail alerts) rather than a hand-maintained
+    copy in the database, so nothing here can drift out of sync with the code that
+    actually does the work. This endpoint just merges them for a caller (the product
+    wizard) that needs all three in one read.
+    """
     with session() as conn:
         rows = store.list_retailers(conn)
     adapters = retailers.available_adapters()
+    mail_parsed = mailwatch.mail_alert_retailers()
     for row in rows:
         cls = adapters.get(row["adapter"] or "")
         row["adapter_available"] = cls is not None
         row["never_scrapable"] = list(cls.never_scrapable) if cls else []
+        row["mail_alerts_parsed"] = row["name"] in mail_parsed
     return rows
 
 

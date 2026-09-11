@@ -315,3 +315,39 @@ def test_nothing_at_all_still_means_no_axis():
     """The early return has to survive: an empty axis is worse than no axis."""
     assert pricing.threshold_scale({}, None, []) is None
     assert pricing.threshold_scale({}, None) is None
+
+
+# ------------------------------------------------- wizard price-target suggestions
+
+
+def test_suggestion_refuses_below_the_floor():
+    """One listing is not enough to call anything a target - the honest answer is
+    'not enough data yet', not a guess wearing a confident number."""
+    one = [{"delivered_price": 999.0}]
+    assert pricing.suggest_price_target(one) is None
+
+
+def test_suggestion_appears_once_the_floor_is_met():
+    two = [{"delivered_price": 999.0}, {"delivered_price": 899.0}]
+    suggestion = pricing.suggest_price_target(two)
+    assert suggestion is not None
+    assert suggestion["suggested_trigger"] == 899.0
+    assert suggestion["based_on_count"] == 2
+
+
+def test_suggestion_note_never_uses_class_label_wording():
+    """A same-day guess must never wear the words earned by real historical tracking."""
+    two = [{"delivered_price": 999.0}, {"delivered_price": 899.0}]
+    suggestion = pricing.suggest_price_target(two)
+    for label in pricing.CLASS_LABELS.values():
+        assert label.lower() not in suggestion["note"].lower()
+
+
+def test_suggestion_ignores_listings_with_no_price():
+    listings = [{"delivered_price": None}, {"delivered_price": 899.0}]
+    assert pricing.suggest_price_target(listings) is None  # only 1 real price
+
+
+def test_suggestion_floor_is_configurable():
+    one = [{"delivered_price": 899.0}]
+    assert pricing.suggest_price_target(one, floor=1) is not None
