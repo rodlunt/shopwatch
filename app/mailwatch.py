@@ -43,6 +43,7 @@ RETAILERS = {
     "email.thegoodguys.com.au": "The Good Guys",
     "harveynorman.com.au": "Harvey Norman",
     "appliancecentral.com.au": "Appliance Central",
+    "appliancesonline.com.au": "Appliances Online",
     "binglee.com.au": "Bing Lee",
     "crowdshop.com.au": "Crowdshop",
 }
@@ -66,7 +67,7 @@ SKIP_SUBDOMAINS = ("order.", "orders.", "receipt.", "noreply-account.")
 #: read - it only stops things being missed.
 SEARCH_TOKENS = (
     "jbhifi", "thegoodguys", "harveynorman",
-    "appliancecentral", "binglee", "crowdshop",
+    "appliancecentral", "appliancesonline", "binglee", "crowdshop",
 )
 
 
