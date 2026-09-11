@@ -1,0 +1,124 @@
+{% macro sort_link(label, key, product_id, current, cls="") %}
+  <th class="{{ cls }}"><a href="{{ '/products/%d'|format(product_id) }}?sort={{ key }}"
+    title="Sort by {{ label }}">{{ label }}{% if current == key %} &darr;{% endif %}</a></th>
+{% endmacro %}
+
+{% macro prov_badge(listing, field) %}
+  {% set p = listing.provenance[field] %}
+  {% if p.manual_locked %}
+    <button class="lock" data-clear-override data-listing="{{ listing.id }}" data-field="{{ field }}"
+            title="Manual override, locked against automated updates. Click to clear.">MANUAL</button>
+  {% elif p.state == 'STALE' %}
+    <span class="badge none" title="Not refreshed inside the staleness window">STALE</span>
+  {% elif p.state == 'LIVE' %}
+    <span class="badge good" title="Scraped from the retailer page">LIVE</span>
+  {% elif p.state == 'IMPORTED' %}
+    <span class="badge warn" title="Imported from external research">IMP</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro editable(listing, field, value, kind="text", align="num") %}
+  <div class="cell {{ 'left' if align != 'num' else '' }}">
+    <span data-edit data-listing="{{ listing.id }}" data-field="{{ field }}"
+          data-kind="{{ kind }}" data-raw="{{ value if value is not none else '' }}">{%-
+      if value is none %}<span class="unresolved">—</span>{% elif kind == 'money' %}{{ value|money }}{% else %}{{ value }}{% endif -%}
+    </span>
+    {{ prov_badge(listing, field) }}
+  </div>
+{% endmacro %}
+
+{% macro matrix(product, sort='delivered', compact=false) %}
+<div class="matrix-wrap">
+<table class="matrix">
+  <thead>
+    <tr>
+      {{ sort_link('Retailer', 'retailer', product.id, sort) }}
+      {{ sort_link('Advertised', 'headline', product.id, sort, 'num') }}
+      <th class="num">Freight</th>
+      <th class="num">Cashback / rebate</th>
+      {{ sort_link('Delivered', 'delivered', product.id, sort, 'num') }}
+      <th>Deal</th>
+      {{ sort_link('Cond.', 'condition', product.id, sort) }}
+      {{ sort_link('Stock', 'stock', product.id, sort) }}
+      <th>Pickup</th>
+      {% if not compact %}<th>Warranty</th><th>Included</th>{% endif %}
+      {{ sort_link('Verification', 'verification', product.id, sort) }}
+      {{ sort_link('vs low', 'diff', product.id, sort, 'num') }}
+      <th>Checked</th>
+      {% if not compact %}<th>Notes</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+  {% for l in product.listings %}
+    <tr {% if product.best_listing and l.id == product.best_listing.id %}class="best"{% endif %}
+        data-listing-row="{{ l.id }}">
+      <td>
+        {% if l.url %}<a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.retailer_name }}</a>
+        {% else %}{{ l.retailer_name }}{% endif %}
+        {% if not l.retailer_adapter %}<span class="badge none" title="No scraper: maintained by hand">MAN-ONLY</span>{% endif %}
+      </td>
+      <td class="num">{{ editable(l, 'advertised_price', l.advertised_price, 'money') }}</td>
+      <td class="num">{{ editable(l, 'freight', l.freight, 'money') }}</td>
+      <td class="num">{{ editable(l, 'cashback', l.cashback, 'money') }}</td>
+      <td class="num" data-cell="delivered">
+        {% if l.delivered_price is none %}<span class="unresolved">—</span>
+        {% else %}<b>{{ l.delivered_price|money }}</b>
+          {% if not l.delivered_resolved %}<span class="badge none" title="Freight unresolved: this figure is provisional and is ranked with a freight penalty">PROV</span>{% endif %}
+        {% endif %}
+      </td>
+      <td data-cell="classification"><span class="badge {{ l.classification|cls }}">{{ l.classification_label }}</span></td>
+      <td>{{ editable(l, 'condition', l.condition, 'condition', 'left') }}</td>
+      <td>{{ editable(l, 'stock_status', l.stock_status, 'text', 'left') }}</td>
+      <td>{{ editable(l, 'pickup_status', l.pickup_status, 'text', 'left') }}</td>
+      {% if not compact %}
+      <td class="wrap">{{ editable(l, 'warranty', l.warranty, 'text', 'left') }}</td>
+      <td class="wrap">{{ editable(l, 'included_components', l.included_components, 'text', 'left') }}</td>
+      {% endif %}
+      <td>
+        <div class="verif">
+          {% for aspect, v in l.verification.items() %}
+            <span class="chip {{ v.status|vcls }}"
+                  title="{{ aspect }}: {{ v.status }}{% if v.note %} - {{ v.note }}{% endif %}">{{ aspect|initial }}</span>
+          {% endfor %}
+        </div>
+      </td>
+      <td class="num" data-cell="diff">{% if l.diff_from_low is none %}<span class="unresolved">—</span>
+        {% else %}{{ '+' if l.diff_from_low > 0 else '' }}{{ l.diff_from_low|money }}{% endif %}</td>
+      <td class="small muted" data-cell="checked">{{ l.last_checked_at|dt }}</td>
+      {% if not compact %}<td class="wrap small muted">{{ l.seller_notes or '' }}{% if l.price_guide %}<br><b>Guide:</b> {{ l.price_guide }}{% endif %}</td>{% endif %}
+    </tr>
+  {% else %}
+    <tr><td colspan="14" class="muted">No retailer listings yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% macro targets(product) %}
+<div class="targets">
+  <div class="target hero">
+    <span class="k">Best delivered</span>
+    <span class="v">{% if product.best_delivered is none %}<span class="unresolved">unresolved</span>
+      {% else %}{{ product.best_delivered|money }}{% endif %}</span>
+    <span class="k">{{ product.best_retailer or '—' }}{% if product.best_delivered is not none and not product.best_resolved %} · provisional{% endif %}</span>
+  </div>
+  <div class="target">
+    <span class="k">Classification</span>
+    <span class="v"><span class="badge {{ product.best_classification|cls }}">{{ classes[product.best_classification] }}</span></span>
+  </div>
+  <div class="target"><span class="k">Trigger</span><span class="v">{{ product.trigger_price|money }}</span></div>
+  <div class="target"><span class="k">Excellent</span><span class="v">{{ product.excellent_price|money }}</span></div>
+  <div class="target"><span class="k">Hist-low territory</span><span class="v">{{ product.historical_low_price|money }}</span></div>
+  <div class="target">
+    <span class="k">Lowest known</span>
+    <span class="v">{{ product.lowest_known_price|money }}</span>
+    <span class="k">{{ product.lowest_known_retailer or 'not recorded' }}{% if product.lowest_known_date %} · {{ product.lowest_known_date }}{% endif %}</span>
+  </div>
+  <div class="target">
+    <span class="k">vs lowest known</span>
+    <span class="v">{% if product.diff_from_low is none %}<span class="unresolved">—</span>
+      {% else %}{{ '+' if product.diff_from_low > 0 else '' }}{{ product.diff_from_low|money }}{% endif %}</span>
+  </div>
+</div>
+{% endmacro %}

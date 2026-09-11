@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Shopwatch{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#128722;</text></svg>">
+</head>
+<body>
+<header class="top">
+  <h1><a href="/">Shopwatch</a></h1>
+  <span class="model">{{ config.currency }} &middot; delivered-price board</span>
+  <span class="spacer"></span>
+  <nav>
+    <button id="btn-watch" title="Run every retailer adapter now">Run price watch</button>
+    <button id="btn-import">Import JSON</button>
+    <a class="btn" href="/api/export" download>Export JSON</a>
+    <a class="btn" href="/api/export.csv" download>CSV</a>
+    <button id="btn-backup" title="Snapshot the database on the server">Backup</button>
+  </nav>
+</header>
+
+<main>
+{% block content %}{% endblock %}
+</main>
+
+<dialog id="import-dialog">
+  <header>Import research JSON</header>
+  <div class="body">
+    <p class="small muted">
+      Accepts a single finding, a list of findings, or a full Shopwatch snapshot.
+      Manually locked fields are preserved and reported back as <b>preserved_manual</b>.
+    </p>
+    <textarea id="import-text" spellcheck="false" placeholder='[{"model": "HW-Q930H/XY", "retailer": "JB Hi-Fi", "price": 1699, "freight": null, "stock": "Available", "condition": "New", "warranty": "1 year", "source_url": "https://...", "checked_at": "2026-09-11T00:00:00Z", "verification": {"model": true, "price": true}}]'></textarea>
+    <pre id="import-result" class="small"></pre>
+  </div>
+  <footer>
+    <button data-close>Cancel</button>
+    <button class="primary" id="import-go">Import</button>
+  </footer>
+</dialog>
+
+<div id="toast"></div>
+<script src="/static/app.js?v={{ version }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

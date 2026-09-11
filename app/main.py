@@ -1,0 +1,506 @@
+"""FastAPI application: HTML comparison board plus a plain local JSON API."""
+
+from __future__ import annotations
+
+import json
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from . import __version__, alerts, ingest, price_watch, pricing, provenance, retailers, store
+from .config import load_config
+from .db import backup, migrate, session, utcnow
+
+BASE_DIR = Path(__file__).parent
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Apply migrations on boot. Never destructive: an existing database is left alone."""
+    migrate()
+    yield
+
+
+app = FastAPI(title="Shopwatch", version=__version__, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+CLASS_STYLE = {
+    pricing.HISTORICAL_LOW: "good",
+    pricing.EXCELLENT: "good",
+    pricing.TRIGGER_MET: "warn",
+    pricing.ABOVE_TARGET: "bad",
+    pricing.UNRESOLVED: "none",
+}
+VERIFICATION_STYLE = {
+    "VERIFIED": "good",
+    "LIVE": "good",
+    "MANUAL": "manual",
+    "IMPORTED": "warn",
+    "STALE": "none",
+    "UNVERIFIED": "none",
+    "FLAGGED": "bad",
+}
+
+
+def _money(value: Any) -> str:
+    if value is None or value == "":
+        return "\u2014"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"${number:,.0f}" if float(number).is_integer() else f"${number:,.2f}"
+
+
+def _short_time(value: Any) -> str:
+    if not value:
+        return "never"
+    return str(value)[:16].replace("T", " ")
+
+
+templates.env.filters["money"] = _money
+templates.env.filters["dt"] = _short_time
+templates.env.filters["cls"] = lambda c: CLASS_STYLE.get(c, "none")
+templates.env.filters["vcls"] = lambda s: VERIFICATION_STYLE.get(s, "none")
+
+#: Single letter per verification aspect, so seven states fit on one row.
+ASPECT_INITIAL = {
+    "model": "M", "price": "P", "stock": "S", "freight": "F",
+    "condition": "C", "warranty": "W", "contents": "I",
+}
+templates.env.filters["initial"] = lambda a: ASPECT_INITIAL.get(a, a[:1].upper())
+
+
+def jsonable(value: Any) -> Any:
+    """Strip the internal Delivered objects and rank tuples out of API payloads."""
+    if isinstance(value, dict):
+        return {
+            k: jsonable(v)
+            for k, v in value.items()
+            if k not in {"delivered", "rank", "best_listing"}
+        }
+    if isinstance(value, list):
+        return [jsonable(v) for v in value]
+    if isinstance(value, pricing.Delivered):
+        return {"value": value.value, "resolved": value.resolved}
+    return value
+
+
+# ------------------------------------------------------------------------------ HTML
+
+
+@app.get("/", response_class=HTMLResponse)
+def board(request: Request, sort: str = "delivered") -> Any:
+    with session() as conn:
+        products = [store.product_view(conn, p["id"], sort=sort) for p in
+                    conn.execute("SELECT id FROM products WHERE archived = 0 ORDER BY name")]
+        retailer_list = store.list_retailers(conn)
+    return templates.TemplateResponse(
+        request,
+        "board.html",
+        {
+            "products": [p for p in products if p],
+            "retailers": retailer_list,
+            "sort": sort,
+            "config": load_config(),
+            "classes": pricing.CLASS_LABELS,
+            "version": __version__,
+        },
+    )
+
+
+@app.get("/products/{product_id}", response_class=HTMLResponse)
+def product_page(request: Request, product_id: int, sort: str = "delivered") -> Any:
+    with session() as conn:
+        product = store.product_view(conn, product_id, sort=sort)
+        if product is None:
+            raise HTTPException(404, "no such product")
+        retailer_list = store.list_retailers(conn)
+        history = store.price_history(conn, product_id, limit=200)
+        rules = [dict(r) for r in conn.execute(
+            "SELECT * FROM alert_rules WHERE product_id = ?", (product_id,))]
+        cats = store.categories(conn)
+    return templates.TemplateResponse(
+        request,
+        "product.html",
+        {
+            "product": product,
+            "retailers": retailer_list,
+            "history": history,
+            "rules": rules,
+            "categories": cats,
+            "sort": sort,
+            "classes": pricing.CLASS_LABELS,
+            "conditions": pricing.CONDITIONS,
+            "verdicts": store.VERDICTS,
+            "aspects": provenance.VERIFICATION_ASPECTS,
+            "tracked_fields": provenance.TRACKED_FIELDS,
+            "config": load_config(),
+            "version": __version__,
+        },
+    )
+
+
+# ------------------------------------------------------------------------------- API
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, Any]:
+    with session() as conn:
+        products = conn.execute("SELECT COUNT(*) c FROM products").fetchone()["c"]
+    return {"status": "ok", "version": __version__, "products": products, "at": utcnow()}
+
+
+@app.get("/api/products")
+def api_products(include_archived: bool = False) -> Any:
+    with session() as conn:
+        return jsonable(store.list_products(conn, include_archived))
+
+
+@app.post("/api/products", status_code=201)
+def api_create_product(payload: dict = Body(...)) -> Any:
+    with session() as conn:
+        try:
+            product_id = store.create_product(conn, payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(store.product_view(conn, product_id))
+
+
+@app.get("/api/products/{product_id}")
+def api_product(product_id: int, sort: str = "delivered") -> Any:
+    with session() as conn:
+        product = store.product_view(conn, product_id, sort=sort)
+        if product is None:
+            raise HTTPException(404, "no such product")
+        return jsonable(product)
+
+
+@app.patch("/api/products/{product_id}")
+def api_update_product(product_id: int, payload: dict = Body(...)) -> Any:
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        store.update_product(conn, product_id, payload)
+        return jsonable(store.product_view(conn, product_id))
+
+
+@app.delete("/api/products/{product_id}")
+def api_archive_product(product_id: int) -> Any:
+    """Archive, never delete: the price history is the point of the exercise."""
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        store.update_product(conn, product_id, {"archived": 1})
+    return {"archived": product_id}
+
+
+@app.get("/api/products/{product_id}/retailers")
+def api_product_retailers(product_id: int, sort: str = "delivered") -> Any:
+    with session() as conn:
+        product = store.product_view(conn, product_id, sort=sort)
+        if product is None:
+            raise HTTPException(404, "no such product")
+        return jsonable(product["listings"])
+
+
+@app.post("/api/products/{product_id}/retailers", status_code=201)
+def api_create_listing(product_id: int, payload: dict = Body(...)) -> Any:
+    name = (payload.get("retailer") or "").strip()
+    if not name:
+        raise HTTPException(400, "retailer name is required")
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        retailer = store.ensure_retailer(conn, name)
+        listing_id = store.create_listing(
+            conn,
+            {
+                "product_id": product_id,
+                "retailer_id": retailer["id"],
+                "url": payload.get("url"),
+                "condition": (payload.get("condition") or "NEW").upper(),
+            },
+        )
+        values = {k: v for k, v in payload.items() if k in provenance.TRACKED_FIELDS}
+        if values:
+            provenance.apply_values(
+                conn, listing_id, values, state=provenance.MANUAL, source="ui"
+            )
+            store.record_observation(conn, listing_id, source="ui")
+        provenance.sync_verification_from_provenance(conn, listing_id)
+        row = conn.execute(
+            "SELECT l.*, r.name AS retailer_name, r.slug AS retailer_slug,"
+            " r.adapter AS retailer_adapter FROM listings l"
+            " JOIN retailers r ON r.id = l.retailer_id WHERE l.id = ?",
+            (listing_id,),
+        ).fetchone()
+        product = store.get_product(conn, product_id)
+        return jsonable(
+            store.enrich_listing(conn, row, dict(product), load_config().unresolved_freight_penalty)
+        )
+
+
+@app.patch("/api/retailers/{listing_id}")
+def api_update_listing(listing_id: int, payload: dict = Body(...)) -> Any:
+    """Inline edit. Fields written here are MANUAL and locked by default.
+
+    Pass `"manual": false` to record a value without locking it (useful for bulk imports
+    made through this endpoint).
+    """
+    manual = payload.pop("manual", True)
+    source = payload.pop("source", "ui")
+    record = payload.pop("record_history", True)
+    values = {k: v for k, v in payload.items() if k in provenance.TRACKED_FIELDS}
+    unknown = [k for k in payload if k not in provenance.TRACKED_FIELDS]
+    if not values:
+        raise HTTPException(400, f"no editable fields in payload; unknown keys: {unknown}")
+
+    with session() as conn:
+        row = conn.execute(
+            "SELECT l.*, r.name AS retailer_name, r.slug AS retailer_slug,"
+            " r.adapter AS retailer_adapter FROM listings l"
+            " JOIN retailers r ON r.id = l.retailer_id WHERE l.id = ?",
+            (listing_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such listing")
+        try:
+            applied = provenance.apply_values(
+                conn,
+                listing_id,
+                values,
+                state=provenance.MANUAL if manual else provenance.IMPORTED,
+                source=source,
+            )
+        except provenance.FieldError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        conn.execute(
+            "UPDATE listings SET last_checked_at = ?, updated_at = ? WHERE id = ?",
+            (utcnow(), utcnow(), listing_id),
+        )
+        provenance.sync_verification_from_provenance(conn, listing_id)
+        if record:
+            store.record_observation(conn, listing_id, source=source)
+        product = store.get_product(conn, row["product_id"])
+        fresh = conn.execute(
+            "SELECT l.*, r.name AS retailer_name, r.slug AS retailer_slug,"
+            " r.adapter AS retailer_adapter FROM listings l"
+            " JOIN retailers r ON r.id = l.retailer_id WHERE l.id = ?",
+            (listing_id,),
+        ).fetchone()
+        listing = store.enrich_listing(
+            conn, fresh, dict(product), load_config().unresolved_freight_penalty
+        )
+        return {"listing": jsonable(listing), "applied": applied}
+
+
+def _listing_view(conn, listing_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT l.*, r.name AS retailer_name, r.slug AS retailer_slug,"
+        " r.adapter AS retailer_adapter FROM listings l"
+        " JOIN retailers r ON r.id = l.retailer_id WHERE l.id = ?",
+        (listing_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    product = store.get_product(conn, row["product_id"])
+    return store.enrich_listing(
+        conn, row, dict(product), load_config().unresolved_freight_penalty
+    )
+
+
+@app.get("/api/retailers/{listing_id}")
+def api_listing(listing_id: int) -> Any:
+    with session() as conn:
+        listing = _listing_view(conn, listing_id)
+        if listing is None:
+            raise HTTPException(404, "no such listing")
+        return jsonable(listing)
+
+
+@app.post("/api/retailers/{listing_id}/clear-override")
+def api_clear_override(listing_id: int, payload: dict = Body(...)) -> Any:
+    field = payload.get("field")
+    with session() as conn:
+        if conn.execute("SELECT 1 FROM listings WHERE id = ?", (listing_id,)).fetchone() is None:
+            raise HTTPException(404, "no such listing")
+        try:
+            if field in (None, "*", "all"):
+                for locked in provenance.locked_fields(conn, listing_id):
+                    provenance.clear_override(conn, listing_id, locked)
+                cleared = "all"
+            else:
+                provenance.clear_override(conn, listing_id, field)
+                cleared = field
+        except provenance.FieldError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        provenance.sync_verification_from_provenance(conn, listing_id)
+        listing = _listing_view(conn, listing_id)
+    return {"listing_id": listing_id, "cleared": cleared, "listing": jsonable(listing)}
+
+
+@app.post("/api/retailers/{listing_id}/verification")
+def api_set_verification(listing_id: int, payload: dict = Body(...)) -> Any:
+    aspect = payload.get("aspect")
+    status = (payload.get("status") or "").upper()
+    with session() as conn:
+        if conn.execute("SELECT 1 FROM listings WHERE id = ?", (listing_id,)).fetchone() is None:
+            raise HTTPException(404, "no such listing")
+        try:
+            provenance.set_verification(conn, listing_id, aspect, status, payload.get("note"))
+        except provenance.FieldError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "listing_id": listing_id,
+            "verification": provenance.verification_map(conn, listing_id),
+        }
+
+
+@app.delete("/api/retailers/{listing_id}")
+def api_deactivate_listing(listing_id: int) -> Any:
+    with session() as conn:
+        if conn.execute("SELECT 1 FROM listings WHERE id = ?", (listing_id,)).fetchone() is None:
+            raise HTTPException(404, "no such listing")
+        conn.execute(
+            "UPDATE listings SET active = 0, updated_at = ? WHERE id = ?", (utcnow(), listing_id)
+        )
+    return {"deactivated": listing_id}
+
+
+@app.get("/api/price-history/{product_id}")
+def api_price_history(product_id: int, limit: int = Query(500, le=5000)) -> Any:
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        return store.price_history(conn, product_id, limit)
+
+
+@app.post("/api/price-watch/run")
+def api_price_watch(payload: dict = Body(default={})) -> Any:
+    summary = price_watch.run(
+        product_id=payload.get("product_id"),
+        trigger=payload.get("trigger", "api"),
+        send_alerts=payload.get("send_alerts", True),
+    )
+    return jsonable(summary)
+
+
+@app.get("/api/price-watch/runs")
+def api_price_watch_runs(limit: int = 20) -> Any:
+    with session() as conn:
+        runs = [dict(r) for r in conn.execute(
+            "SELECT * FROM scrape_runs ORDER BY id DESC LIMIT ?", (limit,))]
+        for run in runs:
+            run["results"] = [dict(r) for r in conn.execute(
+                "SELECT sr.*, r.name AS retailer_name FROM scrape_results sr"
+                " LEFT JOIN listings l ON l.id = sr.listing_id"
+                " LEFT JOIN retailers r ON r.id = l.retailer_id"
+                " WHERE sr.run_id = ? ORDER BY sr.id", (run["id"],))]
+    return runs
+
+
+@app.post("/api/alerts/evaluate")
+def api_evaluate_alerts(payload: dict = Body(default={})) -> Any:
+    """Dry run of the alert rules: what would fire right now, without sending anything."""
+    with session() as conn:
+        raised = alerts.evaluate_all(conn)
+    return {"alerts": [a.to_dict() for a in raised]}
+
+
+@app.post("/api/import")
+def api_import(payload: Any = Body(...)) -> Any:
+    """Accepts a single finding, a list of findings, or a full snapshot."""
+    with session() as conn:
+        if isinstance(payload, dict) and payload.get("format") == "shopwatch-snapshot":
+            return ingest.import_snapshot(conn, payload)
+        if isinstance(payload, dict) and "findings" in payload:
+            return ingest.import_findings(
+                conn,
+                payload["findings"],
+                source=payload.get("source"),
+                create_missing_product=bool(payload.get("create_missing_product")),
+            )
+        findings = payload if isinstance(payload, list) else [payload]
+        return ingest.import_findings(conn, findings)
+
+
+@app.get("/api/export")
+def api_export(history: bool = True) -> Any:
+    with session() as conn:
+        return JSONResponse(
+            ingest.export_all(conn, include_history=history),
+            headers={"Content-Disposition": 'attachment; filename="shopwatch-export.json"'},
+        )
+
+
+@app.get("/api/export.csv", response_class=PlainTextResponse)
+def api_export_csv() -> Any:
+    with session() as conn:
+        return PlainTextResponse(
+            ingest.csv_export(conn),
+            headers={"Content-Disposition": 'attachment; filename="shopwatch.csv"'},
+        )
+
+
+@app.post("/api/backup")
+def api_backup() -> Any:
+    path = backup()
+    return {"backup": str(path), "at": utcnow()}
+
+
+@app.get("/api/retailers")
+def api_retailers() -> Any:
+    with session() as conn:
+        rows = store.list_retailers(conn)
+    adapters = retailers.available_adapters()
+    for row in rows:
+        cls = adapters.get(row["adapter"] or "")
+        row["adapter_available"] = cls is not None
+        row["never_scrapable"] = list(cls.never_scrapable) if cls else []
+    return rows
+
+
+@app.get("/api/meta")
+def api_meta() -> Any:
+    with session() as conn:
+        cats = store.categories(conn)
+    return {
+        "version": __version__,
+        "conditions": pricing.CONDITIONS,
+        "verdicts": store.VERDICTS,
+        "classifications": pricing.CLASS_LABELS,
+        "provenance_states": provenance.STATES,
+        "verification_aspects": provenance.VERIFICATION_ASPECTS,
+        "tracked_fields": provenance.TRACKED_FIELDS,
+        "categories": cats,
+        "adapters": sorted(retailers.available_adapters()),
+        "unresolved_freight_penalty": load_config().unresolved_freight_penalty,
+    }
+
+
+@app.get("/api/categories/{category}/fields")
+def api_category_fields(category: str) -> Any:
+    with session() as conn:
+        return store.category_fields(conn, category)
+
+
+@app.post("/api/categories/{category}/fields", status_code=201)
+def api_add_category_field(category: str, payload: dict = Body(...)) -> Any:
+    with session() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO category_specifications"
+            " (category, field_key, label, kind, options, sort) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                category, payload.get("field_key"), payload.get("label"),
+                payload.get("kind", "text"),
+                json.dumps(payload["options"]) if payload.get("options") else None,
+                payload.get("sort", 0),
+            ),
+        )
+        return store.category_fields(conn, category)
