@@ -470,13 +470,33 @@ def api_set_ruled_out(listing_id: int, payload: dict = Body(...)) -> Any:
     with session() as conn:
         if conn.execute("SELECT 1 FROM listings WHERE id = ?", (listing_id,)).fetchone() is None:
             raise HTTPException(404, "no such listing")
-        conn.execute(
-            "UPDATE listings SET ruled_out = ?, ruled_out_reason = ?, ruled_out_at = ?,"
-            " updated_at = ? WHERE id = ?",
-            (1 if ruled_out else 0, reason if ruled_out else None,
-             utcnow() if ruled_out else None, utcnow(), listing_id),
-        )
-    return {"listing_id": listing_id, "ruled_out": ruled_out, "reason": reason}
+        if ruled_out:
+            conn.execute(
+                "UPDATE listings SET ruled_out = 1, ruled_out_reason = ?, ruled_out_at = ?,"
+                " updated_at = ? WHERE id = ?",
+                (reason, utcnow(), utcnow(), listing_id),
+            )
+        else:
+            # Clear the flag, KEEP the reason and the date. The migration promised the
+            # reason travels with the listing, and nulling it here meant un-ruling and
+            # re-ruling silently destroyed the original reasoning with nothing recording
+            # that it had existed. Putting something back in the running does not unmake
+            # the decision to take it out, and next time you wonder why, that is the
+            # answer you want.
+            conn.execute(
+                "UPDATE listings SET ruled_out = 0, updated_at = ? WHERE id = ?",
+                (utcnow(), listing_id),
+            )
+        row = conn.execute(
+            "SELECT ruled_out, ruled_out_reason, ruled_out_at FROM listings WHERE id = ?",
+            (listing_id,),
+        ).fetchone()
+    return {
+        "listing_id": listing_id,
+        "ruled_out": bool(row["ruled_out"]),
+        "reason": row["ruled_out_reason"],
+        "at": row["ruled_out_at"],
+    }
 
 
 @app.delete("/api/retailers/{listing_id}")
