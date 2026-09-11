@@ -377,7 +377,8 @@ def mbox_messages(paths: list[Path]) -> Iterator[Any]:
 
 def candidates(messages: Iterator[Any], since: str | None = None,
                limit: int | None = None,
-               unmatched: dict[str, set[str]] | None = None) -> list[Candidate]:
+               unmatched: dict[str, set[str]] | None = None,
+               gated: list[str] | None = None) -> list[Candidate]:
     """Retailer messages worth a model call, newest first, de-duplicated by Message-ID.
 
     `unmatched` collects senders that name a watched retailer but arrive from a domain
@@ -386,6 +387,7 @@ def candidates(messages: Iterator[Any], since: str | None = None,
     seen: set[str] = set()
     found: list[Candidate] = []
     unmatched = {} if unmatched is None else unmatched
+    gated = [] if gated is None else gated
     for message in messages:
         sender = str(message.get("From", ""))
         retailer = retailer_for(sender)
@@ -407,6 +409,7 @@ def candidates(messages: Iterator[Any], since: str | None = None,
             pass
         body = body_text(message)
         if not offers.worth_extracting(subject, body):
+            gated.append(f"{retailer}: {subject[:60]}")
             continue
         seen.add(mid)
         found.append(Candidate(mid, retailer, sender, subject, when, body,
@@ -447,6 +450,7 @@ class RunSummary:
     render_helped: int = 0
     render_errors: list[str] = field(default_factory=list)
     unmatched: dict[str, list[str]] = field(default_factory=dict)
+    gated: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -458,6 +462,7 @@ class RunSummary:
             "rendered": self.rendered, "render_helped": self.render_helped,
             "render_errors": self.render_errors,
             "unmatched_senders": self.unmatched,
+            "gated_out": self.gated,
             "leads": [
                 {"retailer": o["retailer_name"], "summary": o["summary"],
                  "confidence": o["confidence"],
@@ -550,8 +555,9 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             summary.errors.append(f"could not reach the board: {type(exc).__name__}: {exc}")
             return summary
         unmatched: dict[str, set[str]] = {}
+        gated: list[str] = []
         for cand in candidates(messages, since=since, limit=limit,
-                               unmatched=unmatched):
+                               unmatched=unmatched, gated=gated):
             summary.scanned += 1
             if cand.message_id in known:
                 summary.already_seen += 1
@@ -614,6 +620,7 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             if recorded:
                 summary.recorded.append(recorded)
 
+        summary.gated = gated
         summary.unmatched = {k: sorted(v) for k, v in unmatched.items()}
         summary.folders = dict(getattr(source, "folder_totals", {}) or {})
         if not summary.folders and source is None:
@@ -699,6 +706,12 @@ def main(argv: list[str] | None = None) -> int:
             # quiet one, and it must not be reported as "nothing found".
             print("WARNING: no folder answered a control search; nothing was read.",
                   file=sys.stderr)
+        if d["gated_out"]:
+            # "scanned 0" alone cannot tell "no retailer mail arrived" apart from
+            # "mail arrived and none of it carried an offer". Say which.
+            print(f"{len(d['gated_out'])} retailer email(s) carried no offer:")
+            for line in d["gated_out"][:6]:
+                print(f"    {line}")
         print(f"scanned {d['scanned']} (seen before {d['already_seen']}), "
               f"extracted {d['extracted']}, not offers {d['not_offers']}, "
               f"recorded {d['recorded']}, errors {len(d['errors'])}")
