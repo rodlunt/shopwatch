@@ -510,9 +510,22 @@ today. That is not worth weakening egress monitoring for. Revisit if an Applianc
 Online adapter gets written, since they are the only reachable retailer in the price
 bracket that matters.
 
-A run also produces two failures every time, Harvey Norman blocked and Appliance Central
-parsing nothing. Those are recorded as errors against the run rather than alerted on.
-Run it by hand with:
+A run also produces two failures every time, and they are **counted differently**, which
+matters if you are checking the summary to confirm them:
+
+| Retailer | What happens | Counted as |
+|---|---|---|
+| Harvey Norman | `FetchError` on the bot interstitial | `errors` |
+| Appliance Central | fetches fine, parses no price | `unresolved` |
+
+`check_listing` returns `"error"` only for a fetch failure; anything that fetched but
+yielded no price is `"ok" if advertised_price is not None else "unresolved"`. So one
+error out of four attempted makes the run `partial`, not `failed`, and the CLI exits 0.
+Only a run where **everything** errored, or where an alert could not be delivered, exits
+non-zero.
+
+Anyone reading "two failures" and checking the `errors` count will see one and conclude
+something changed. Run it by hand with:
 
 ```bash
 ssh root@100.115.75.8 'docker compose -f /srv/prod/shopwatch/docker-compose.yml \
@@ -551,6 +564,11 @@ when an alert could not be delivered. A run that exits 0 genuinely did something
 
 ### cron
 
+> ⚠ **Do not install this without reading "Scheduling the watch" above.** There is
+> deliberately no timer: a scheduled run pushes four `security-events` alerts on every
+> pass and they cannot be suppressed without weakening opti's egress allowlist. These
+> recipes are kept for the day that changes, or for a host with no egress monitoring.
+
 ```cron
 # /etc/cron.d/shopwatch: twice a day, output captured, failures mailed
 MAILTO=you@example.com
@@ -562,6 +580,8 @@ Set `MAILTO` or pipe to something that reads the exit code. A cron line that red
 everything to a logfile nobody reads is how a dead watcher stays dead.
 
 ### systemd timer
+
+> ⚠ Same warning as above: no timer is installed on opti on purpose.
 
 `/etc/systemd/system/shopwatch-watch.service`:
 
