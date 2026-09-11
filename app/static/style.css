@@ -254,6 +254,17 @@ main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
 
 .axis-point.is-dim { opacity: .38; }
 
+/* Ruled out: still drawn, deliberately. A decision you can see is easier to revisit
+ * than one you have to remember, and this one is worth revisiting if the price moves
+ * far enough. Struck through so it reads as rejected rather than as merely dear. */
+.axis-point.is-ruled-out { opacity: .55; }
+.axis-point.is-ruled-out i {
+  background: var(--paper); border: 2px dashed var(--muted); box-shadow: none;
+}
+.axis-point.is-ruled-out .axis-label b {
+  color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px;
+}
+
 /* A tie, drawn as a tie. Several retailers within a few dollars of each other are one
  * marker saying how many, not a smudge of overlapping dots pretending to be distinct
  * readings. Zoom separates them; that is the honest relationship. */
@@ -315,6 +326,30 @@ main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
 }
 .tag.act   { background: var(--act-bg);   color: var(--act); }
 .tag.close { background: var(--close-bg); color: var(--close); }
+.tag.ruled-out { background: var(--rule-soft); color: var(--muted); text-decoration: line-through; }
+
+/* A ruled-out row stays legible but stops competing for attention: it is on the board
+ * so the decision can be revisited, not so it can be re-read every visit. */
+.listing.is-ruled-out .price { color: var(--muted); text-decoration: line-through; }
+.listing.is-ruled-out .who { color: var(--ink-soft); }
+
+.ruled-out-control { padding: 10px 0 2px; border-top: 1px solid var(--rule-soft); margin-top: 10px; }
+.ruled-out-why { margin: 0 0 6px; font-size: 13px; color: var(--ink-soft); max-width: 70ch; }
+.linkish {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--close); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linkish:hover { color: var(--ink); }
+.linkish:focus-visible { outline: 2px solid var(--close); outline-offset: 2px; border-radius: 3px; }
+
+.rule-out-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rule-out-form label { font-size: 13px; color: var(--ink-soft); }
+.rule-out-form input {
+  flex: 1; min-width: 220px; padding: 5px 9px; font-size: 13px;
+  border: 1px solid var(--rule); border-radius: 7px;
+  background: var(--surface); color: var(--ink);
+}
 .tag.fault { background: var(--fault-bg); color: var(--fault); }
 
 .also-ran {

@@ -156,8 +156,18 @@ def difference_from_low(delivered: Delivered | float | None, lowest_known: Any) 
 
 
 def best_listing(rows: list[Mapping[str, Any]], penalty: float = 60.0) -> Mapping[str, Any] | None:
-    """The current best buy: cheapest confirmed delivered price, unresolved listings penalised."""
-    priced = [r for r in rows if r.get("delivered") and r["delivered"].known]
+    """The current best buy: cheapest confirmed delivered price, unresolved listings penalised.
+
+    A ruled-out listing is never the answer, however cheap. It stays on the board and on
+    the axis, because a decision you can see is worth more than one you have to
+    remember, but it cannot be nominated: the board was headlining Crowdshop's $869
+    hours after that price had been rejected, because cheapest and best were the same
+    question here and they are not.
+    """
+    priced = [
+        r for r in rows
+        if r.get("delivered") and r["delivered"].known and not r.get("ruled_out")
+    ]
     if not priced:
         return None
     return min(priced, key=lambda r: rank_key(r["delivered"], penalty))
@@ -213,6 +223,9 @@ def threshold_scale(
             "value": value,
             "resolved": bool(listing.get("delivered_resolved")),
             "classification": listing.get("classification"),
+            # Still plotted, deliberately. Ruling something out is a decision that can
+            # be revisited, and it is easier to revisit one you can see sitting there.
+            "ruled_out": bool(listing.get("ruled_out")),
         })
     points.sort(key=lambda pt: pt["value"])
 
