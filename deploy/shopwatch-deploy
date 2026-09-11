@@ -1,0 +1,77 @@
+#!/bin/sh
+# Deploy shopwatch at /srv/prod/shopwatch from a commit CI has already passed.
+#
+# Installed at /usr/local/bin/shopwatch-deploy on opti and called by the Deploy
+# workflow's job, which runs on the opti self-hosted runner and only ever fires
+# after a successful CI run:
+#
+#   sudo /usr/local/bin/shopwatch-deploy <source-repo> <sha>
+#
+# The SHA is fetched by id and checked out explicitly. The retired post-receive
+# hook ran `git pull`, which takes whatever the branch points at when it runs and
+# is not necessarily the commit that was verified (hardening rule 14).
+set -eu
+
+STACK=/srv/prod/shopwatch
+REPO="$STACK/repo"
+CONTAINER=shopwatch
+
+fail() { echo "shopwatch-deploy: $*" >&2; exit 1; }
+
+[ $# -eq 2 ] || fail "usage: shopwatch-deploy <source-repo> <sha>"
+SRC=$1
+SHA=$2
+
+# The caller is a workflow, so validate its argument rather than trusting it.
+echo "$SHA" | grep -qE '^[0-9a-f]{40}$' || fail "not a full 40-character SHA: $SHA"
+[ -d "$SRC/.git" ] || fail "source is not a git repo: $SRC"
+[ -d "$REPO/.git" ] || fail "deploy repo missing: $REPO"
+command -v docker >/dev/null 2>&1 || fail "docker not found"
+
+OLD=$(git -C "$REPO" rev-parse HEAD)
+
+# Fetch the one commit by its id. Asking for the SHA itself means a branch that
+# moved between CI passing and this running cannot substitute another commit.
+git -C "$REPO" fetch --quiet "$SRC" "$SHA" || fail "cannot fetch $SHA from $SRC"
+git -C "$REPO" cat-file -e "${SHA}^{commit}" || fail "$SHA is not a commit after fetch"
+git -C "$REPO" checkout --quiet --detach "$SHA" || fail "cannot check out $SHA"
+
+NEW=$(git -C "$REPO" rev-parse HEAD)
+[ "$NEW" = "$SHA" ] || fail "checked out $NEW but was asked for $SHA"
+
+# The compose file is versioned in the repo, so a change to it must land too.
+cp "$REPO/deploy/docker-compose.opti.yml" "$STACK/docker-compose.yml" \
+    || fail "cannot install compose file"
+
+if [ "$OLD" = "$NEW" ]; then
+    echo "shopwatch-deploy: already at $NEW, nothing to do"
+    exit 0
+fi
+
+if git -C "$REPO" diff --name-only "$OLD" "$NEW" \
+     | grep -qE '^(app/|Dockerfile|requirements.txt|deploy/docker-compose.opti.yml)'; then
+    echo "shopwatch-deploy: image inputs changed, rebuilding ($OLD -> $NEW)"
+    cd "$STACK"
+    docker compose up -d --build --quiet-pull
+    # Migrations run on boot and are forward-only; an existing database is never wiped.
+else
+    echo "shopwatch-deploy: no image inputs changed, container left running ($OLD -> $NEW)"
+    exit 0
+fi
+
+# `docker compose up` returning 0 only means it started the container. Prove the
+# thing actually came up rather than reporting a deploy that shipped a broken
+# image (hardening rule 7).
+STATE=unknown
+i=0
+while [ "$i" -lt 30 ]; do
+    # A container that has gone away leaves STATE at its previous value or
+    # `unknown`; either way the check below fails closed.
+    STATE=$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)
+    [ "$STATE" = healthy ] && break
+    i=$((i + 1))
+    sleep 4
+done
+
+[ "$STATE" = healthy ] || fail "container is $STATE, not healthy, two minutes after rebuild of $NEW"
+echo "shopwatch-deploy: healthy at $NEW"
