@@ -1,0 +1,35 @@
+name: Feature request
+description: Something the tool should do and does not
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The decision this would help with
+      description: >
+        What buying question is currently hard to answer? This tool exists to settle
+        "should I buy this yet, and from whom", so describe the gap in those terms
+        rather than as a feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Two or three testable statements. Done means these pass.
+      placeholder: |
+        - [ ] The board shows <X> when <condition>
+        - [ ] A test covers the case where <the interesting edge> happens
+    validations:
+      required: true
+
+  - type: textarea
+    id: boring-alternative
+    attributes:
+      label: The boring alternative
+      description: >
+        What would happen if this were not built, or built the dumbest way? If the
+        boring option wins, say so and close this. A declined idea is not a failure.
+    validations:
+      required: false
