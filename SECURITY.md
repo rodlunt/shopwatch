@@ -25,13 +25,11 @@ It holds no payment details, no card numbers and no retailer account credentials
   first commit.
 - **CI:** GitHub Actions secrets. The workflows in this repo currently need none.
 - **Deployed on opti:** `/srv/prod/shopwatch/.env`, mode 0600, root-owned, never in git.
-
-  ⚠ **Known gap.** The house standard is that anything deployed on opti carries a SOPS
-  vault at `smart-home:opti-stacks/<stack>/secrets.sops.env`, rendered by
-  `sops-render.sh`. This stack does not have one: its `.env` was written by hand during
-  first deployment. It currently holds no live secret (alerting is off, so the ntfy
-  fields are empty), so nothing is at risk today, but the moment a token goes in there
-  it should move into SOPS first.
+  **Rendered, never hand-written**, from the SOPS vault at
+  `smart-home:opti-stacks/shopwatch/secrets.sops.env` via `sops-render.sh shopwatch`.
+  The age private key lives only on opti. It carries the ntfy topic URL and publish
+  token and nothing else; non-secret tuning sits in the compose file, in git, where it
+  can be reviewed.
 
 - **The mail watcher** reuses credentials that already exist in
   `/srv/prod/career/runner.env` on opti: the iCloud app password and the Claude Code
