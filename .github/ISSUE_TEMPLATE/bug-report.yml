@@ -1,0 +1,49 @@
+name: Bug report
+description: Something behaves differently from what it claims to do
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Observed behaviour, and what you expected instead. Paste exact output where short.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The smallest sequence that shows it. A failing test is ideal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: >
+        Two or three testable statements. Done means these pass, not that the work
+        felt finished. Where the bug is about a silent failure, one criterion should be
+        a control: the check must fail against the broken version, not merely pass
+        against the fixed one.
+      placeholder: |
+        - [ ] A run against <the broken input> now reports <specific outcome>
+        - [ ] A test reproduces the old behaviour and fails without the fix
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - pricing and classification
+        - provenance and manual overrides
+        - retailer adapters / price watch
+        - email offers (mailwatch)
+        - web UI
+        - deployment / opti
+        - other
+    validations:
+      required: true
