@@ -266,3 +266,26 @@ def test_healthz_still_reports_the_semantic_version():
     with TestClient(main.app) as client:
         assert client.get("/healthz").json()["version"] == __version__
         assert client.get("/api/meta").json()["version"] == __version__
+
+
+# ------------------------------------------------- the axis is reachable as text
+
+
+def test_the_axis_publishes_its_figures_as_text(client):
+    """role="img" hid the whole subtree, so every plotted price was unreachable.
+
+    The dots stay hidden (absolutely positioned marks read as noise), but the same
+    numbers have to exist as real content or the axis is picture-only.
+    """
+    html = client.get("/").text
+
+    assert 'role="img"' not in html, "the axis subtree must not be hidden behind an image role"
+    assert "visually-hidden" in html, "the text version of the axis must be present"
+    assert "Appliance Central" in html
+    assert "target:" in html, "thresholds must be readable as text, not only as ticks"
+
+
+def test_the_zoom_target_says_what_the_keys_do(client):
+    html = client.get("/").text
+    assert "aria-describedby" in html
+    assert "arrow keys" in html, "a focusable zoom target with undiscoverable keys is not usable"
