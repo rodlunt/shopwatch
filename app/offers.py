@@ -150,6 +150,76 @@ def extract_via_cli(subject: str, sender: str, received: str, body: str,
     return parse_cli_output(proc.stdout)
 
 
+IMAGE_PROMPT = """Read the attached screenshot of a retailer marketing email. The
+discount, the deadline and often the whole offer are drawn into the artwork rather than
+written as text, which is why you are being shown a picture.
+
+Read what the artwork actually says. Pay particular attention to the headline number,
+any "ends" or "sign up by" date, and any code. The email's extracted text is below for
+the fine print, but where the two disagree about the offer itself, trust the image.
+
+Subject: {subject}
+From: {sender}
+Received: {received}
+
+Text extracted from the same email (fine print, often incomplete):
+---
+{body}
+---
+
+Read the image at {image_path} first, then return ONLY a JSON object matching this
+shape, with no prose and no code fence:
+{schema}
+"""
+
+
+def extract_from_image(image_path: str, subject: str, sender: str, received: str,
+                       body: str, claude_bin: str = "claude",
+                       timeout: int = 240) -> ExtractionResult:
+    """Read the offer out of a rendered screenshot, with the text alongside for context.
+
+    One call, not two merged: handing the model both and asking for a single answer
+    avoids inventing a reconciliation rule for fields that disagree.
+    """
+    import subprocess
+
+    schema = json.dumps(ExtractedOffer.model_json_schema().get("properties", {}), indent=1)
+    prompt = IMAGE_PROMPT.format(
+        subject=subject, sender=sender, received=received,
+        body=body[:6000], image_path=image_path, schema=schema,
+    )
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p", "--allowedTools", "Read"],
+            input=prompt, capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError:
+        return ExtractionResult(None, "claude-cli-vision", f"{claude_bin} not found")
+    except subprocess.TimeoutExpired:
+        return ExtractionResult(None, "claude-cli-vision", f"timed out after {timeout}s")
+    if proc.returncode != 0:
+        return ExtractionResult(None, "claude-cli-vision", (proc.stderr or "non-zero exit")[:200])
+
+    result = parse_cli_output(proc.stdout)
+    return ExtractionResult(result.offer, "claude-cli-vision", result.error)
+
+
+#: Fields worth paying for a render to recover. An offer with no amount or no deadline
+#: is barely actionable, and both are typically drawn rather than written.
+WEAK_FIELDS = ("amount", "expires")
+
+
+def is_weak(offer: ExtractedOffer | None) -> bool:
+    """Would a look at the artwork plausibly add something?
+
+    Only real offers are worth rendering: a product announcement stays a product
+    announcement no matter how prettily it is drawn.
+    """
+    if offer is None or not offer.is_offer:
+        return False
+    return any(getattr(offer, field, None) in (None, "") for field in WEAK_FIELDS)
+
+
 def parse_cli_output(text: str) -> ExtractionResult:
     """Pull the JSON object out of a CLI reply and validate it against the schema.
 
