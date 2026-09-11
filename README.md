@@ -151,10 +151,26 @@ the live file, and removes the stale `-wal`/`-shm` pair.
 
 ## Watching retailer email for offers
 
-**Who actually sends.** Of the retailers on the board, only two email this account at
-all: JB Hi-Fi (341 messages) and The Good Guys (66). Harvey Norman, Appliance Central,
-Bing Lee and Crowdshop send **nothing** - they sit in the allowlist inert. Appliance
-Central is worth subscribing to, since they hold the best confirmed price on the board.
+**Who actually sends.** JB Hi-Fi (341 messages) and The Good Guys (66) are the bulk.
+Harvey Norman was subscribed to on 2026-09-11 and sends from the bare
+`harveynorman.com.au`. Appliance Central, Bing Lee and Crowdshop send nothing yet and
+sit in the allowlist inert; Appliance Central is worth subscribing to, since they hold
+the best confirmed price on the board.
+
+**A run says what it saw at every stage**, because "scanned 0" on its own cannot tell an
+empty mailbox from a broken one from a mailbox full of brand noise:
+
+```
+looked in: INBOX holds 15
+2 retailer email(s) carried no offer:
+    Harvey Norman: Please confirm your Harvey Norman account
+    Harvey Norman: Welcome to Harvey Norman
+scanned 0 (seen before 0), extracted 0, not offers 0, recorded 0, errors 0
+```
+
+A sender whose display name is a watched retailer but whose domain is not on the
+allowlist is reported too - the shape a campaign sent through a third-party ESP takes,
+and otherwise a silent miss forever.
 
 
 The price scrapers can only see product pages, and the discounts that matter are not on
@@ -206,6 +222,20 @@ Three things learned the hard way against the real account, all of them now in t
 * **Search on the server.** The first live run fetched every message in both folders just
   to read a From header and never finished. One SEARCH per retailer domain, then fetch
   only the matches.
+* **Search by token, never by domain.** iCloud will not match a bare domain sitting
+  directly after the `@`:
+
+  ```
+  FROM "harveynorman.com.au"              -> 0 hits
+  FROM "harveynorman"                     -> 2 hits
+  FROM "do_not_reply@harveynorman.com.au" -> 2 hits
+  ```
+
+  JB Hi-Fi only ever worked by accident, because they send from
+  `email.jbhifi.com.au` where the domain follows a dot. Every retailer using their
+  bare domain was searched for and never found, with the run reporting a clean zero.
+  `SEARCH_TOKENS` is deliberately broader than the allowlist; `retailer_for()` still
+  does the precise domain check on the results.
 * **A `None` result set is ambiguous on iCloud** - it means both "no matches" and "that
   search was malformed". Each folder now runs a control search that must return
   something before an empty per-domain result is believed to be a real zero.
