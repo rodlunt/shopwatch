@@ -1,79 +1,50 @@
 {% extends "base.html" %}
-{% import "_matrix.html" as m with context %}
-{% block title %}Shopwatch board{% endblock %}
+{% import "_product.html" as c with context %}
+{% block title %}Shopwatch{% endblock %}
 
 {% block content %}
-<div class="panel">
-  <h3>Board</h3>
-  <div class="legend">
-    <span><span class="badge good">EXCELLENT</span> at or under target</span>
-    <span><span class="badge warn">TRIGGER MET</span> worth acting on</span>
-    <span><span class="badge bad">ABOVE TARGET</span> not yet</span>
-    <span><span class="badge manual">MANUAL</span> hand-entered and locked</span>
-    <span><span class="badge none">UNRESOLVED / STALE</span> not confirmed</span>
-    <span class="muted">Unresolved freight is ranked with a
-      {{ config.unresolved_freight_penalty|money }} penalty so it cannot outrank a confirmed price.</span>
-  </div>
-  <p class="small" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <button id="btn-new-product" class="primary">New product</button>
-    <span class="muted">Show:</span>
-    {% for s in statuses + ['ALL'] %}
-      <a class="btn {{ 'primary' if status == s else '' }}" style="text-decoration:none"
-         href="/?status={{ s }}&amp;sort={{ sort }}">{{ s|capitalize }} ({{ counts.get(s, 0) }})</a>
-    {% endfor %}
-  </p>
+<div class="filters">
+  {% for s in statuses + ['ALL'] %}
+    <a class="chip" href="/?status={{ s }}&amp;sort={{ sort }}"
+       {% if status == s %}aria-current="true"{% endif %}>{{
+       {'ACTIVE':'Hunting','PURCHASED':'Bought','PARKED':'Parked','ALL':'Everything'}[s] }}<span
+       class="n">{{ counts.get(s, 0) }}</span></a>
+  {% endfor %}
+  <span style="flex:1"></span>
+  <button id="btn-new-product" class="primary">Track something new</button>
 </div>
 
 {% for product in products %}
-<section class="product" id="product-{{ product.id }}">
-  <header>
-    <div>
-      <h2><a href="/products/{{ product.id }}">{{ product.name }}</a></h2>
-      <div class="model">{{ product.model }}{% if product.brand %} · {{ product.brand }}{% endif %} · {{ product.category }}</div>
-    </div>
-    <span class="badge verdict-{{ product.verdict }}">{{ product.verdict }}</span>
-    <span class="badge status-{{ product.status }}">{{ product.status }}</span>
-    {% if product.purchase %}
-      <span class="small muted">bought {{ product.purchase.purchased_at[:10] }} from
-        {{ product.purchase.retailer_name or 'unrecorded' }} for
-        <b>{{ product.purchase.price_paid|money }}</b>
-        {%- if product.moved_since_purchase is not none %},
-          {% if product.moved_since_purchase == 0 %}unchanged since
-          {%- else %}now {{ product.moved_since_purchase|abs|money }}
-            {{ 'CHEAPER' if product.moved_since_purchase < 0 else 'dearer' }}{% endif %}
-        {%- endif %}
-        {%- if product.protection_open %} &middot; <b>protection open to
-          {{ product.purchase.price_protection_until }}</b>{% endif %}</span>
-    {% endif %}
-    <span class="spacer"></span>
+  {% call c.card(product) %}
     <a class="btn" href="/products/{{ product.id }}">Open</a>
-  </header>
-  {{ m.targets(product) }}
-  {{ m.matrix(product, sort, compact=true) }}
-  {% if product.fit_notes %}<div style="padding:7px 12px;border-top:1px solid var(--line-soft)"
-     class="small"><b>Fit:</b> {{ product.fit_notes }}</div>{% endif %}
-</section>
+  {% endcall %}
 {% else %}
-<div class="panel"><p>{% if status != 'ALL' %}No {{ status|lower }} products.
-  <a href="/?status=ALL&amp;sort={{ sort }}">Show all</a>.{% else %}No products yet. Run
-  <code>python -m app.seed</code> or add one.{% endif %}</p></div>
+<div class="panel">
+  <h3>{% if status != 'ALL' %}Nothing here{% else %}Nothing tracked yet{% endif %}</h3>
+  <p class="muted">
+    {% if status != 'ALL' %}No products in this state.
+      <a href="/?status=ALL&amp;sort={{ sort }}">See everything</a>.
+    {% else %}Add a product and the retailers you are watching, and this page will tell you
+      when one crosses your price.{% endif %}
+  </p>
+</div>
 {% endfor %}
 
 <dialog id="new-product-dialog">
-  <header>New product</header>
+  <header>Track something new</header>
   <div class="body">
     <div class="form-grid">
-      <label>Name <input id="np-name" placeholder="Samsung Q-Series Soundbar"></label>
-      <label>Exact model <input id="np-model" placeholder="HW-Q930H/XY"></label>
+      <label>What is it <input id="np-name" placeholder="Samsung Q-Series soundbar"></label>
+      <label>Exact model <input id="np-model" placeholder="HW-Q930H/XY"><small>Used to match imports, so get it exact</small></label>
       <label>Brand <input id="np-brand"></label>
       <label>Category <input id="np-category" value="general" list="np-cats"></label>
-      <label>Verdict <select id="np-verdict"><option>MAYBE</option><option>BUY</option><option>IGNORE</option></select></label>
-      <label>Trigger (delivered) <input id="np-trigger" type="number" step="1"></label>
-      <label>Excellent (delivered) <input id="np-excellent" type="number" step="1"></label>
-      <label>Historical-low territory <input id="np-histlow" type="number" step="1"></label>
+      <label>Buy at or under <input id="np-trigger" type="number" step="1"><small>Delivered, not the ticket price</small></label>
+      <label>A good price is <input id="np-excellent" type="number" step="1"></label>
+      <label>Best it has ever been <input id="np-histlow" type="number" step="1"></label>
+      <label>Worth buying? <select id="np-verdict"><option>MAYBE</option><option>BUY</option><option>IGNORE</option></select></label>
     </div>
   </div>
-  <footer><button data-close>Cancel</button><button class="primary" id="np-save">Create</button></footer>
+  <footer><button data-close>Cancel</button><button class="primary" id="np-save">Start tracking</button></footer>
 </dialog>
 <datalist id="np-cats"><option>soundbar</option><option>tv</option><option>power_tool</option><option>appliance</option><option>general</option></datalist>
 {% endblock %}
