@@ -318,3 +318,82 @@ def test_a_reply_missing_required_fields_is_rejected():
 
 def test_an_empty_reply_is_an_error():
     assert offers.parse_cli_output("").offer is None
+
+
+# ------------------------------------------------------ moving read mail to Trash
+
+
+class FakeImap:
+    """Records what was asked of it. Enough to assert on, nothing more."""
+
+    def __init__(self, move_ok: bool = True):
+        self.move_ok = move_ok
+        self.calls: list[tuple] = []
+        self.selected: list[str] = []
+
+    def select(self, folder, readonly=False):
+        self.selected.append(folder)
+        return ("OK", [b"1"])
+
+    def uid(self, command, *args):
+        self.calls.append((command, *args))
+        if command == "MOVE":
+            return ("OK" if self.move_ok else "NO", [b""])
+        return ("OK", [b""])
+
+
+def imap_with(uids: dict, cleanup: bool = True, move_ok: bool = True):
+    src = mailwatch.ImapSource("x@me.com", "pw", cleanup=cleanup)
+    src.inbox_uids = dict(uids)
+    src._conn = FakeImap(move_ok=move_ok)
+    return src
+
+
+def test_only_processed_messages_are_moved():
+    src = imap_with({"<a@x>": b"1", "<b@x>": b"2", "<c@x>": b"3"})
+    report = src.cleanup({"<a@x>", "<c@x>"})
+    assert report["moved"] == 2
+    assert report["skipped"] == 1
+    moved = [c[1] for c in src._conn.calls if c[0] == "MOVE"]
+    assert moved == [b"1", b"3"], "the unprocessed message stays put"
+
+
+def test_nothing_moves_when_cleanup_is_off():
+    """The control. Off by default, so a casual run never touches the mailbox."""
+    src = imap_with({"<a@x>": b"1"}, cleanup=False)
+    assert src.cleanup({"<a@x>"}) == {"moved": 0, "failed": [], "skipped": 0}
+    assert src._conn.calls == []
+
+
+def test_it_never_expunges():
+    """Trash must stay recoverable: iCloud purges it after 30 days on its own."""
+    src = imap_with({"<a@x>": b"1"})
+    src.cleanup({"<a@x>"})
+    assert not any(c[0] == "EXPUNGE" for c in src._conn.calls)
+
+
+def test_cleanup_only_ever_opens_the_inbox():
+    src = imap_with({"<a@x>": b"1"})
+    src.cleanup({"<a@x>"})
+    assert src._conn.selected == ["INBOX"]
+
+
+def test_a_server_without_move_falls_back_to_copy_and_flag():
+    src = imap_with({"<a@x>": b"7"}, move_ok=False)
+    report = src.cleanup({"<a@x>"})
+    assert report["moved"] == 1
+    commands = [c[0] for c in src._conn.calls]
+    assert commands == ["MOVE", "COPY", "STORE"]
+    assert "EXPUNGE" not in commands
+
+
+def test_nothing_processed_means_nothing_moved():
+    src = imap_with({"<a@x>": b"1", "<b@x>": b"2"})
+    report = src.cleanup(set())
+    assert report["moved"] == 0 and report["skipped"] == 2
+    assert src._conn.calls == []
+
+
+def test_the_default_folder_list_is_inbox_only():
+    """Trash is 4,800 messages of already-deleted mail; the job does not need it."""
+    assert mailwatch.ImapSource("x@me.com", "pw").folders == ["INBOX"]

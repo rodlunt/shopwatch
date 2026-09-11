@@ -192,9 +192,11 @@ job needs no password of its own.
 
 Three things learned the hard way against the real account, all of them now in the code:
 
-* **Trash matters more than INBOX.** INBOX holds 12 messages; Trash holds 4,828, of which
-  225 are from JB Hi-Fi. Rodney swipe-deletes mail he has skimmed, so both are read -
-  the same conclusion `extract-seek-alerts.py` reached.
+* **INBOX only, by choice.** `/check-seek` also reads Trash because Seek alerts get
+  swiped away before it runs. Deal mail is different: keep what you want watched in the
+  inbox and the job stays small. Trawling 4,800 deleted messages every run is work
+  nobody asked for and a wider reach into the mailbox than the task needs. For a one-off
+  backfill of things already deleted, `ICLOUD_FOLDERS=INBOX,Trash`.
 * **Search on the server.** The first live run fetched every message in both folders just
   to read a From header and never finished. One SEARCH per retailer domain, then fetch
   only the matches.
@@ -205,6 +207,25 @@ Three things learned the hard way against the real account, all of them now in t
 The local Thunderbird mbox still works (`--dry-run` with no `--imap`) and is the better
 source for a one-off backfill of history, since the server copy only holds what has not
 been cleared out.
+
+### Clearing the inbox as it goes
+
+`--cleanup` (or `SHOPWATCH_MAIL_CLEANUP=1`) moves messages it has processed to Trash,
+the same as swiping them away. It is **off unless asked for**, so a manual run never
+touches the mailbox.
+
+Three constraints, all copied from `extract-seek-alerts.py` because the failure modes
+are the same:
+
+* **Only processed messages move.** Anything the extractor choked on stays in the inbox.
+  That is not politeness, it is the alarm: a broken extractor that binned its own
+  evidence would look exactly like a quiet week.
+* **INBOX only.** Never Trash, never any other folder.
+* **It never expunges.** iCloud purges Trash after 30 days by itself, so an interrupted
+  run is always recoverable.
+
+Messages are addressed by UID, not sequence number - sequence numbers shift the instant
+a message moves, and a cleanup keyed on them deletes the wrong mail.
 
 ### Two rules it will not break
 
