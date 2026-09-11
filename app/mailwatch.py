@@ -147,6 +147,10 @@ class ImapSource:
         self.cleanup_enabled = cleanup
         #: message-id -> UID, for the INBOX only. Cleanup never touches other folders.
         self.inbox_uids: dict[str, bytes] = {}
+        #: folder -> total messages, from the control search. Reported so that a run
+        #: finding nothing can be told apart from a run that never looked: "scanned 0"
+        #: alone reads the same whether the inbox is empty or the connection is dead.
+        self.folder_totals: dict[str, int] = {}
         self.folders = folders or [
             f.strip() for f in os.environ.get("ICLOUD_FOLDERS", "INBOX").split(",")
             if f.strip()
@@ -185,7 +189,8 @@ class ImapSource:
                 if status != "OK" or not control or control[0] is None:
                     log.warning("%s: control search returned nothing, folder unusable", folder)
                     continue
-                log.debug("%s holds %d messages", folder, len(control[0].split()))
+                self.folder_totals[folder] = len(control[0].split())
+                log.debug("%s holds %d messages", folder, self.folder_totals[folder])
 
                 uids: list[bytes] = []
                 for domain in sorted(RETAILERS):
@@ -343,6 +348,7 @@ class RunSummary:
     errors: list[str] = field(default_factory=list)
     recorded: list[dict[str, Any]] = field(default_factory=list)
     cleanup: dict[str, Any] = field(default_factory=dict)
+    folders: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -350,6 +356,7 @@ class RunSummary:
             "extracted": self.extracted, "not_offers": self.not_offers,
             "recorded": len(self.recorded), "errors": self.errors,
             "cleanup": self.cleanup,
+            "folders": self.folders,
             "leads": [
                 {"retailer": o["retailer_name"], "summary": o["summary"],
                  "confidence": o["confidence"],
@@ -487,6 +494,9 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             if recorded:
                 summary.recorded.append(recorded)
 
+        summary.folders = dict(getattr(source, "folder_totals", {}) or {})
+        if not summary.folders and source is None:
+            summary.folders = {"thunderbird": summary.scanned}
         if source is not None and getattr(source, "cleanup_enabled", False) and not dry_run:
             summary.cleanup = source.cleanup(processed)
 
@@ -555,6 +565,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary.as_dict(), indent=2))
     else:
         d = summary.as_dict()
+        if d["folders"]:
+            where = ", ".join(f"{k} holds {v}" for k, v in d["folders"].items())
+            print(f"looked in: {where}")
+        elif args.imap:
+            # No control total means no folder answered. That is a broken run, not a
+            # quiet one, and it must not be reported as "nothing found".
+            print("WARNING: no folder answered a control search; nothing was read.",
+                  file=sys.stderr)
         print(f"scanned {d['scanned']} (seen before {d['already_seen']}), "
               f"extracted {d['extracted']}, not offers {d['not_offers']}, "
               f"recorded {d['recorded']}, errors {len(d['errors'])}")
