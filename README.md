@@ -394,17 +394,17 @@ Read this before trusting an empty field.
 
 ### What was actually measured
 
-Probed from an Australian residential IP on 2026-09-11 with the adapters' own `fetch()`.
-This is a snapshot, not a permanent fact: re-run `python -m app.price_watch --json` and
-read `/api/price-watch/runs` rather than trusting this table.
+Probed 2026-09-11 from an Australian residential IP: first with the adapters' own
+`fetch()`, then the same products read in a signed-in desktop browser. Re-run rather than
+trust this table; it is a snapshot.
 
-| Retailer | Result | Meaning |
-|---|---|---|
-| Crowdshop | 200, 273 KB | fetches fine |
-| Harvey Norman | 200 carrying an **Imperva/Incapsula challenge** | blocked |
-| Appliance Central | **403** | blocked |
-| JB Hi-Fi | not established | the URL probed was a guess and 404'd |
-| The Good Guys | not established | as above |
+| Retailer | Plain adapter | Browser | What the page gives up |
+|---|---|---|---|
+| Crowdshop | 200, 273 KB | n/a | price, stock; freight needs checkout |
+| Harvey Norman | **Incapsula challenge** (HTTP 200) | reads fine | price, model, warranty, GTIN; no freight or stock |
+| JB Hi-Fi | untested URL | reads fine | price, model, SKU/PLU, store stock, C&C; **no freight figure** |
+| The Good Guys | untested URL | reads fine | price, model, **freight $28 quoted on-page**, C&C, in-store stock |
+| Appliance Central | **403** | reads fine | price, model, checkout coupon, stock, warranty; freight conditional |
 
 **Harvey Norman is the instructive one.** It returns HTTP 200 with a "Pardon Our
 Interruption" interstitial, so a naive adapter parses it, finds no price, and reports
@@ -412,6 +412,11 @@ Interruption" interstitial, so a naive adapter parses it, finds no price, and re
 price. `retailers.base.detect_block()` catches that family of pages and raises
 `FetchError` instead, so a block reaches the run as an **error**, which is what it is.
 Add a marker there if a new retailer starts doing the same.
+
+**The Good Guys is the surprise.** It publishes a real freight figure on the product page,
+but only against the browser's remembered preferred store. A headless scraper carrying no
+store cookie sees nothing, so this stays a browser-assisted field rather than an adapter
+one.
 
 ### Structural limits, which no amount of scraping fixes
 
@@ -432,6 +437,20 @@ Add a marker there if a new retailer starts doing the same.
 * **Playwright is not used.** If a retailer genuinely needs a headless browser, add it as
   an optional dependency in that adapter alone; the rest of the stack stays on
   `requests` + `BeautifulSoup`.
+
+### Known gap: the historical low latches
+
+`store.maybe_lower_known_low()` lowers a product's recorded low whenever a **confirmed**
+delivered price beats it, and never raises it again. That is right for a market that moves
+and wrong for a typo: a mistyped freight or price that produces a resolved delivered figure
+sets the low permanently, and every later listing then reads as dearer than a price that
+never existed. This bit during development — a `$25` freight typed into a persistence test
+set the low to `$894`.
+
+There is no heuristic guarding it, deliberately: any rule that rejects "implausible" lows
+would also reject the genuine bargain the tool exists to catch. The low is editable in the
+product dialog, and `GET /api/price-history/{id}` shows which observation produced it. If a
+low looks wrong, check the history row's `source` before believing it.
 
 ### Filling a blocked retailer by hand, with a browser
 
