@@ -411,3 +411,70 @@ def test_a_run_reports_what_it_looked_in_not_just_what_it_found():
     assert mailwatch.RunSummary().as_dict()["folders"] == {}, (
         "no totals means no folder answered, which the CLI reports as a warning"
     )
+
+
+# --------------------------------------------- deciding when to look at the artwork
+
+
+def offer(**over):
+    base = dict(is_offer=True, kind="percent_off", amount=20, spend_threshold=None,
+                applies_to="a range", categories=["storewide"], excludes=None,
+                code=None, expires="2026-09-13", requires_signup=False,
+                confidence="high", summary="20% off")
+    base.update(over)
+    return offers.ExtractedOffer(**base)
+
+
+def test_a_complete_offer_is_not_worth_rendering():
+    """The control. Without this, every email renders and the gate saves nothing."""
+    assert offers.is_weak(offer()) is False
+
+
+def test_a_missing_deadline_is_worth_rendering():
+    """The real case: the live Good Guys email had 20% in the text and no date anywhere."""
+    assert offers.is_weak(offer(expires=None)) is True
+
+
+def test_a_missing_amount_is_worth_rendering():
+    assert offers.is_weak(offer(amount=None)) is True
+
+
+def test_a_non_offer_is_never_rendered():
+    """A product announcement stays one however prettily it is drawn."""
+    assert offers.is_weak(offer(is_offer=False, amount=None, expires=None)) is False
+    assert offers.is_weak(None) is False
+
+
+def test_the_render_prompt_names_the_image_and_carries_the_text():
+    prompt = offers.IMAGE_PROMPT.format(
+        subject="s", sender="f", received="r", body="the fine print",
+        image_path="/tmp/shot.png", schema="{}")
+    assert "/tmp/shot.png" in prompt
+    assert "the fine print" in prompt
+    assert "trust the image" in prompt
+
+
+def test_render_errors_do_not_lose_the_text_answer(monkeypatch):
+    """A failed render must degrade to the text result, never discard it."""
+    cand = mailwatch.Candidate("<a@x>", "JB Hi-Fi", "f", "s", "2026-09-10", "body", "<html>")
+
+    def boom(html, timeout=120):
+        raise mailwatch.render.RenderError("chrome timed out")
+
+    monkeypatch.setattr(mailwatch.render, "render_html", boom)
+    result = mailwatch.render_and_read(cand, "claude")
+    assert result.offer is None
+    assert "chrome timed out" in result.error
+
+
+def test_an_email_with_no_html_is_never_rendered():
+    cand = mailwatch.Candidate("<a@x>", "JB Hi-Fi", "f", "s", "2026-09-10", "body", "")
+    assert mailwatch.render_and_read(cand, "claude") is None
+
+
+def test_body_html_picks_the_richest_part():
+    import email.message
+    msg = email.message.EmailMessage()
+    msg.set_content("plain text version")
+    msg.add_alternative("<html><body>" + "x" * 500 + "</body></html>", subtype="html")
+    assert len(mailwatch.body_html(msg)) > 400

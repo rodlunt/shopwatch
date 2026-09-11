@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import offers
+from . import offers, render
 from .db import migrate, session, utcnow
 
 log = logging.getLogger("shopwatch.mailwatch")
@@ -77,6 +77,22 @@ def default_mailbox_paths() -> list[Path]:
                     found.append(inbox)
     found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return found
+
+
+def body_html(message) -> str:
+    """The richest HTML part, for rendering. Empty when the mail is plain text only."""
+    best = ""
+    for part in message.walk():
+        if part.get_content_type() != "text/html":
+            continue
+        try:
+            raw = part.get_payload(decode=True) or b""
+            text = raw.decode(part.get_content_charset() or "utf-8", "replace")
+        except Exception:
+            continue
+        if len(text) > len(best):
+            best = text
+    return best
 
 
 def body_text(message) -> str:
@@ -297,6 +313,7 @@ class Candidate:
     subject: str
     received: str
     body: str
+    html: str = ""
 
 
 def mbox_messages(paths: list[Path]) -> Iterator[Any]:
@@ -334,9 +351,28 @@ def candidates(messages: Iterator[Any], since: str | None = None,
         if not offers.worth_extracting(subject, body):
             continue
         seen.add(mid)
-        found.append(Candidate(mid, retailer, sender, subject, when, body))
+        found.append(Candidate(mid, retailer, sender, subject, when, body,
+                                body_html(message)))
     found.sort(key=lambda c: c.received, reverse=True)
     return found[:limit] if limit else found
+
+
+def render_and_read(cand: Candidate, claude_bin: str) -> Any:
+    """Render the email and read the offer off the picture. None when there is no HTML."""
+    if not cand.html:
+        return None
+    shot = None
+    try:
+        shot = render.render_html(cand.html)
+        return offers.extract_from_image(
+            str(shot), cand.subject, cand.sender, cand.received, cand.body,
+            claude_bin=claude_bin,
+        )
+    except render.RenderError as exc:
+        return offers.ExtractionResult(None, "render", str(exc))
+    finally:
+        if shot is not None:
+            render.cleanup(shot)
 
 
 @dataclass
@@ -349,6 +385,9 @@ class RunSummary:
     recorded: list[dict[str, Any]] = field(default_factory=list)
     cleanup: dict[str, Any] = field(default_factory=dict)
     folders: dict[str, int] = field(default_factory=dict)
+    rendered: int = 0
+    render_helped: int = 0
+    render_errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -357,6 +396,8 @@ class RunSummary:
             "recorded": len(self.recorded), "errors": self.errors,
             "cleanup": self.cleanup,
             "folders": self.folders,
+            "rendered": self.rendered, "render_helped": self.render_helped,
+            "render_errors": self.render_errors,
             "leads": [
                 {"retailer": o["retailer_name"], "summary": o["summary"],
                  "confidence": o["confidence"],
@@ -427,7 +468,8 @@ def run(paths: list[Path] | None = None, since: str | None = None,
         limit: int | None = None, dry_run: bool = False,
         model: str = offers.MODEL, client: Any = None,
         sink: Sink | None = None, source: Any = None,
-        use_cli: bool = False, claude_bin: str = "claude") -> RunSummary:
+        use_cli: bool = False, claude_bin: str = "claude",
+        render_weak: bool = False) -> RunSummary:
     """One pass. `source` is anything yielding email.Message; defaults to the local mbox."""
     summary = RunSummary()
     processed: set[str] = set()
@@ -468,6 +510,22 @@ def run(paths: list[Path] | None = None, since: str | None = None,
                     cand.subject, cand.sender, cand.received, cand.body,
                     client=client, model=model,
                 )
+            # If the text pass produced an offer with no amount or no deadline, the
+            # numbers are probably drawn rather than written. Render and look.
+            if render_weak and not result.error and offers.is_weak(result.offer):
+                summary.rendered += 1
+                looked = render_and_read(cand, claude_bin)
+                if looked is not None and looked.offer is not None:
+                    before = result.offer
+                    result = looked
+                    log.info("render recovered: amount %s -> %s, expires %s -> %s",
+                             before.amount, looked.offer.amount,
+                             before.expires, looked.offer.expires)
+                    summary.render_helped += 1
+                elif looked is not None and looked.error:
+                    # A failed render is not a failed extraction: keep the text answer.
+                    summary.render_errors.append(looked.error[:120])
+
             if result.error:
                 # Deliberately NOT marked processed: it stays in the inbox, which is
                 # how a broken extractor announces itself instead of quietly binning
@@ -524,6 +582,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cli", action="store_true",
                         help="extract with headless Claude Code instead of the API; needs no key")
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
+    parser.add_argument("--render", action="store_true",
+                        default=os.environ.get("SHOPWATCH_RENDER") == "1",
+                        help="when the text yields no amount or deadline, render the email "
+                             "and read the artwork; needs docker")
     parser.add_argument("--cleanup", action="store_true",
                         default=os.environ.get("SHOPWATCH_MAIL_CLEANUP") == "1",
                         help="move processed INBOX messages to Trash; never expunges")
@@ -559,7 +621,8 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = run(paths=args.mailbox, since=args.since, limit=args.limit,
                   dry_run=args.dry_run, model=args.model, sink=sink, source=source,
-                  use_cli=args.cli, claude_bin=args.claude_bin)
+                  use_cli=args.cli, claude_bin=args.claude_bin,
+                  render_weak=args.render)
 
     if args.json:
         print(json.dumps(summary.as_dict(), indent=2))
@@ -580,6 +643,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n  {lead['retailer']} [{lead['confidence']}] {lead['summary']}")
             for rationale in lead["matches"]:
                 print(f"    -> {rationale}")
+        if d["rendered"]:
+            print(f"  rendered {d['rendered']} email(s); the artwork added something in "
+                  f"{d['render_helped']}")
         if d["cleanup"]:
             c = d["cleanup"]
             print(f"\n  moved {c['moved']} processed message(s) to Trash"
