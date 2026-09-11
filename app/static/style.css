@@ -171,7 +171,11 @@ main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
   height: 150px;
   overflow: hidden;
   border-radius: 10px;
-  touch-action: none;
+  /* pan-y, not none. `none` meant a finger anywhere on the plot could not scroll
+   * the page at all, which is the touch half of the same scroll trap. pan-y hands
+   * vertical gestures to the browser (the page scrolls) and keeps horizontal ones
+   * for the axis (drag to pan), which matches what each direction means here. */
+  touch-action: pan-y;
   cursor: grab;
 }
 .axis-plot:active { cursor: grabbing; }
