@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+# Ties the running image back to the commit it came from, so `docker inspect` on
+# opti answers "which repo is this?" without anyone having to remember.
+LABEL org.opencontainers.image.source="https://github.com/rodlunt/shopwatch"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     SHOPWATCH_DB=/data/shopwatch.db \
