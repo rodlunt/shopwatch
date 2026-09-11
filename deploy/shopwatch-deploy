@@ -12,9 +12,12 @@
 # is not necessarily the commit that was verified (hardening rule 14).
 set -eu
 
-STACK=/srv/prod/shopwatch
+# Overridable so the control can drive this against a throwaway stack. Production
+# sets none of these.
+STACK=${SHOPWATCH_STACK:-/srv/prod/shopwatch}
 REPO="$STACK/repo"
-CONTAINER=shopwatch
+CONTAINER=${SHOPWATCH_CONTAINER:-shopwatch}
+PROBE_SLEEP=${SHOPWATCH_PROBE_SLEEP:-4}
 
 # Overridable so the install path can be exercised by a test without touching the
 # real ones. Production never sets these.
@@ -87,8 +90,43 @@ NEW=$(git -C "$REPO" rev-parse HEAD)
 cp "$REPO/deploy/docker-compose.opti.yml" "$STACK/docker-compose.yml" \
     || fail "cannot install compose file"
 
+# Prove the container is alive. Called on EVERY path, including the ones that
+# change nothing.
+#
+# It used to run only after a rebuild, so "already at this SHA" and "no image
+# inputs changed" both exited 0 having checked nothing at all. Re-running the
+# workflow against a crash-looping container printed "nothing to do", went green,
+# and left production down. A docs-only merge landing while the container was
+# unhealthy did the same. The script already argued that `docker compose up`
+# returning 0 is not proof the thing came up; returning 0 without starting
+# anything is not proof either (hardening rule 7).
+#
+# Caveat worth knowing rather than hiding: this reads Docker's last probe result,
+# and the compose healthcheck has a 60s interval, so on a no-change deploy the
+# status can be up to a minute stale. It catches a container that is down, gone
+# or has been failing for a while. It will not catch one that broke seconds ago.
+wait_healthy() {
+    tries=$1
+    why=$2
+    state=unknown
+    i=0
+    while [ "$i" -lt "$tries" ]; do
+        # A container that has gone away leaves `state` at unknown, so the check
+        # below fails closed rather than treating absence as health.
+        state=$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)
+        [ "$state" = healthy ] && break
+        i=$((i + 1))
+        sleep "$PROBE_SLEEP"
+    done
+    [ "$state" = healthy ] || fail "container is $state, not healthy, after $why"
+    echo "shopwatch-deploy: healthy at $NEW ($why)"
+}
+
 if [ "$OLD" = "$NEW" ]; then
-    echo "shopwatch-deploy: already at $NEW, nothing to do"
+    echo "shopwatch-deploy: already at $NEW, nothing to deploy"
+    # Already running whatever it is running, so its health is current: a short
+    # budget is enough to ride out a transient `starting`.
+    wait_healthy 8 "no deploy, already at this commit"
     exit 0
 fi
 
@@ -98,24 +136,8 @@ if git -C "$REPO" diff --name-only "$OLD" "$NEW" \
     cd "$STACK"
     docker compose up -d --build --quiet-pull
     # Migrations run on boot and are forward-only; an existing database is never wiped.
+    wait_healthy 30 "rebuild of $NEW"
 else
     echo "shopwatch-deploy: no image inputs changed, container left running ($OLD -> $NEW)"
-    exit 0
+    wait_healthy 8 "no rebuild needed"
 fi
-
-# `docker compose up` returning 0 only means it started the container. Prove the
-# thing actually came up rather than reporting a deploy that shipped a broken
-# image (hardening rule 7).
-STATE=unknown
-i=0
-while [ "$i" -lt 30 ]; do
-    # A container that has gone away leaves STATE at its previous value or
-    # `unknown`; either way the check below fails closed.
-    STATE=$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)
-    [ "$STATE" = healthy ] && break
-    i=$((i + 1))
-    sleep 4
-done
-
-[ "$STATE" = healthy ] || fail "container is $STATE, not healthy, two minutes after rebuild of $NEW"
-echo "shopwatch-deploy: healthy at $NEW"
