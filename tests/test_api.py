@@ -355,3 +355,38 @@ def test_a_ruled_out_listing_stops_being_nominated_through_the_api(client):
     assert after["best_retailer"] != cheapest["retailer_name"], (
         "a ruled-out listing cannot be nominated as best"
     )
+
+
+# ------------------------------------------- placeholders and ruled-out render
+
+
+def test_the_money_filter_does_not_emit_an_em_dash():
+    """The escaped \\u2014 form hid this from the dash purge's grep, and _money is the
+    widest emitter: every {{ x|money }} with no value went through it, so the board
+    showed a different placeholder depending on which template rendered the cell."""
+    from app.main import _money
+
+    assert _money(None) == "-"
+    assert _money("") == "-"
+    assert "—" not in _money(None)
+    assert _money(1699) == "$1,699", "control: a real value still formats"
+
+
+def test_a_patch_response_carries_ruled_out_for_the_client(client):
+    """The board re-renders a row from this payload after an inline edit.
+
+    Without ruled_out in it the client cannot tell, and re-rendered a ruled-out
+    listing as "excellent" with the buy styling applied. This is the contract that
+    fix depends on, so it is asserted here rather than left implicit.
+    """
+    products = client.get("/api/products").json()
+    pid = next(p["id"] for p in products if p["model"] == "HW-Q930H/XY")
+    listing = client.get(f"/api/products/{pid}/retailers").json()[0]
+
+    client.post(f"/api/retailers/{listing['id']}/ruled-out",
+                json={"ruled_out": True, "reason": "group-buy"})
+    body = client.patch(f"/api/retailers/{listing['id']}",
+                        json={"advertised_price": 700}).json()
+    payload = body.get("listing", body)
+    assert "ruled_out" in payload, "the client cannot style what it is not told"
+    assert payload["ruled_out"], "and it must reflect the current state"

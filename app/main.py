@@ -66,8 +66,12 @@ ASSET_VERSION = _asset_version()
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 def _money(value: Any) -> str:
+    # "-" rather than an em dash. The escaped \u2014 form hid this from the dash
+    # purge's grep, and this is the widest emitter of the three: every {{ x|money }}
+    # with no value went through here, so the board showed a different placeholder
+    # depending on which template rendered it.
     if value is None or value == "":
-        return "\u2014"
+        return "-"
     try:
         number = float(value)
     except (TypeError, ValueError):
