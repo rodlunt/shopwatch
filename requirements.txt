@@ -2,7 +2,7 @@
 # advisory found by the audit job on its first run. Dependabot moves them forward.
 fastapi>=0.121.0
 uvicorn[standard]>=0.34.0
-jinja2>=3.1.5
+jinja2>=3.1.6
 python-multipart>=0.0.31
 requests>=2.33.0
 beautifulsoup4>=4.12.3
