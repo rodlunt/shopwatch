@@ -29,7 +29,7 @@ nothing about what actually ran.
 
 ## Verification at session end (VERIFIED unless noted)
 
-- **Tests:** 199 passed, `ruff check .` clean
+- **Tests:** 220 passed, `ruff check .` clean
 - **main == opti:** verified equal and the container healthy after every deploy
 - **Installed deploy script == repo copy:** both `921772f52b32`
 - **Working tree:** clean. Branches: `main` only, locally and on origin
@@ -72,28 +72,35 @@ the wheel would have closed it looking resolved while touch users hit the identi
 are regression guards; the PRs say which is which. #27 remains **LIKELY** rather than
 VERIFIED: it was read off the configured intervals, not reproduced.
 
-## Done after the session-end brief above was written
+## Two more rounds after the session-end brief above
 
-Four more PRs (#42 to #45), all from probing the two adapters the README had recorded as
-"untested":
+**Adapter probe (#42 to #45).** The README recorded two adapters as "untested". Both
+work. That turned up three things: retailer stock numbers were being read as model
+mismatches, the scraping table was measured before those adapters had ever run, and the
+real reason for having no timer is egress monitoring rather than broken scraping.
 
-- **#42** a retailer stock number is not a model mismatch. JB Hi-Fi publishes `893039`
-  and The Good Guys `50098655` on the right product pages, so both correct listings were
-  about to be tagged as faults by anything that scraped them. Also fixed `model_matches`,
-  which promised a punctuation-insensitive comparison while keeping `/`.
-- **#43** the scraping table was measured before two adapters had ever run. Both work:
-  each returns a price, stock and condition with no warnings. Appliance Central does not
-  403, it fetches and parses nothing, which is a different problem.
-- **#44** **no timer, and the reason is egress monitoring, not scraping.** Read that
-  section before adding one. A scheduled run pushes to `security-events` every pass and
-  the alerts cannot be suppressed without weakening a deliberately narrow allowlist.
-- **#45** em and en dashes purged from prose and UI copy. One stays in `crowdshop.py`'s
-  price-range regex, annotated: it matches a dash in the retailer's HTML, and deleting it
-  silently stops range parsing.
+**xhigh review (#47 to #52), 15 findings, all fixed.** Six were in work from the same day.
 
-**Two of four watchable listings return a price**, not three of five adapters. Crowdshop
-has an adapter and no URL so the watcher cannot reach it; Appliances Online has the
-opposite problem.
+| | |
+|---|---|
+| #47 | Crowdshop's price guide read "Dispatch 3 to 5 business days" as a range and promoted **$3** as the advertised price, written as LIVE provenance. The historical low never rises, so it would have been permanent. Dormant only because that listing has no URL. |
+| #48 | model identity now decided by the schema.org key (`mpn`/`model` against `sku`), not the string's shape, which was wrong in both directions. `model_matches` also accepted `"XY"` and `"930"` as the model. |
+| #49 | the dash purge missed the two widest emitters; `tagFor` re-rendered a ruled-out listing as "excellent" after an inline edit |
+| #50 | a `FLAGGED` model aspect could never be cleared by any run, only by hand |
+| #51 | the first schema.org `Product` block won, so a carousel entry's price could be written to the listing |
+| #52 | README miscounted which run failures are `errors` against `unresolved`, and still handed over cron and systemd recipes contradicting the no-timer decision |
+
+### Two things to carry into the next review
+
+**Fixes weakened each other.** #48 stopped comparing merchant stock numbers, which
+removed the mismatch warning that would have caught #51's wrong-block price. #51 was only
+silent because #48 had landed. When a change removes a check, look for what was relying
+on it.
+
+**"Grep returned zero" was not proof.** The dash purge reported clean on a search that
+could not see the escaped form, and the two it missed were the widest emitters in the
+codebase. A text search proves something about the text you searched for, not about the
+property you actually care about.
 
 ## The buying decision
 
