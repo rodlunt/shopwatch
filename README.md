@@ -414,6 +414,43 @@ Persistent=true          # catches up after the lid has been shut
 WantedBy=timers.target
 ```
 
+## The product wizard's research step
+
+**Not wired into opti yet.** The wizard replacing the old "Track something new" dialog
+(a guided, multi-step flow: required fields, then optional, then a price target, then
+retailers, then "Let's go") can trigger a live research pass across chosen retailers.
+The mechanism is written and tested but deliberately not deployed until reviewed
+separately - see `deploy/research-runner.py`'s own docstring.
+
+**Same shape as the mail watcher above, on purpose.** A research job never runs inside
+this container: `POST /api/research-jobs` just queues a row and returns immediately
+(202). A host-level script on opti - its own small venv, exactly like
+`mailwatch-venv` - polls `POST /api/research-jobs/claim`, runs the headless `claude`
+CLI once per retailer, and reports back via `POST /api/research-jobs/{id}/results` and
+`/complete`. The container never holds the Claude Code OAuth token and never gains new
+outbound egress; only the host script does, reusing the same
+`/srv/prod/career/runner.env` credential mailwatch already reuses. Nothing new to store
+or rotate.
+
+**At most one active job per product.** A database constraint (not just application
+logic) rejects a second `QUEUED` or `RUNNING` job for a product with a 409, so a
+double-click or a retried request can't spend the shared research quota twice.
+
+**A job that never reports back is judged purely by elapsed time**
+(`research.JOB_CEILING_SECONDS`, currently 10 minutes), never by anything at container
+startup - the host script is a separate process from this container, so an ordinary
+`git merge` → redeploy never interrupts a job actually in progress on the host.
+
+**Findings land through the ordinary import path**, `POST /api/import`, under the
+ordinary `IMPORTED` provenance state - a research job is a new way to trigger that
+endpoint, not a second way for prices to enter the database.
+
+**A same-day price-target suggestion never wears the words a real historical low
+earns.** `GET /api/products/{id}/price-suggestion` refuses to return anything from
+fewer than 2 real listings, and when it does, the response is deliberately labelled
+"estimate, from N listings" rather than reusing `HISTORICAL LOW TERRITORY` or
+`EXCELLENT` - those are earned through real tracking over time.
+
 ## Deployed on opti
 
 Live at **https://shop.home.lunt.au** (LAN only, trusted `*.home.lunt.au` wildcard cert).
@@ -657,6 +694,14 @@ what would fire without sending anything.
 | `DELETE` | `/api/products/{id}` | archives, never deletes |
 | `GET` | `/api/products/{id}/retailers` | the listings |
 | `POST` | `/api/products/{id}/retailers` | add a listing |
+| `GET` | `/api/products/check-model?model=...` | deterministic duplicate check for the wizard |
+| `GET` | `/api/products/{id}/price-suggestion` | a same-day trigger-price estimate from real listings, or `null` below 2 |
+| `POST` | `/api/retailers` | `{"name": "..."}`; ensures a retailer exists with no listing attached |
+| `POST` | `/api/research-jobs` | `{"product_id": 1, "retailer_ids": [...]}`; 202, 409 if one is already active for this product |
+| `GET` | `/api/research-jobs/{id}` | poll a job's status and per-retailer results |
+| `POST` | `/api/research-jobs/claim` | host-runner only: claims the oldest QUEUED job |
+| `POST` | `/api/research-jobs/{id}/results` | host-runner only: one retailer's outcome |
+| `POST` | `/api/research-jobs/{id}/complete` | host-runner only: marks DONE or FAILED |
 | `GET` | `/api/retailers/{listing_id}` | one enriched listing |
 | `PATCH` | `/api/retailers/{listing_id}` | inline edit; **locks the field as MANUAL** |
 | `POST` | `/api/retailers/{listing_id}/clear-override` | `{"field": "freight"}` or `{"field": "all"}` |
