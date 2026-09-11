@@ -68,8 +68,12 @@ refused with a non-zero exit. Evidence is on issue #5.
 - **The deploy's health loop has been seen to pass, never to catch.** Proving it fails a
   job on a container that never comes up means deliberately shipping a broken image to
   production, which was judged not worth doing to prod.
-- **Harvey Norman has no stock or pickup signal.** Their site is Incapsula-blocked.
-  Rodney's call: look harder when a price shows up, not before.
+- ~~Harvey Norman has no stock or pickup signal.~~ **Closed 11 Sep.** Rodney confirmed
+  the soundbar is in stock at effectively all HN stores, so collection is available and
+  freight is moot. Their site stays Incapsula-blocked, so this came from him, not the
+  adapter, and the `stock` aspect is marked `VERIFIED` with that attribution. It does not
+  change anything: at $1,695 they are $705 above the trigger, so availability was never
+  what ruled them out.
 - **JB Hi-Fi and The Good Guys freight stays unresolved on purpose.** Collection is
   acceptable to Rodney and both record free Click and Collect at Morayfield, but freight
   was not zeroed: that would claim delivery is free, which is not what is true. The $60
@@ -84,7 +88,8 @@ Samsung HW-Q930H/XY. Trigger $900 delivered, excellent $850.
 | Crowdshop | $869 | **FLAGGED**, group-buy: never quotable | ruled out, see below |
 | **Appliance Central** | $1,050 less $60 code | $0 | **$990** |
 | Appliances Online | $1,169 | $0 (confirmed 4506) | $1,169 |
-| Harvey Norman / Bing Lee / Betta | $1,695 | unresolved | collectable |
+| **Harvey Norman** | $1,695 | moot | **in stock at ~all stores**, collect |
+| Bing Lee / Betta | $1,695 | unresolved | unknown |
 | JB Hi-Fi | $1,699 | unresolved | free C&C Morayfield |
 | The Good Guys | $1,699 | $28 | free C&C Morayfield |
 
