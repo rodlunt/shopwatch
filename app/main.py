@@ -29,24 +29,6 @@ app = FastAPI(title="Shopwatch", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-CLASS_STYLE = {
-    pricing.HISTORICAL_LOW: "good",
-    pricing.EXCELLENT: "good",
-    pricing.TRIGGER_MET: "warn",
-    pricing.ABOVE_TARGET: "bad",
-    pricing.UNRESOLVED: "none",
-}
-VERIFICATION_STYLE = {
-    "VERIFIED": "good",
-    "LIVE": "good",
-    "MANUAL": "manual",
-    "IMPORTED": "warn",
-    "STALE": "none",
-    "UNVERIFIED": "none",
-    "FLAGGED": "bad",
-}
-
-
 def _money(value: Any) -> str:
     if value is None or value == "":
         return "\u2014"
@@ -65,15 +47,7 @@ def _short_time(value: Any) -> str:
 
 templates.env.filters["money"] = _money
 templates.env.filters["dt"] = _short_time
-templates.env.filters["cls"] = lambda c: CLASS_STYLE.get(c, "none")
-templates.env.filters["vcls"] = lambda s: VERIFICATION_STYLE.get(s, "none")
 
-#: Single letter per verification aspect, so seven states fit on one row.
-ASPECT_INITIAL = {
-    "model": "M", "price": "P", "stock": "S", "freight": "F",
-    "condition": "C", "warranty": "W", "contents": "I",
-}
-templates.env.filters["initial"] = lambda a: ASPECT_INITIAL.get(a, a[:1].upper())
 
 
 def jsonable(value: Any) -> Any:
@@ -348,7 +322,35 @@ def api_update_listing(listing_id: int, payload: dict = Body(...)) -> Any:
         listing = store.enrich_listing(
             conn, fresh, dict(product), load_config().unresolved_freight_penalty
         )
-        return {"listing": jsonable(listing), "applied": applied}
+        # The page leads with a sentence answering "should I buy this yet". Editing a
+        # freight figure can change that answer, so the summary has to come back with
+        # the row or the headline goes stale while the row under it says otherwise.
+        return {
+            "listing": jsonable(listing),
+            "applied": applied,
+            "product": product_summary(conn, row["product_id"]),
+        }
+
+
+def product_summary(conn, product_id: int) -> dict[str, Any] | None:
+    """Just the headline parts of a product view: the verdict, the scale, the best price.
+
+    Excludes the listings, which the caller already has and which would double the
+    payload of every inline edit.
+    """
+    view = store.product_view(conn, product_id)
+    if view is None:
+        return None
+    return {
+        "id": view["id"],
+        "tone": view["tone"],
+        "verdict_line": view["verdict_line"],
+        "scale": view["scale"],
+        "best_delivered": view["best_delivered"],
+        "best_retailer": view["best_retailer"],
+        "best_resolved": view["best_resolved"],
+        "best_classification": view["best_classification"],
+    }
 
 
 def _listing_view(conn, listing_id: int) -> dict[str, Any] | None:
@@ -393,7 +395,13 @@ def api_clear_override(listing_id: int, payload: dict = Body(...)) -> Any:
             raise HTTPException(400, str(exc)) from exc
         provenance.sync_verification_from_provenance(conn, listing_id)
         listing = _listing_view(conn, listing_id)
-    return {"listing_id": listing_id, "cleared": cleared, "listing": jsonable(listing)}
+        summary = product_summary(conn, listing["product_id"]) if listing else None
+    return {
+        "listing_id": listing_id,
+        "cleared": cleared,
+        "listing": jsonable(listing),
+        "product": summary,
+    }
 
 
 @app.post("/api/retailers/{listing_id}/verification")

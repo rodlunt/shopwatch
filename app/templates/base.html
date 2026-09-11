@@ -10,14 +10,21 @@
 <body>
 <header class="top">
   <h1><a href="/">Shopwatch</a></h1>
-  <span class="model">{{ config.currency }} &middot; delivered-price board</span>
   <span class="spacer"></span>
   <nav>
-    <button id="btn-watch" title="Run every retailer adapter now">Run price watch</button>
-    <button id="btn-import">Import JSON</button>
-    <a class="btn" href="/api/export" download>Export JSON</a>
-    <a class="btn" href="/api/export.csv" download>CSV</a>
-    <button id="btn-backup" title="Snapshot the database on the server">Backup</button>
+    <button id="btn-watch" title="Check every retailer that has a scraper">Check prices</button>
+    <button id="btn-import">Paste in research</button>
+    <details class="menu" style="position:relative">
+      <summary class="btn" style="list-style:none">Data</summary>
+      <div style="position:absolute;right:0;top:calc(100% + 6px);background:var(--surface);
+                  border:1px solid var(--rule);border-radius:8px;padding:6px;min-width:190px;
+                  box-shadow:0 10px 30px rgba(0,0,0,.16);z-index:40;display:flex;
+                  flex-direction:column;gap:2px">
+        <a class="btn" style="border:0;text-align:left" href="/api/export" download>Download everything (JSON)</a>
+        <a class="btn" style="border:0;text-align:left" href="/api/export.csv" download>Download comparison (CSV)</a>
+        <button style="border:0;text-align:left" id="btn-backup">Back up the database</button>
+      </div>
+    </details>
   </nav>
 </header>
 
@@ -26,14 +33,14 @@
 </main>
 
 <dialog id="import-dialog">
-  <header>Import research JSON</header>
+  <header>Paste in research</header>
   <div class="body">
-    <p class="small muted">
-      Accepts a single finding, a list of findings, or a full Shopwatch snapshot.
-      Manually locked fields are preserved and reported back as <b>preserved_manual</b>.
+    <p class="small muted" style="margin:0 0 10px;max-width:70ch">
+      Takes one finding, a list of them, or a full Shopwatch export. Anything you set by
+      hand stays as you left it, and the result tells you what was kept.
     </p>
-    <textarea id="import-text" spellcheck="false" placeholder='[{"model": "HW-Q930H/XY", "retailer": "JB Hi-Fi", "price": 1699, "freight": null, "stock": "Available", "condition": "New", "warranty": "1 year", "source_url": "https://...", "checked_at": "2026-09-11T00:00:00Z", "verification": {"model": true, "price": true}}]'></textarea>
-    <pre id="import-result" class="small"></pre>
+    <textarea id="import-text" spellcheck="false" placeholder='[{"model": "HW-Q930H/XY", "retailer": "JB Hi-Fi", "price": 1699, "freight": null, "stock": "Available", "condition": "New", "source_url": "https://..."}]'></textarea>
+    <pre id="import-result" class="small" style="white-space:pre-wrap"></pre>
   </div>
   <footer>
     <button data-close>Cancel</button>

@@ -1,0 +1,178 @@
+{# The product card: answer, then scale, then contenders, then forensics on demand. #}
+
+{% macro ruler(product) %}
+  {% set s = product.scale %}
+  {% if s %}
+  <div class="ruler">
+    <div class="ruler-track">
+      {% for m in s.marks %}
+        <span class="ruler-mark" style="left: {{ m.pos }}%">
+          <i></i><span>{{ m.label }}<b>{{ m.value|money }}</b></span>
+        </span>
+      {% endfor %}
+      {% if s.best %}
+        <span class="ruler-best {{ product.tone }}" style="left: {{ s.best.pos }}%">
+          <b>{{ s.best.value|money }}</b>
+          <small>{{ product.best_retailer }}{% if not product.best_resolved %}, freight unknown{% endif %}</small>
+          <i></i>
+        </span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro listing_row(l, product) %}
+<div class="listing {{ 'is-act' if l.classification in ['HISTORICAL_LOW','EXCELLENT'] else ('is-close' if l.classification == 'TRIGGER_MET' else '') }}"
+     data-listing-row="{{ l.id }}">
+  <button class="listing-row" aria-expanded="false" data-toggle-detail="{{ l.id }}">
+    <span class="caret">&#9654;</span>
+    <span class="who">{{ l.retailer_name }}
+      <small>{{ l.condition|replace('_',' ')|capitalize }}{% if l.stock_status %} &middot; {{ l.stock_status }}{% endif %}</small>
+    </span>
+    <span class="price" data-cell="delivered">
+      {%- if l.delivered_price is none %}<span class="unresolved">no price</span>
+      {%- else %}{{ l.delivered_price|money }}
+        <small>{% if l.delivered_resolved %}delivered{% else %}before freight{% endif %}</small>
+      {%- endif %}
+    </span>
+    <span class="note">
+      {%- if l.pickup_status %}{{ l.pickup_status }}
+      {%- elif l.coupon_discount %}{{ l.coupon_discount|money }} code applied
+      {%- elif l.diff_from_low is not none and l.diff_from_low > 0 %}{{ l.diff_from_low|money }} above the low
+      {%- endif %}
+    </span>
+    <span class="tag-cell" data-cell="classification">{{ tag(l) }}</span>
+  </button>
+  <div class="detail" id="detail-{{ l.id }}" hidden>{{ detail(l, product) }}</div>
+</div>
+{% endmacro %}
+
+
+{% macro tag(l) %}
+  {%- if l.verification.model.status == 'FLAGGED' -%}
+    <span class="tag fault">model mismatch</span>
+  {%- elif l.classification in ['HISTORICAL_LOW','EXCELLENT'] -%}
+    <span class="tag act">{{ 'historical low' if l.classification == 'HISTORICAL_LOW' else 'excellent' }}</span>
+  {%- elif l.classification == 'TRIGGER_MET' -%}
+    <span class="tag close">at target</span>
+  {%- elif l.classification == 'UNRESOLVED' -%}
+    <span class="tag">unconfirmed</span>
+  {%- endif -%}
+{% endmacro %}
+
+
+{% macro editable(l, field, kind='text') %}
+  {% set value = l[field] %}
+  <span data-edit data-listing="{{ l.id }}" data-field="{{ field }}" data-kind="{{ kind }}"
+        data-raw="{{ value if value is not none else '' }}">{%-
+    if value is none %}<span class="unresolved">—</span>{% elif kind == 'money' %}{{ value|money }}{% else %}{{ value }}{% endif -%}
+  </span>
+{% endmacro %}
+
+{% macro prov(l, field) %}
+  {% set p = l.provenance[field] %}
+  {%- if p.manual_locked -%}
+    <button class="lock" data-clear-override data-listing="{{ l.id }}" data-field="{{ field }}"
+            title="You set this by hand. Automated runs will not change it. Click to hand it back.">set by hand</button>
+  {%- elif p.state == 'STALE' -%}<span class="src">stale</span>
+  {%- elif p.source -%}<span class="src">{{ p.source }}</span>
+  {%- endif -%}
+{% endmacro %}
+
+
+{% macro detail(l, product) %}
+  <div class="detail-grid">
+    <div class="field">
+      <div class="k">Advertised {{ prov(l, 'advertised_price') }}</div>
+      <div class="v num">{{ editable(l, 'advertised_price', 'money') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Freight {{ prov(l, 'freight') }}</div>
+      <div class="v num">{{ editable(l, 'freight', 'money') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Cashback {{ prov(l, 'cashback') }}</div>
+      <div class="v num">{{ editable(l, 'cashback', 'money') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Coupon {{ prov(l, 'coupon_discount') }}</div>
+      <div class="v num">{{ editable(l, 'coupon_discount', 'money') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Condition {{ prov(l, 'condition') }}</div>
+      <div class="v">{{ editable(l, 'condition', 'condition') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Stock {{ prov(l, 'stock_status') }}</div>
+      <div class="v">{{ editable(l, 'stock_status') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Pickup {{ prov(l, 'pickup_status') }}</div>
+      <div class="v">{{ editable(l, 'pickup_status') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Warranty {{ prov(l, 'warranty') }}</div>
+      <div class="v">{{ editable(l, 'warranty') }}</div>
+    </div>
+    <div class="field" style="grid-column: 1 / -1">
+      <div class="k">In the box {{ prov(l, 'included_components') }}</div>
+      <div class="v">{{ editable(l, 'included_components') }}</div>
+    </div>
+  </div>
+
+  <details class="more">
+    <summary>What has been checked</summary>
+    <div class="checks" style="padding:8px 0">
+      {% for aspect, v in l.verification.items() %}
+        <span class="c {{ 'ok' if v.status in ['VERIFIED','LIVE'] else ('bad' if v.status == 'FLAGGED' else ('hand' if v.status == 'MANUAL' else '')) }}"
+              title="{{ v.note or v.status }}">{{ aspect }}:
+          {{- ' confirmed' if v.status == 'VERIFIED' else (' scraped' if v.status == 'LIVE' else (' by hand' if v.status == 'MANUAL' else (' flagged' if v.status == 'FLAGGED' else ' unchecked'))) }}</span>
+      {% endfor %}
+    </div>
+  </details>
+
+  {% if l.seller_notes or l.price_guide or l.url %}
+  <details class="more">
+    <summary>Notes and source</summary>
+    <div class="small muted" style="padding:8px 0; max-width:70ch; line-height:1.55">
+      {% if l.price_guide %}<p style="margin:0 0 6px"><b>Price guide:</b> {{ l.price_guide }}</p>{% endif %}
+      {% if l.seller_notes %}<p style="margin:0 0 6px">{{ l.seller_notes }}</p>{% endif %}
+      {% if l.url %}<a href="{{ l.url }}" target="_blank" rel="noopener">Open the retailer page</a>{% endif %}
+      <p style="margin:6px 0 0">Last checked {{ l.last_checked_at|dt }}.</p>
+    </div>
+  </details>
+  {% endif %}
+{% endmacro %}
+
+
+{% macro card(product, linked=true) %}
+<section class="product" id="product-{{ product.id }}">
+  <div class="product-head">
+    <div class="row">
+      <h2>{% if linked %}<a href="/products/{{ product.id }}">{{ product.name }}</a>{% else %}{{ product.name }}{% endif %}</h2>
+      <span class="model">{{ product.model }}</span>
+      <span class="spacer"></span>
+      {% if caller is defined %}{{ caller() }}{% endif %}
+    </div>
+  </div>
+
+  <p class="verdict {{ product.tone }}">{{ product.verdict_line }}</p>
+
+  {{ ruler(product) }}
+
+  {% if product.listings %}
+  <div class="contenders">
+    {% for l in product.contenders %}{{ listing_row(l, product) }}{% endfor %}
+    {% if product.also_ran %}
+      <button class="also-ran" data-toggle-alsoran="{{ product.id }}"
+              aria-expanded="false">Show {{ product.also_ran|length }} more, all above target</button>
+      <div id="alsoran-{{ product.id }}" hidden>
+        {% for l in product.also_ran %}{{ listing_row(l, product) }}{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endmacro %}
