@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # control/deploy-gate is TEMPORARY: it exists to prove the deploy gate
+    # refuses a red run. Removed once the control has been observed.
+    branches: [main, control/deploy-gate]
   pull_request:
     branches: [main]
 
