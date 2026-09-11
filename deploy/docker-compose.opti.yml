@@ -13,12 +13,18 @@ services:
       context: ./repo
     container_name: shopwatch
     restart: unless-stopped
+    # Non-secret tuning lives here, in git, where it can be reviewed. Only secrets
+    # go in the env file.
     environment:
       SHOPWATCH_DB: /data/shopwatch.db
       SHOPWATCH_PORT: "8477"
-    # .env is opti-only and never in the repo. It carries SHOPWATCH_NTFY_URL and
-    # SHOPWATCH_NTFY_TOKEN when alerting is switched on; with them empty the app
-    # still runs and alerts go to the container log only.
+      SHOPWATCH_UNRESOLVED_FREIGHT_PENALTY: "60"
+      SHOPWATCH_STALE_AFTER_DAYS: "7"
+      SHOPWATCH_REQUEST_DELAY: "3"
+      SHOPWATCH_ALERTS_ENABLED: "true"
+    # Rendered from the SOPS vault at smart-home:opti-stacks/shopwatch/secrets.sops.env
+    # by sops-render.sh. Carries the ntfy topic URL and publish token and nothing else.
+    # Never written by hand: a hand-edited file is one nothing can rotate.
     env_file:
       - .env
     volumes:
