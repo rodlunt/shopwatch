@@ -51,19 +51,17 @@ can only make it worse.
 |---|---|
 | Live | https://shop.home.lunt.au (LAN only, `basic_auth`) |
 | Code | GitHub `rodlunt/shopwatch` (private) |
-| Deploy | push to the `opti` remote; see **Deployed on opti** |
+| Deploy | merge to `main`; a green CI run deploys, see **Deployed on opti** |
 | Secrets | `SECURITY.md` names every lane |
 | Tests | `.venv/bin/python -m pytest` and `.venv/bin/python -m ruff check .` |
 
-**Two remotes, on purpose.** `origin` is GitHub and holds the history, issues and CI.
-`opti` is a bare repo on the server whose `post-receive` hook rebuilds the container.
-Pushing to `opti` deploys; pushing to `origin` does not.
+**One remote.** `origin` is GitHub and holds the history, issues, CI and the deploy.
+The bare repo on opti that used to accept push-to-deploy is retired: it still exists, but
+its `pre-receive` hook rejects pushes and points you back at `origin`.
 
-⚠ **CI does not gate the deploy.** The house standard is a `workflow_run` gate so a push
-that fails lint or tests can never reach production. That is not possible here while opti
-deploys from its own bare repo rather than from GitHub: CI is advisory, and a broken push
-to `opti` will deploy. Closing that means making opti pull from GitHub instead, which is
-a deliberate change nobody has made yet.
+**CI gates the deploy.** The Deploy workflow runs on opti's self-hosted runner and only
+fires on a CI run that passed, against the exact commit CI verified. A commit failing
+test, lint or audit has no path to production.
 
 ## Architecture
 
@@ -389,7 +387,9 @@ Live at **https://shop.home.lunt.au** (LAN only, trusted `*.home.lunt.au` wildca
 
 | Thing | Where |
 |---|---|
-| Bare repo (push target) | `root@100.115.75.8:/root/shopwatch.git` |
+| Self-hosted runner | `actions.runner.rodlunt-shopwatch.opti-shopwatch.service` |
+| Deploy script | `/usr/local/bin/shopwatch-deploy` (root, from `deploy/`) |
+| Bare repo (retired) | `root@100.115.75.8:/root/shopwatch.git`, rejects pushes |
 | Stack (Dockge-managed) | `/srv/prod/shopwatch` |
 | Working clone | `/srv/prod/shopwatch/repo` |
 | Database | docker volume `shopwatch_shopwatch-data` at `/data/shopwatch.db` |
@@ -401,18 +401,28 @@ The container publishes **no host port**. Caddy reaches it by container name on 
 network, which is what supplies the certificate and keeps it off the LAN without a
 hostname.
 
-### Push to deploy
+### How a deploy happens
 
 ```bash
-git remote add opti root@100.115.75.8:/root/shopwatch.git   # once
-B=$(git branch --show-current) && git push origin "$B"      # GitHub, if one is added
-B=$(git branch --show-current) && git push opti "$B"        # deploys
+B=$(git branch --show-current) && git push origin "$B"   # then open a PR
 ```
 
-The `post-receive` hook pulls the clone, copies `deploy/docker-compose.opti.yml` into
-place, and rebuilds **only** when `app/`, `Dockerfile`, `requirements.txt` or the compose
-file changed — a README-only push updates the clone and leaves the container running.
+Merging to `main` runs CI. If test, lint and audit all pass, the Deploy workflow starts on
+opti's self-hosted runner, checks out the exact commit CI verified, and hands that SHA to
+`/usr/local/bin/shopwatch-deploy` over `sudo`.
+
+The script fetches that commit **by id** and checks it out detached, rather than pulling a
+branch. A pull takes whatever the branch points at when it runs, which after a second
+merge is not the commit CI verified (hardening rule 14). It then copies
+`deploy/docker-compose.opti.yml` into place and rebuilds **only** when `app/`,
+`Dockerfile`, `requirements.txt` or the compose file changed, so a README-only merge moves
+the clone and leaves the container running. After a rebuild it waits for the container to
+report `healthy` and fails the job if it does not, because `docker compose up` returning 0
+only means the container started.
+
 Migrations are forward-only and run on boot, so a deploy never wipes the database.
+
+There is no manual deploy path by design. To ship, merge to `main`.
 
 ### Alerting is off until you turn it on
 

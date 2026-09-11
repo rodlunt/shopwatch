@@ -1,0 +1,23 @@
+#!/bin/sh
+# Installed at /root/shopwatch.git/hooks/pre-receive on opti.
+#
+# This bare repo used to be the deploy path: a push here rebuilt the container
+# with nothing checking whether the commit had passed CI. Deploys now run from
+# the Deploy workflow, which only fires on a green CI run.
+#
+# A push here would now do nothing at all, so reject it at push time and say
+# why. A silently accepted push that deploys nothing is the worse failure: it
+# looks exactly like a deploy that worked.
+cat >&2 <<'MSG'
+
+  shopwatch: this deploy path is retired.
+
+  Pushing here no longer deploys anything. Deploys run from GitHub Actions
+  once CI is green:
+
+      B=$(git branch --show-current) && git push origin "$B"
+
+  Merging to main deploys after test, lint and audit all pass.
+
+MSG
+exit 1
