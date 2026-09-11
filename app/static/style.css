@@ -461,6 +461,8 @@ button:focus-visible, .btn:focus-visible, a:focus-visible {
 }
 button.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 550; }
 button.primary:hover { opacity: .88; }
+button.danger { border-color: var(--fault); color: var(--fault); }
+button.danger:hover { background: var(--fault-bg); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
 input, select, textarea {
