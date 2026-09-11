@@ -165,9 +165,17 @@ class ImapSource:
                     continue
                 for uid in data[0].split():
                     status, fetched = conn.fetch(uid, "(RFC822)")
-                    if status != "OK" or not fetched or not fetched[0]:
+                    if status != "OK" or not fetched:
                         continue
-                    yield email_mod.message_from_bytes(fetched[0][1])
+                    # A FETCH response interleaves (header, body) tuples with bare
+                    # bytes and ints for flags and closing parens. Only the tuples
+                    # carry a message; indexing fetched[0][1] blindly crashes on the
+                    # rest, which is what happened the first time this ran for real.
+                    for item in fetched:
+                        if (isinstance(item, tuple) and len(item) >= 2
+                                and isinstance(item[1], bytes)):
+                            yield email_mod.message_from_bytes(item[1])
+                            break
         finally:
             try:
                 conn.logout()
