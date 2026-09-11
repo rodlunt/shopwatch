@@ -27,7 +27,8 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event.workflow_run.head_branch == 'main' ||
+       github.event.workflow_run.head_branch == 'control/deploy-gate')
     runs-on: [self-hosted, opti-shopwatch]
     steps:
       # The commit CI actually verified, not whatever main points at now.
