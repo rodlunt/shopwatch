@@ -139,6 +139,14 @@ main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
  *     say where it is looking is a lie told with a straight face.
  */
 
+/* Available to assistive tech, absent from the page. Not display:none, which would
+ * remove it from the accessibility tree as well. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  border: 0;
+}
+
 .axis { padding: 2px 24px 14px; }
 
 .axis-head {
