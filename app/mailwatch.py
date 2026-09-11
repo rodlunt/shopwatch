@@ -114,6 +114,37 @@ def body_text(message) -> str:
     return re.sub(r"[ \t ]+", " ", "\n".join(chunks)).strip()
 
 
+#: Retailer names as they appear in a From display name. Used only to notice mail that
+#: is obviously from a watched retailer but arrives from a domain the allowlist does not
+#: know - the shape a campaign sent via a third-party ESP takes.
+DISPLAY_NAMES = {
+    "jb hi-fi": "JB Hi-Fi",
+    "jbhifi": "JB Hi-Fi",
+    "the good guys": "The Good Guys",
+    "harvey norman": "Harvey Norman",
+    "appliance central": "Appliance Central",
+    "bing lee": "Bing Lee",
+    "crowdshop": "Crowdshop",
+}
+
+
+def unmatched_retailer(sender: str) -> tuple[str, str] | None:
+    """A sender whose NAME is a watched retailer but whose domain is not on the list.
+
+    An allowlist that silently drops mail is a trap: sign up to a new list, the deals
+    arrive from some ESP domain, and the watcher reports zero forever while looking
+    perfectly healthy. This turns that into a line of output.
+    """
+    name, addr = email.utils.parseaddr(sender)
+    if not addr or "@" not in addr:
+        return None
+    lowered = (name or "").lower()
+    for needle, retailer in DISPLAY_NAMES.items():
+        if needle in lowered:
+            return (retailer, addr.split("@", 1)[1].lower())
+    return None
+
+
 def retailer_for(sender: str) -> str | None:
     addr = email.utils.parseaddr(sender)[1].lower()
     if not addr or "@" not in addr:
@@ -327,14 +358,23 @@ def mbox_messages(paths: list[Path]) -> Iterator[Any]:
 
 
 def candidates(messages: Iterator[Any], since: str | None = None,
-               limit: int | None = None) -> list[Candidate]:
-    """Retailer messages worth a model call, newest first, de-duplicated by Message-ID."""
+               limit: int | None = None,
+               unmatched: dict[str, set[str]] | None = None) -> list[Candidate]:
+    """Retailer messages worth a model call, newest first, de-duplicated by Message-ID.
+
+    `unmatched` collects senders that name a watched retailer but arrive from a domain
+    the allowlist does not cover, so a missed subscription is visible rather than silent.
+    """
     seen: set[str] = set()
     found: list[Candidate] = []
+    unmatched = {} if unmatched is None else unmatched
     for message in messages:
         sender = str(message.get("From", ""))
         retailer = retailer_for(sender)
         if not retailer:
+            miss = unmatched_retailer(sender)
+            if miss:
+                unmatched.setdefault(miss[0], set()).add(miss[1])
             continue
         mid = str(message.get("Message-ID") or "").strip()
         if not mid or mid in seen:
@@ -388,6 +428,7 @@ class RunSummary:
     rendered: int = 0
     render_helped: int = 0
     render_errors: list[str] = field(default_factory=list)
+    unmatched: dict[str, list[str]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -398,6 +439,7 @@ class RunSummary:
             "folders": self.folders,
             "rendered": self.rendered, "render_helped": self.render_helped,
             "render_errors": self.render_errors,
+            "unmatched_senders": self.unmatched,
             "leads": [
                 {"retailer": o["retailer_name"], "summary": o["summary"],
                  "confidence": o["confidence"],
@@ -489,7 +531,9 @@ def run(paths: list[Path] | None = None, since: str | None = None,
         except Exception as exc:
             summary.errors.append(f"could not reach the board: {type(exc).__name__}: {exc}")
             return summary
-        for cand in candidates(messages, since=since, limit=limit):
+        unmatched: dict[str, set[str]] = {}
+        for cand in candidates(messages, since=since, limit=limit,
+                               unmatched=unmatched):
             summary.scanned += 1
             if cand.message_id in known:
                 summary.already_seen += 1
@@ -552,6 +596,7 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             if recorded:
                 summary.recorded.append(recorded)
 
+        summary.unmatched = {k: sorted(v) for k, v in unmatched.items()}
         summary.folders = dict(getattr(source, "folder_totals", {}) or {})
         if not summary.folders and source is None:
             summary.folders = {"thunderbird": summary.scanned}
@@ -643,6 +688,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n  {lead['retailer']} [{lead['confidence']}] {lead['summary']}")
             for rationale in lead["matches"]:
                 print(f"    -> {rationale}")
+        for retailer, domains in d["unmatched_senders"].items():
+            print(f"  NOTE: mail from {retailer} arrived via {', '.join(domains)}, which is "
+                  f"not on the allowlist and was skipped. Add it to RETAILERS in "
+                  f"app/mailwatch.py to start watching it.", file=sys.stderr)
         if d["rendered"]:
             print(f"  rendered {d['rendered']} email(s); the artwork added something in "
                   f"{d['render_helped']}")
