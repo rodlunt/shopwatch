@@ -51,6 +51,24 @@ RETAILERS = {
 #: details, so they are skipped even though the domain matches.
 SKIP_SUBDOMAINS = ("order.", "orders.", "receipt.", "noreply-account.")
 
+#: What to actually put in an IMAP FROM search.
+#:
+#: NOT the domain. iCloud will not match a bare domain that sits directly after the "@":
+#:   FROM "harveynorman.com.au"              -> 0 hits
+#:   FROM "harveynorman"                     -> 2 hits
+#:   FROM "do_not_reply@harveynorman.com.au" -> 2 hits
+#: JB Hi-Fi only ever worked by accident, because they send from email.jbhifi.com.au
+#: where the domain follows a dot. Searching by domain silently returned zero for every
+#: retailer using their bare domain, which is most of them.
+#:
+#: The search is deliberately broader than the allowlist. retailer_for() still does the
+#: precise domain check on whatever comes back, so widening this cannot widen what gets
+#: read - it only stops things being missed.
+SEARCH_TOKENS = (
+    "jbhifi", "thegoodguys", "harveynorman",
+    "appliancecentral", "binglee", "crowdshop",
+)
+
 
 def default_mailbox_paths() -> list[Path]:
     """Every Thunderbird mail file on this machine, newest profile first.
@@ -240,11 +258,11 @@ class ImapSource:
                 log.debug("%s holds %d messages", folder, self.folder_totals[folder])
 
                 uids: list[bytes] = []
-                for domain in sorted(RETAILERS):
-                    criteria = f'(FROM "{domain}"{date_clause})'
+                for token in SEARCH_TOKENS:
+                    criteria = f'(FROM "{token}"{date_clause})'
                     status, data = conn.uid("SEARCH", None, criteria)
                     if status != "OK":
-                        log.warning("%s: search for %s returned %s", folder, domain, status)
+                        log.warning("%s: search for %s returned %s", folder, token, status)
                         continue
                     if not data or data[0] is None:
                         continue  # a real zero, the control proved the folder answers
