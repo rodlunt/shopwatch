@@ -125,19 +125,30 @@ class ImapSource:
     """Read the account directly instead of Thunderbird's copy.
 
     Reuses the credential the /check-seek runner already has on opti, so nothing new
-    is stored anywhere. Two things learned from that pipeline and repeated here:
-    Trash is read alongside INBOX because Rodney swipe-deletes mail he has skimmed,
-    and a malformed IMAP search returns an empty result set rather than an error, so
-    a None result is treated as a failure and not as "no messages".
+    is stored anywhere.
+
+    Reads INBOX only. /check-seek also reads Trash, because Seek alerts get swiped
+    away before it runs; deal mail is different - Rodney keeps what he wants watched
+    in the inbox, so trawling 4,800 deleted messages every run is work nobody asked
+    for and a wider reach into the mailbox than the job needs. Set ICLOUD_FOLDERS to
+    "INBOX,Trash" for a one-off backfill of things already deleted.
+
+    One trap kept from that pipeline: a malformed IMAP search returns an empty result
+    set rather than an error, so an empty result is only believed after a control
+    search in the same folder has returned something.
     """
 
     HOST = "imap.mail.me.com"
 
-    def __init__(self, email_addr: str, password: str, folders: list[str] | None = None):
+    def __init__(self, email_addr: str, password: str, folders: list[str] | None = None,
+                 cleanup: bool = False):
         self.email_addr = email_addr
         self.password = password
+        self.cleanup_enabled = cleanup
+        #: message-id -> UID, for the INBOX only. Cleanup never touches other folders.
+        self.inbox_uids: dict[str, bytes] = {}
         self.folders = folders or [
-            f.strip() for f in os.environ.get("ICLOUD_FOLDERS", "INBOX,Trash").split(",")
+            f.strip() for f in os.environ.get("ICLOUD_FOLDERS", "INBOX").split(",")
             if f.strip()
         ]
 
@@ -146,6 +157,7 @@ class ImapSource:
         import imaplib
 
         conn = imaplib.IMAP4_SSL(self.HOST, 993)
+        self._conn = conn
         try:
             conn.login(self.email_addr, self.password)
             for folder in self.folders:
@@ -169,7 +181,7 @@ class ImapSource:
                 # on every empty folder; treating it as zero would hide a broken query.
                 # So fire a control first - a search that MUST return something - and
                 # only then read a None as a genuine zero.
-                status, control = conn.search(None, "ALL")
+                status, control = conn.uid("SEARCH", None, "ALL")
                 if status != "OK" or not control or control[0] is None:
                     log.warning("%s: control search returned nothing, folder unusable", folder)
                     continue
@@ -178,7 +190,7 @@ class ImapSource:
                 uids: list[bytes] = []
                 for domain in sorted(RETAILERS):
                     criteria = f'(FROM "{domain}"{date_clause})'
-                    status, data = conn.search(None, criteria)
+                    status, data = conn.uid("SEARCH", None, criteria)
                     if status != "OK":
                         log.warning("%s: search for %s returned %s", folder, domain, status)
                         continue
@@ -187,7 +199,7 @@ class ImapSource:
                     uids.extend(data[0].split())
 
                 for uid in dict.fromkeys(uids):
-                    status, fetched = conn.fetch(uid, "(RFC822)")
+                    status, fetched = conn.uid("FETCH", uid, "(RFC822)")
                     if status != "OK" or not fetched:
                         continue
                     # A FETCH response interleaves (header, body) tuples with bare
@@ -197,21 +209,78 @@ class ImapSource:
                     for item in fetched:
                         if (isinstance(item, tuple) and len(item) >= 2
                                 and isinstance(item[1], bytes)):
-                            yield email_mod.message_from_bytes(item[1])
+                            message = email_mod.message_from_bytes(item[1])
+                            if folder.upper() == "INBOX":
+                                mid = str(message.get("Message-ID") or "").strip()
+                                if mid:
+                                    self.inbox_uids[mid] = uid
+                            yield message
                             break
         finally:
+            # Left open deliberately: cleanup() runs after the caller has decided which
+            # messages were actually processed, and needs the same session.
+            pass
+
+    def cleanup(self, message_ids: set[str]) -> dict[str, Any]:
+        """Move processed INBOX messages to Trash, the same as swiping them away.
+
+        Copied wholesale from extract-seek-alerts.py's discipline, because the failure
+        modes are identical:
+
+        * only messages that were actually processed move - anything that errored stays
+          in the inbox, where it is the alarm that something has broken;
+        * INBOX only, never Trash or any other folder;
+        * **never expunge**. iCloud purges Trash after 30 days on its own, and an
+          interrupted run that has already moved mail must still be recoverable.
+        """
+        report: dict[str, Any] = {"moved": 0, "failed": [], "skipped": 0}
+        if not self.cleanup_enabled:
+            return report
+        conn = getattr(self, "_conn", None)
+        if conn is None:
+            report["failed"].append("no open connection")
+            return report
+
+        targets = [(mid, uid) for mid, uid in self.inbox_uids.items() if mid in message_ids]
+        report["skipped"] = len(self.inbox_uids) - len(targets)
+        if not targets:
+            return report
+        try:
+            status, _ = conn.select("INBOX")  # writable this time
+            if status != "OK":
+                report["failed"].append("could not open INBOX for writing")
+                return report
+            for mid, uid in targets:
+                status, _ = conn.uid("MOVE", uid, "Trash")
+                if status != "OK":
+                    # Older servers have no MOVE; copy then flag, still no expunge.
+                    status, _ = conn.uid("COPY", uid, "Trash")
+                    if status == "OK":
+                        conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+                    else:
+                        report["failed"].append(mid[:40])
+                        continue
+                report["moved"] += 1
+        except Exception as exc:
+            report["failed"].append(f"{type(exc).__name__}: {exc}")
+        return report
+
+    def close(self) -> None:
+        conn = getattr(self, "_conn", None)
+        if conn is not None:
             try:
                 conn.logout()
             except Exception:
                 pass
+            self._conn = None
 
 
-def imap_from_environment() -> ImapSource | None:
+def imap_from_environment(cleanup: bool = False) -> ImapSource | None:
     """An ImapSource when the credential is present, else None. Never prompts."""
     addr = os.environ.get("ICLOUD_EMAIL", "").strip()
     password = os.environ.get("ICLOUD_APP_PASSWORD", "").strip()
     if addr and password:
-        return ImapSource(addr, password)
+        return ImapSource(addr, password, cleanup=cleanup)
     return None
 
 
@@ -273,12 +342,14 @@ class RunSummary:
     not_offers: int = 0
     errors: list[str] = field(default_factory=list)
     recorded: list[dict[str, Any]] = field(default_factory=list)
+    cleanup: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "scanned": self.scanned, "already_seen": self.already_seen,
             "extracted": self.extracted, "not_offers": self.not_offers,
             "recorded": len(self.recorded), "errors": self.errors,
+            "cleanup": self.cleanup,
             "leads": [
                 {"retailer": o["retailer_name"], "summary": o["summary"],
                  "confidence": o["confidence"],
@@ -352,6 +423,7 @@ def run(paths: list[Path] | None = None, since: str | None = None,
         use_cli: bool = False, claude_bin: str = "claude") -> RunSummary:
     """One pass. `source` is anything yielding email.Message; defaults to the local mbox."""
     summary = RunSummary()
+    processed: set[str] = set()
     if source is None:
         paths = paths or default_mailbox_paths()
         if not paths:
@@ -372,6 +444,9 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             summary.scanned += 1
             if cand.message_id in known:
                 summary.already_seen += 1
+                # Recorded on an earlier run; it has served its purpose and can go,
+                # otherwise the inbox never drains.
+                processed.add(cand.message_id)
                 continue
             if dry_run:
                 continue
@@ -387,9 +462,13 @@ def run(paths: list[Path] | None = None, since: str | None = None,
                     client=client, model=model,
                 )
             if result.error:
+                # Deliberately NOT marked processed: it stays in the inbox, which is
+                # how a broken extractor announces itself instead of quietly binning
+                # the evidence.
                 summary.errors.append(f"{cand.subject[:50]}: {result.error}")
                 continue
             summary.extracted += 1
+            processed.add(cand.message_id)
             parsed = result.offer
             if parsed is None or not parsed.is_offer:
                 summary.not_offers += 1
@@ -407,6 +486,9 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             })
             if recorded:
                 summary.recorded.append(recorded)
+
+        if source is not None and getattr(source, "cleanup_enabled", False) and not dry_run:
+            summary.cleanup = source.cleanup(processed)
 
         conn.execute(
             "INSERT INTO mail_cursor (source, last_run_at, messages_seen)"
@@ -432,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cli", action="store_true",
                         help="extract with headless Claude Code instead of the API; needs no key")
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
+    parser.add_argument("--cleanup", action="store_true",
+                        default=os.environ.get("SHOPWATCH_MAIL_CLEANUP") == "1",
+                        help="move processed INBOX messages to Trash; never expunges")
     parser.add_argument("--local", action="store_true",
                         help="write to the local database instead of posting to the board")
     parser.add_argument("--json", action="store_true")
@@ -455,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
 
     source = None
     if args.imap:
-        source = imap_from_environment()
+        source = imap_from_environment(cleanup=args.cleanup)
         if source is None:
             print("--imap needs ICLOUD_EMAIL and ICLOUD_APP_PASSWORD in the environment.",
                   file=sys.stderr)
@@ -477,9 +562,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n  {lead['retailer']} [{lead['confidence']}] {lead['summary']}")
             for rationale in lead["matches"]:
                 print(f"    -> {rationale}")
+        if d["cleanup"]:
+            c = d["cleanup"]
+            print(f"\n  moved {c['moved']} processed message(s) to Trash"
+                  f"{', left ' + str(len(c['failed'])) + ' behind' if c['failed'] else ''}")
         for err in d["errors"][:5]:
             print(f"  ERROR {err}", file=sys.stderr)
 
+    if source is not None:
+        source.close()
     return 1 if summary.errors and not summary.recorded else 0
 
 
