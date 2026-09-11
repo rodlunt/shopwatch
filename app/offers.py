@@ -277,9 +277,10 @@ def match_products(conn: sqlite3.Connection, offer: dict[str, Any]) -> list[dict
             "basis_delivered": basis,
             "projected_delivered": projected,
             "crosses_trigger": crosses and not provisional,
+            # Just the arithmetic. The summary is shown alongside it, and repeating
+            # it here produced a run-on sentence saying the same thing twice.
             "rationale": (
-                f"{offer.get('summary') or offer.get('applies_to')} "
-                f"would take {retailer_name} from ${basis:,.0f} to ${projected:,.0f}"
+                f"Would take {retailer_name} from ${basis:,.0f} to ${projected:,.0f}"
                 + (", before freight, which is still unknown" if provisional else "")
                 + (f", under your ${trigger:,.0f} trigger" if crosses and not provisional else "")
             ),
