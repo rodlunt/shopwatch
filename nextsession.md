@@ -1,7 +1,8 @@
 # Next session brief: 11/09/2026 (session end)
 
-**Repo:** shopwatch, branch `main` at `8d0eb15` plus the session-end housekeeping commits
-on top (protected: PR required, three checks, strict, admins enforced)
+**Repo:** shopwatch, `main` (protected: PR required, three checks, strict, admins
+enforced). Deliberately no SHA here: this file has been invalidated by its own merge
+once already.
 
 > Third brief today. The first two were wrong within hours, so treat this one as
 > perishable too: every claim below was read from the live system at session end, but
@@ -28,9 +29,8 @@ nothing about what actually ran.
 
 ## Verification at session end (VERIFIED unless noted)
 
-- **Tests:** 186 passed, `ruff check .` clean
-- **main == opti:** verified equal and container healthy at every deploy this session;
-  `8d0eb15` was the last code change, the commits after it are this handoff
+- **Tests:** 199 passed, `ruff check .` clean
+- **main == opti:** verified equal and the container healthy after every deploy
 - **Installed deploy script == repo copy:** both `921772f52b32`
 - **Working tree:** clean. Branches: `main` only, locally and on origin
 - **Dependabot:** 0 open alerts
@@ -72,6 +72,29 @@ the wheel would have closed it looking resolved while touch users hit the identi
 are regression guards; the PRs say which is which. #27 remains **LIKELY** rather than
 VERIFIED: it was read off the configured intervals, not reproduced.
 
+## Done after the session-end brief above was written
+
+Four more PRs (#42 to #45), all from probing the two adapters the README had recorded as
+"untested":
+
+- **#42** a retailer stock number is not a model mismatch. JB Hi-Fi publishes `893039`
+  and The Good Guys `50098655` on the right product pages, so both correct listings were
+  about to be tagged as faults by anything that scraped them. Also fixed `model_matches`,
+  which promised a punctuation-insensitive comparison while keeping `/`.
+- **#43** the scraping table was measured before two adapters had ever run. Both work:
+  each returns a price, stock and condition with no warnings. Appliance Central does not
+  403, it fetches and parses nothing, which is a different problem.
+- **#44** **no timer, and the reason is egress monitoring, not scraping.** Read that
+  section before adding one. A scheduled run pushes to `security-events` every pass and
+  the alerts cannot be suppressed without weakening a deliberately narrow allowlist.
+- **#45** em and en dashes purged from prose and UI copy. One stays in `crowdshop.py`'s
+  price-range regex, annotated: it matches a dash in the retailer's HTML, and deleting it
+  silently stops range parsing.
+
+**Two of four watchable listings return a price**, not three of five adapters. Crowdshop
+has an adapter and no URL so the watcher cannot reach it; Appliances Online has the
+opposite problem.
+
 ## The buying decision
 
 Samsung HW-Q930H/XY. Trigger $900 delivered, excellent $850.
@@ -96,6 +119,15 @@ meaning read once in a browser and never cross-checked.
 
 ## Suggested starting point
 
-Nothing is broken. If you want to build, **#26** is the highest-value issue and the
-smallest. If you want to buy, the answer is still "not yet" and nothing on the board can
-change that without a retailer moving.
+**Nothing, and that is the honest answer.** Zero open issues, zero open PRs, clean tree,
+everything deployed and verified. The backlog was cleared the same night it was filed.
+
+The one candidate is an **Appliances Online adapter**: they are the only retailer with a
+URL and no adapter. I argued against building it and still would. They are $1,169, which
+is $269 over the trigger, so they are not a contender. With no timer an adapter only runs
+when invoked by hand, and at that point opening the page is just as quick. Their offers
+already arrive through the mail watcher, which is the channel that would actually catch a
+sale; the adapter would only add the price you would look up afterwards anyway.
+
+If the soundbar still matters, the board is waiting on a retailer to move, not on
+software. Better use of a session: a different project.
