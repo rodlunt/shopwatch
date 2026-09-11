@@ -55,7 +55,7 @@ function renderValue(span, value) {
   const kind = span.dataset.kind;
   span.dataset.raw = (value === null || value === undefined) ? '' : value;
   if (value === null || value === undefined || value === '') {
-    span.innerHTML = '<span class="unresolved">—</span>';
+    span.replaceChildren(el('span', '\u2014', 'unresolved'));
   } else if (kind === 'money') {
     span.textContent = money(value);
   } else {
@@ -69,13 +69,17 @@ function applyListing(listing) {
 
   const price = row.querySelector('[data-cell="delivered"]');
   if (price) {
-    price.innerHTML = listing.delivered_price === null
-      ? '<span class="unresolved">no price</span>'
-      : `${money(listing.delivered_price)}<small>${listing.delivered_resolved ? 'delivered' : 'before freight'}</small>`;
+    price.replaceChildren(...(listing.delivered_price === null
+      ? [el('span', 'no price', 'unresolved')]
+      : [document.createTextNode(money(listing.delivered_price)),
+         el('small', listing.delivered_resolved ? 'delivered' : 'before freight')]));
   }
 
   const tag = row.querySelector('[data-cell="classification"]');
-  if (tag) tag.innerHTML = tagFor(listing);
+  if (tag) {
+    const node = tagFor(listing);
+    if (node) tag.replaceChildren(node); else tag.replaceChildren();
+  }
 
   row.classList.toggle('is-act', ['HISTORICAL_LOW', 'EXCELLENT'].includes(listing.classification));
   row.classList.toggle('is-close', listing.classification === 'TRIGGER_MET');
@@ -87,7 +91,8 @@ function applyListing(listing) {
     const label = span.closest('.field')?.querySelector('.k');
     if (label) {
       label.querySelectorAll('.lock, .src').forEach(n => n.remove());
-      label.insertAdjacentHTML('beforeend', provenanceMark(listing.id, field, prov));
+      const mark = provenanceMark(listing.id, field, prov);
+      if (mark) label.appendChild(mark);
     }
   }
 }
@@ -123,28 +128,47 @@ function applyProductSummary(product) {
   }
   best.className = `ruler-best ${product.tone}`;
   best.style.left = `${product.scale.best.pos}%`;
-  best.innerHTML = `<b>${money(product.scale.best.value)}</b>` +
-    `<small>${product.best_retailer || ''}${product.best_resolved ? '' : ', freight unknown'}</small><i></i>`;
+  /* Built as nodes, not markup. A retailer name arrives through POST /api/import,
+     which is the documented way to paste in research produced elsewhere, so it is
+     untrusted text by design and must never be interpolated into innerHTML. */
+  best.replaceChildren(
+    el('b', money(product.scale.best.value)),
+    el('small', `${product.best_retailer || ''}${product.best_resolved ? '' : ', freight unknown'}`),
+    document.createElement('i')
+  );
+}
+
+/* Small helper: element with text, never markup. */
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
 }
 
 function tagFor(listing) {
-  if (listing.verification?.model?.status === 'FLAGGED') return '<span class="tag fault">model mismatch</span>';
-  if (['HISTORICAL_LOW', 'EXCELLENT'].includes(listing.classification)) {
-    return `<span class="tag act">${listing.classification === 'HISTORICAL_LOW' ? 'historical low' : 'excellent'}</span>`;
-  }
-  if (listing.classification === 'TRIGGER_MET') return '<span class="tag close">at target</span>';
-  if (listing.classification === 'UNRESOLVED') return '<span class="tag">unconfirmed</span>';
-  return '';
+  if (listing.verification?.model?.status === 'FLAGGED') return el('span', 'model mismatch', 'tag fault');
+  if (listing.classification === 'HISTORICAL_LOW') return el('span', 'historical low', 'tag act');
+  if (listing.classification === 'EXCELLENT') return el('span', 'excellent', 'tag act');
+  if (listing.classification === 'TRIGGER_MET') return el('span', 'at target', 'tag close');
+  if (listing.classification === 'UNRESOLVED') return el('span', 'unconfirmed', 'tag');
+  return null;
 }
 
+/* Returns a node or null. `prov.source` is attacker-controllable through the import
+   endpoint, so it is set as text and never as markup. */
 function provenanceMark(listingId, field, prov) {
   if (prov.manual_locked) {
-    return ` <button class="lock" data-clear-override data-listing="${listingId}" data-field="${field}"` +
-           ` title="You set this by hand. Automated runs will not change it. Click to hand it back.">set by hand</button>`;
+    const button = el('button', 'set by hand', 'lock');
+    button.dataset.clearOverride = '';
+    button.dataset.listing = listingId;
+    button.dataset.field = field;
+    button.title = 'You set this by hand. Automated runs will not change it. Click to hand it back.';
+    return button;
   }
-  if (prov.state === 'STALE') return ' <span class="src">stale</span>';
-  if (prov.source) return ` <span class="src">${prov.source}</span>`;
-  return '';
+  if (prov.state === 'STALE') return el('span', 'stale', 'src');
+  if (prov.source) return el('span', prov.source, 'src');
+  return null;
 }
 
 function startEdit(span) {
