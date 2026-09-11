@@ -9,6 +9,7 @@ dependencies = [
     "jinja2>=3.1",
     "requests>=2.32",
     "beautifulsoup4>=4.12",
+    "anthropic>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -28,3 +29,7 @@ ignore = ["B008"]  # FastAPI's Depends/Body defaults are the documented idiom
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
+# The field descriptions in offers.py are prompt text, not code: the model reads them
+# verbatim, and wrapping them to 100 columns makes them harder to edit and review for
+# the thing that actually matters, which is whether they say the right thing.
+"app/offers.py" = ["E501"]

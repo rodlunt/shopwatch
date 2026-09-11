@@ -160,6 +160,36 @@
 
   <p class="verdict {{ product.tone }}">{{ product.verdict_line }}</p>
 
+  {% if product.offers %}
+    {% for o in product.offers %}
+      {% set m = (o.matches | selectattr('product_id', 'equalto', product.id) | list | first) %}
+      {% if m %}
+      <div class="lead {{ 'crosses' if m.crosses_trigger else '' }}">
+        <span class="lead-mark">offer</span>
+        <span>
+          <b>{{ o.retailer_name }}:</b> {{ o.summary }}
+          <br><span class="muted">Could take it to <b class="num">{{ m.projected_delivered|money }}</b>
+          from {{ m.basis_delivered|money }}{% if m.crosses_trigger %}, under your target{% endif %}.
+          Not applied to any price here until you confirm it.</span>
+        </span>
+        <details class="more">
+          <summary>Terms</summary>
+          <div class="small muted" style="padding:6px 0;max-width:66ch;line-height:1.5">
+            <p style="margin:0 0 4px"><b>Covers:</b> {{ o.applies_to }}</p>
+            {% if o.excludes %}<p style="margin:0 0 4px"><b>Excludes:</b> {{ o.excludes }}</p>{% endif %}
+            {% if o.code %}<p style="margin:0 0 4px"><b>Code:</b> <span class="num">{{ o.code }}</span></p>{% endif %}
+            {% if o.requires_signup %}<p style="margin:0 0 4px">Requires signing up for something.</p>{% endif %}
+            <p style="margin:0">
+              {% if o.expires_at %}Ends {{ o.expires_at }}. {% endif %}
+              Read from an email on {{ o.received_at|dt }}, confidence {{ o.confidence }}.
+            </p>
+          </div>
+        </details>
+      </div>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+
   {{ ruler(product) }}
 
   {% if product.listings %}

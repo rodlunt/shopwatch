@@ -358,3 +358,22 @@ details.menu > summary { list-style: none; }
 details.menu > summary::-webkit-details-marker { display: none; }
 details.menu > summary::after { content: " \25BE"; color: var(--muted); }
 details.menu[open] > summary { border-color: var(--muted); }
+
+/* An offer read out of retailer email. Deliberately styled as an aside, not as a
+   price: it has not been applied to anything and may not survive the exclusions. */
+.lead {
+  display: flex; gap: 12px; align-items: flex-start;
+  margin: 0 20px 14px; padding: 11px 14px;
+  border: 1px dashed var(--rule); border-radius: 8px;
+  font-size: 13.5px; line-height: 1.5;
+}
+.lead.crosses { border-color: var(--act); background: var(--act-bg); }
+.lead.crosses > span.lead-mark { background: var(--act); color: var(--surface); }
+/* `.lead > span` would otherwise out-specify `.lead-mark` and stretch the pill across
+   the whole card - both are spans, and the descendant selector carries more weight. */
+.lead > span.lead-mark {
+  flex: none; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: var(--rule-soft); color: var(--muted); white-space: nowrap;
+}
+.lead > span { flex: 1; min-width: 0; }
+.lead details.more { flex: none; }

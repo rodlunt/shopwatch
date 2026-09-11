@@ -12,7 +12,17 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import __version__, alerts, ingest, price_watch, pricing, provenance, retailers, store
+from . import (
+    __version__,
+    alerts,
+    ingest,
+    offers,
+    price_watch,
+    pricing,
+    provenance,
+    retailers,
+    store,
+)
 from .config import load_config
 from .db import backup, migrate, session, utcnow
 
@@ -430,6 +440,37 @@ def api_deactivate_listing(listing_id: int) -> Any:
             "UPDATE listings SET active = 0, updated_at = ? WHERE id = ?", (utcnow(), listing_id)
         )
     return {"deactivated": listing_id}
+
+
+@app.get("/api/offers")
+def api_offers(live: bool = True, matched: bool = False) -> Any:
+    """Offers seen in retailer email. A lead, never a price."""
+    with session() as conn:
+        return offers.list_offers(conn, only_live=live, only_matched=matched)
+
+
+@app.post("/api/offers")
+def api_record_offer(payload: dict = Body(...)) -> Any:
+    """Record an offer from outside the mail watcher (another machine, or by hand)."""
+    if not payload.get("message_id"):
+        raise HTTPException(400, "message_id is required; it is the dedupe key")
+    with session() as conn:
+        recorded = offers.record_offer(conn, payload)
+        if recorded is None:
+            return {"status": "already seen", "message_id": payload["message_id"]}
+        return {"status": "recorded", "offer": recorded}
+
+
+@app.post("/api/offers/{offer_id}/status")
+def api_offer_status(offer_id: int, payload: dict = Body(...)) -> Any:
+    status = (payload.get("status") or "").upper()
+    if status not in {"NEW", "ACTED", "DISMISSED"}:
+        raise HTTPException(400, "status must be NEW, ACTED or DISMISSED")
+    with session() as conn:
+        if conn.execute("SELECT 1 FROM offers WHERE id = ?", (offer_id,)).fetchone() is None:
+            raise HTTPException(404, "no such offer")
+        conn.execute("UPDATE offers SET status = ? WHERE id = ?", (status, offer_id))
+        return offers.offer_view(conn, offer_id)
 
 
 @app.get("/api/price-history/{product_id}")

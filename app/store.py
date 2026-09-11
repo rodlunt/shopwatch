@@ -267,6 +267,11 @@ def product_view(
         product["moved_since_purchase"] = None
         product["protection_open"] = False
 
+    # Live offers that could touch this product. Imported lazily to keep the module
+    # graph acyclic: offers reads the product view, the product view lists offers.
+    from . import offers as _offers
+    product["offers"] = _offers.offers_for_product(conn, product_id)
+
     product["tone"], product["verdict_line"] = pricing.verdict_line(product)
     # Contenders are what you choose between; the rest are folded away by default.
     product["contenders"] = [
