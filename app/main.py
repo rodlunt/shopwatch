@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -37,6 +38,31 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Shopwatch", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+def _asset_version() -> str:
+    """Cache-busting token derived from the asset bytes themselves.
+
+    Caddy serves /static with a 30-day immutable cache, so a changed stylesheet only
+    reaches a browser that has already loaded the page if the URL changes. The token
+    used to be `__version__`, a hand-maintained constant set in the first commit and
+    never bumped, which meant every CSS and JS change since was invisible to a
+    returning visitor: deploy green, container healthy, file correct on disk, old page
+    on screen, and nothing anywhere reporting it.
+
+    A content hash cannot fall out of step with the file it describes, which is the
+    whole point: the previous scheme depended on somebody remembering.
+    """
+    digest = hashlib.sha256()
+    for path in sorted((BASE_DIR / "static").rglob("*")):
+        if path.is_file():
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+#: Computed once at import. The container is recreated on deploy, so a changed asset
+#: always gets a fresh token, and a restart that changes nothing keeps the old one.
+ASSET_VERSION = _asset_version()
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 def _money(value: Any) -> str:
@@ -104,7 +130,7 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
             "statuses": store.STATUSES,
             "config": load_config(),
             "classes": pricing.CLASS_LABELS,
-            "version": __version__,
+            "version": ASSET_VERSION,
         },
     )
 
@@ -137,7 +163,7 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
             "aspects": provenance.VERIFICATION_ASPECTS,
             "tracked_fields": provenance.TRACKED_FIELDS,
             "config": load_config(),
-            "version": __version__,
+            "version": ASSET_VERSION,
         },
     )
 
