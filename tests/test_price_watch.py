@@ -144,3 +144,69 @@ def test_a_model_mismatch_flags_verification(wired, monkeypatch):
         ).fetchone()
         verification = provenance.verification_map(conn, row["id"])
         assert verification["model"]["status"] == provenance.FLAGGED
+
+
+# ------------------------------------ a model flag must reflect the latest run
+
+
+def _flag_model(db, retailer, note):
+    with connect(db) as conn:
+        row = conn.execute(
+            "SELECT l.id FROM listings l JOIN retailers r ON r.id = l.retailer_id"
+            " WHERE lower(r.name) = lower(?)", (retailer,)).fetchone()
+        provenance.set_verification(conn, row["id"], "model", provenance.FLAGGED, note)
+        conn.commit()
+        return row["id"]
+
+
+def _model_status(db, listing_id):
+    with connect(db) as conn:
+        return provenance.verification_map(conn, listing_id)["model"]["status"]
+
+
+def test_a_matching_run_clears_a_stale_model_flag(wired, monkeypatch):
+    """sync_verification_from_provenance never touches a FLAGGED aspect, so a listing
+    flagged by the old shape-based comparison stayed red forever, which is exactly the
+    outcome that fix existed to prevent. Same for any one-off bad reading."""
+    listing_id = _flag_model(wired, "JB Hi-Fi", "stale flag from an old run")
+    assert _model_status(wired, listing_id) == provenance.FLAGGED, "control: starts flagged"
+
+    stub_adapters(monkeypatch, lambda slug: Observation(
+        advertised_price=1699.0, model_on_page="HW-Q930H/XY", model_on_page_key="mpn"))
+    price_watch.run(send_alerts=False)
+
+    assert _model_status(wired, listing_id) != provenance.FLAGGED, (
+        "a run that compared a manufacturer identifier and matched must clear it"
+    )
+
+
+def test_a_run_that_could_not_compare_leaves_the_flag_alone(wired, monkeypatch):
+    """A page publishing only a merchant stock number is no evidence either way.
+    Absence of a mismatch is not a clean bill of health (hardening rule 12)."""
+    listing_id = _flag_model(wired, "JB Hi-Fi", "a real mismatch someone saw")
+
+    stub_adapters(monkeypatch, lambda slug: Observation(
+        advertised_price=1699.0, model_on_page="893039", model_on_page_key="sku"))
+    price_watch.run(send_alerts=False)
+
+    assert _model_status(wired, listing_id) == provenance.FLAGGED, (
+        "no comparison happened, so there is nothing to clear it on"
+    )
+
+
+def test_the_flag_note_is_the_warning_that_caused_it(wired, monkeypatch):
+    """The note used to be warnings[0] regardless. An adapter appending its own
+    warning first would file unrelated text under the model mismatch fault tag."""
+    obs = Observation(advertised_price=1699.0, model_on_page="HW-Q990H/XY",
+                      model_on_page_key="mpn")
+    obs.warnings = ["freight could not be read from this page",
+                    "model mismatch: page shows 'HW-Q990H/XY', expected 'HW-Q930H/XY'"]
+    stub_adapters(monkeypatch, lambda slug: obs)
+    price_watch.run(send_alerts=False)
+
+    with connect(wired) as conn:
+        row = conn.execute(
+            "SELECT l.id FROM listings l JOIN retailers r ON r.id = l.retailer_id"
+            " WHERE lower(r.name) = 'jb hi-fi'").fetchone()
+        note = provenance.verification_map(conn, row["id"])["model"]["note"]
+    assert "model mismatch" in note, f"the note must explain the flag, got {note!r}"

@@ -8,6 +8,7 @@ from . import (  # noqa: F401  (import for side effect: registration)
     the_good_guys,
 )
 from .base import (  # noqa: F401
+    MANUFACTURER_KEYS,
     FetchError,
     Observation,
     RetailerAdapter,
@@ -26,6 +27,7 @@ __all__ = [
     "available_adapters",
     "detect_block",
     "get_adapter",
+    "MANUFACTURER_KEYS",
     "model_matches",
     "parse_price",
     "register",
