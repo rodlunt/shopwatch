@@ -149,6 +149,76 @@ the live file, and removes the stale `-wal`/`-shm` pair.
 
 ---
 
+## Watching retailer email for offers
+
+The price scrapers can only see product pages, and the discounts that matter are not on
+them. Measured on a real corpus of 204 retailer emails: **not one mentioned a tracked
+model**, but 67 carried a quantified offer, and those offers are where the money is -
+"Spend $2000 or more on TVs & get $500 OFF" never touches a product page.
+
+Keyword matching is not enough. On that corpus it flagged 44 emails as relevant when a
+handful were: a catalogue blast mentions dozens of products and several dollar figures,
+and "$400 off" next to the word "TV" somewhere in 6,000 characters means nothing.
+Working out what an offer *covers* means reading it, so that step goes to a model with a
+fixed output schema.
+
+```bash
+python -m app.mailwatch --dry-run          # what it would read; makes no API calls
+python -m app.mailwatch                    # extract and post to the board
+python -m app.mailwatch --since 2026-09-01 --limit 20
+```
+
+### How it is wired
+
+It runs on the machine where Thunderbird already lives, reading the local mail store
+directly - **no mail credentials anywhere**, because Thunderbird has already fetched the
+messages. The board runs on opti, so findings are posted over HTTP:
+
+```dotenv
+SHOPWATCH_URL=https://shop.yourdomain.example
+SHOPWATCH_USER=rodney
+SHOPWATCH_PASSWORD=...            # the vhost's basic_auth password
+ANTHROPIC_API_KEY=sk-ant-...      # only this machine needs it
+```
+
+Without `SHOPWATCH_URL` the command refuses to run rather than quietly filing everything
+into a local database nobody looks at. `--local` opts into that deliberately.
+
+A watcher does not need to be more available than you are: if the laptop is shut you are
+not shopping that week either. The cost of that choice is real though - offers are
+short-dated ("Ends 11.59pm Saturday"), so a long weekend closed means a missed sale.
+
+### Two rules it will not break
+
+**An offer is a lead, never a price.** Nothing in this path writes to a listing's
+advertised price, freight or coupon. It produces a suggestion with the arithmetic done
+and says plainly that it has not been applied.
+
+**An offer only discounts the retailer that sent it.** A Good Guys code projected from
+Crowdshop's cheaper price produces a number you cannot buy at any counter. If the sending
+retailer is not on a product's board there is no match, even though they may well sell
+the thing - add their listing and the offer becomes visible.
+
+### Cost
+
+A regex gate runs first, so only emails carrying an actual offer reach the model - 137 of
+204 never do. At roughly seven offer-emails a week that is a few dollars a year on
+`claude-opus-5`; `--model claude-haiku-4-5` is cheaper again. Extraction runs at effort
+`low`, which is the right setting for reading marketing copy.
+
+### Running it on a timer
+
+```ini
+# ~/.config/systemd/user/shopwatch-mail.timer
+[Unit]
+Description=Read retailer email for offers
+[Timer]
+OnCalendar=*-*-* 08,18:00:00
+Persistent=true          # catches up after the lid has been shut
+[Install]
+WantedBy=timers.target
+```
+
 ## Deployed on opti
 
 Live at **https://shop.yourdomain.example** (LAN only, trusted `*.yourdomain.example` wildcard cert).
@@ -491,7 +561,7 @@ or add an entry to `CATEGORY_PROFILES` in `app/seed.py` and re-run `python -m ap
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest        # 101 tests
+.venv/bin/python -m pytest        # 144 tests
 .venv/bin/python -m ruff check .
 ```
 
