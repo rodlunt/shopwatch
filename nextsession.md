@@ -1,7 +1,7 @@
 # Next session brief: 11/09/2026 (session end)
 
-**Repo:** shopwatch, branch `main` at `8d0eb15` (protected: PR required, three checks,
-strict, admins enforced)
+**Repo:** shopwatch, branch `main` at `8d0eb15` plus the session-end housekeeping commits
+on top (protected: PR required, three checks, strict, admins enforced)
 
 > Third brief today. The first two were wrong within hours, so treat this one as
 > perishable too: every claim below was read from the live system at session end, but
@@ -29,7 +29,8 @@ nothing about what actually ran.
 ## Verification at session end (VERIFIED unless noted)
 
 - **Tests:** 186 passed, `ruff check .` clean
-- **main == opti:** both `8d0eb15`, container healthy
+- **main == opti:** verified equal and container healthy at every deploy this session;
+  `8d0eb15` was the last code change, the commits after it are this handoff
 - **Installed deploy script == repo copy:** both `921772f52b32`
 - **Working tree:** clean. Branches: `main` only, locally and on origin
 - **Dependabot:** 0 open alerts
