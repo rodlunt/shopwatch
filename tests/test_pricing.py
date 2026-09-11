@@ -166,3 +166,63 @@ def test_a_single_target_does_not_divide_by_zero():
     scale = pricing.threshold_scale({"trigger_price": 900}, 900)
     assert 0 <= scale["marks"][0]["pos"] <= 100
     assert 0 <= scale["best"]["pos"] <= 100
+
+
+# ------------------------------------------------------- every contender on the axis
+
+CONTENDERS = [
+    {"id": 1, "retailer_name": "Crowdshop", "delivered_price": 869,
+     "delivered_resolved": False, "classification": "UNRESOLVED"},
+    {"id": 2, "retailer_name": "Appliance Central", "delivered_price": 990,
+     "delivered_resolved": True, "classification": "ABOVE_TARGET"},
+    {"id": 3, "retailer_name": "JB Hi-Fi", "delivered_price": 1699,
+     "delivered_resolved": True, "classification": "ABOVE_TARGET"},
+    {"id": 4, "retailer_name": "No price yet", "delivered_price": None,
+     "delivered_resolved": False, "classification": "UNRESOLVED"},
+]
+
+
+def test_every_priced_contender_lands_on_the_axis():
+    scale = pricing.threshold_scale(BOARD, 869, CONTENDERS)
+    plotted = [p["retailer"] for p in scale["points"]]
+    assert plotted == ["Crowdshop", "Appliance Central", "JB Hi-Fi"], "cheapest first"
+    assert all(0 <= p["pos"] <= 100 for p in scale["points"])
+
+
+def test_a_contender_without_a_price_is_not_plotted_anywhere():
+    """A dot on a price axis claims a number. There is no number, so there is no dot."""
+    scale = pricing.threshold_scale(BOARD, 869, CONTENDERS)
+    assert "No price yet" not in [p["retailer"] for p in scale["points"]]
+
+
+def test_the_dearest_contender_widens_the_domain():
+    """The reason the axis needs a zoom: one $1,699 listing crushes the targets."""
+    narrow = pricing.threshold_scale(BOARD, 869)
+    wide = pricing.threshold_scale(BOARD, 869, CONTENDERS)
+    assert wide["hi"] > narrow["hi"] * 1.5
+    spread = max(m["pos"] for m in wide["marks"]) - min(m["pos"] for m in wide["marks"])
+    assert spread < 15, "targets occupy a sliver once the dear end is on the same axis"
+
+
+def test_bands_tile_the_axis_without_gaps_or_overlaps():
+    scale = pricing.threshold_scale(BOARD, 869, CONTENDERS)
+    bands = scale["bands"]
+    assert bands[0]["from"] == 0 and bands[-1]["to"] == 100
+    for earlier, later in zip(bands, bands[1:], strict=False):
+        assert earlier["to"] == later["from"], "a gap would read as meaningless territory"
+
+
+def test_only_the_bands_that_change_a_decision_are_toned():
+    scale = pricing.threshold_scale(BOARD, 869, CONTENDERS)
+    tones = {b["label"]: b["tone"] for b in scale["bands"]}
+    assert tones["above target"] == "quiet", "the ordinary state is never coloured"
+    assert tones["on target"] == "close"
+    assert tones["historical low"] == "act" and tones["excellent"] == "act"
+
+
+def test_a_missing_target_drops_its_band_rather_than_collapsing_the_others():
+    scale = pricing.threshold_scale(
+        {"excellent_price": 850, "trigger_price": 900}, 869, CONTENDERS)
+    labels = [b["label"] for b in scale["bands"]]
+    assert "historical low" not in labels
+    assert labels[0] == "excellent" and scale["bands"][0]["from"] == 0
