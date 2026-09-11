@@ -149,6 +149,60 @@ the live file, and removes the stale `-wal`/`-shm` pair.
 
 ---
 
+## Deployed on opti
+
+Live at **https://shop.home.lunt.au** (LAN only, trusted `*.home.lunt.au` wildcard cert).
+
+| Thing | Where |
+|---|---|
+| Bare repo (push target) | `root@100.115.75.8:/root/shopwatch.git` |
+| Stack (Dockge-managed) | `/srv/prod/shopwatch` |
+| Working clone | `/srv/prod/shopwatch/repo` |
+| Database | docker volume `shopwatch_shopwatch-data` at `/data/shopwatch.db` |
+| Secrets | `/srv/prod/shopwatch/.env` (0600, opti-only, never in the repo) |
+| Caddy vhost | `opti-stacks/caddy/Caddyfile` in the `smart-home` repo |
+| DNS record | `dns.hosts` in `/srv/prod/pihole/etc-pihole/pihole.toml` |
+
+The container publishes **no host port**. Caddy reaches it by container name on the `web`
+network, which is what supplies the certificate and keeps it off the LAN without a
+hostname.
+
+### Push to deploy
+
+```bash
+git remote add opti root@100.115.75.8:/root/shopwatch.git   # once
+B=$(git branch --show-current) && git push origin "$B"      # GitHub, if one is added
+B=$(git branch --show-current) && git push opti "$B"        # deploys
+```
+
+The `post-receive` hook pulls the clone, copies `deploy/docker-compose.opti.yml` into
+place, and rebuilds **only** when `app/`, `Dockerfile`, `requirements.txt` or the compose
+file changed — a README-only push updates the clone and leaves the container running.
+Migrations are forward-only and run on boot, so a deploy never wipes the database.
+
+### Alerting is off until you turn it on
+
+`/srv/prod/shopwatch/.env` ships with `SHOPWATCH_NTFY_URL` empty, so nothing publishes
+anywhere. To switch it on, create a topic and fill in the URL plus the publish token from
+`/root/.ntfy_pub_token` (the server rejects unauthenticated publishes with a 403, so a
+missing token means silent failure at the server, which the app reports as
+`[ALERT-FAILURE]` and a non-zero exit).
+
+Note this cuts across the house "ntfy is for faults only" policy: a price alert is not a
+fault. That is a deliberate decision to make, not a default to inherit, which is why the
+value ships empty.
+
+### Scheduling the watch
+
+There is no timer yet, deliberately: three of the five seeded retailers cannot be scraped
+at all (see **Retailer scraping limitations**), so a schedule would currently be a no-op
+that looks like coverage. Add one once at least one adapter reliably returns a price:
+
+```bash
+ssh root@100.115.75.8 'docker compose -f /srv/prod/shopwatch/docker-compose.yml \
+  exec -T shopwatch python -m app.price_watch --trigger cron'
+```
+
 ## Running without Docker
 
 ```bash
