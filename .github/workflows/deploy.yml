@@ -36,6 +36,12 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
+      # The host scripts live in the repo but run from an install path. Install them
+      # from the commit CI verified BEFORE deploying with them, or editing them in
+      # the repo changes nothing in production and the deploy still reports success.
+      - name: Install the host scripts from this commit
+        run: sudo /usr/local/bin/shopwatch-deploy --install-from "$GITHUB_WORKSPACE"
+
       - name: Deploy the verified commit
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
