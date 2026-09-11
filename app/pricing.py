@@ -204,8 +204,6 @@ def threshold_scale(
         value = _num(targets.get(key))
         if value is not None:
             marks.append({"key": key, "label": label, "value": value})
-    if not marks:
-        return None
 
     best_value = best.value if isinstance(best, Delivered) else _num(best)
 
@@ -228,6 +226,13 @@ def threshold_scale(
             "ruled_out": bool(listing.get("ruled_out")),
         })
     points.sort(key=lambda pt: pt["value"])
+
+    # Nothing to plot at all, so the caller leaves the space empty rather than drawing
+    # an empty axis. This used to trigger on "no targets", which was right when the
+    # axis carried only targets: once it carries every contender, a product with three
+    # priced listings and no trigger decided yet has plenty worth comparing.
+    if not marks and not points:
+        return None
 
     values = [m["value"] for m in marks] + ([best_value] if best_value is not None else [])
     values += [pt["value"] for pt in points]
@@ -259,10 +264,14 @@ def threshold_scale(
 #: What each stretch of the axis means. Only the two that would change a decision are
 #: toned; everything above the trigger is the ordinary state and stays grey, which is
 #: the same rule the stylesheet follows: colour here means act, never decoration.
+#: Ascending. Each band runs from the previous PRESENT threshold to its own, which is
+#: not the same as running from a fixed predecessor: every target column is nullable
+#: and all three inputs are optional, so naming a predecessor that is NULL made the
+#: band fall back to the left edge and paint straight over its neighbour.
 BAND_SPEC = (
-    ("historical_low_price", "historical low", "act", None),
-    ("excellent_price", "excellent", "act", "historical_low_price"),
-    ("trigger_price", "on target", "close", "excellent_price"),
+    ("historical_low_price", "historical low", "act"),
+    ("excellent_price", "excellent", "act"),
+    ("trigger_price", "on target", "close"),
 )
 
 
@@ -279,13 +288,14 @@ def _bands(
     not produce a band rather than collapsing the ones around it.
     """
     bands = []
-    for key, label, tone, after in BAND_SPEC:
+    previous = None  # the last threshold that actually exists, not the nominal one
+    for key, label, tone in BAND_SPEC:
         upper = _num(targets.get(key))
         if upper is None:
             continue
-        lower = _num(targets.get(after)) if after else None
-        start = pos(lower) if lower is not None else 0.0
+        start = pos(previous) if previous is not None else 0.0
         end = pos(upper)
+        previous = upper
         if end <= start:
             continue
         bands.append({
