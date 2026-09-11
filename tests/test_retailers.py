@@ -180,3 +180,44 @@ def test_a_genuinely_different_model_still_flags():
 def test_the_same_model_punctuated_differently_is_not_a_mismatch():
     obs = base.observation_from_json_ld(JSON_LD % "HW Q930H XY", expected_model="HW-Q930H/XY")
     assert not any("mismatch" in w for w in obs.warnings)
+
+
+# ------------------------------------- the price guide must not invent a figure
+
+SHIPPING_PAGE = """
+<html><body>
+  <p>Dispatch 3 to 5 business days. Free returns within 30 days.</p>
+  <div class="price">Price guide: $869 - $889</div>
+</body></html>
+"""
+
+
+def test_a_shipping_sentence_is_not_a_price_range():
+    """"Dispatch 3 to 5 business days" used to yield a range of 3 to 5, and parse()
+    promoted $3 as the advertised price. The adapter must never invent a figure, and
+    because the historical low never rises again that $3 would have been permanent.
+    """
+    low, high = crowdshop._price_range(SHIPPING_PAGE)
+    assert (low, high) == (869.0, 889.0), "the real guide must win, not the first N to M"
+
+
+def test_a_range_needs_currency_on_both_sides():
+    assert crowdshop._price_range("<p>Dispatch 3 to 5 business days</p>") == (None, None)
+    assert crowdshop._price_range("<p>Ships in 2-3 days</p>") == (None, None)
+
+
+def test_the_separator_is_an_alternation_not_a_character_class():
+    """`[-–to]{1,2}` matched "tt" and "oo", which widened the surface for the bug above."""
+    assert crowdshop._price_range("<p>$100 tt $200</p>") == (None, None)
+    assert crowdshop._price_range("<p>$100 oo $200</p>") == (None, None)
+
+
+def test_every_separator_the_retailer_actually_uses_still_parses():
+    """Control: the narrowing must not break the thing the regex exists for."""
+    for text, want in (
+        ("<p>$869 - $889</p>", (869.0, 889.0)),
+        ("<p>$869 – $889</p>", (869.0, 889.0)),
+        ("<p>$869 to $889</p>", (869.0, 889.0)),
+        ("<p>$1,049.00-$1,199.00</p>", (1049.0, 1199.0)),
+    ):
+        assert crowdshop._price_range(text) == want, text
