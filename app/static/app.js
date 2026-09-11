@@ -525,6 +525,7 @@ const AXIS_MIN_SPAN = 20;        // never zoom past a $20 window: the dots would
                                  // precision the prices do not have.
 const LANE_HEIGHT = 30;
 const LANE_COUNT = 3;
+const CLUSTER_GAP = 26;          // px between dot centres below which they are one marker
 
 function axisMoney(value) {
   return '$' + Math.round(value).toLocaleString('en-AU');
@@ -565,25 +566,57 @@ function setupAxis(root) {
     return visible;
   }
 
-  function layoutLabels() {
-    // Greedy lane packing, cheapest first. A label goes in the highest lane whose
-    // last occupant it does not overlap, so the common case stays on one line and
-    // only genuine collisions push downward.
-    const laneEnds = new Array(LANE_COUNT).fill(-Infinity);
+  function clusterAndLabel() {
+    // Five of these retailers sit within $32 of each other. Drawn individually at full
+    // extent they are one illegible smudge of overlapping dots and text, which is worse
+    // than not plotting them: it looks like a rendering fault rather than like a tie.
+    //
+    // So anything closer together than CLUSTER_GAP collapses into one marker that says
+    // how many and over what range. Zooming in separates them again, which is the
+    // honest relationship: they ARE nearly the same price, and the axis should say so.
     const width = plot.clientWidth || 1;
     const ordered = points
-      .map(el => ({ el, value: Number(el.dataset.value) }))
+      .map(el => ({ el, value: Number(el.dataset.value), centre: (project(Number(el.dataset.value)) / 100) * width }))
+      .filter(item => item.el.style.visibility !== 'hidden')
       .sort((a, b) => a.value - b.value);
 
-    for (const { el, value } of ordered) {
-      if (el.style.visibility === 'hidden') continue;
+    for (const { el } of ordered) {
+      el.classList.remove('is-cluster', 'is-clustered');
       const label = el.querySelector('.axis-label');
+      if (label && el._label !== undefined) label.innerHTML = el._label;
+    }
+
+    const groups = [];
+    for (const item of ordered) {
+      const last = groups[groups.length - 1];
+      if (last && item.centre - last[last.length - 1].centre < CLUSTER_GAP) last.push(item);
+      else groups.push([item]);
+    }
+
+    const laneEnds = new Array(LANE_COUNT).fill(-Infinity);
+    for (const group of groups) {
+      const lead = group[0];
+      const label = lead.el.querySelector('.axis-label');
+
+      if (group.length > 1) {
+        for (const item of group.slice(1)) item.el.classList.add('is-clustered');
+        lead.el.classList.add('is-cluster');
+        lead.el.dataset.count = group.length;
+        const lo = group[0].value;
+        const hi = group[group.length - 1].value;
+        if (label) {
+          if (lead._label === undefined) lead.el._label = label.innerHTML;
+          label.innerHTML = `<b>${axisMoney(lo)}${hi > lo ? '&ndash;' + axisMoney(hi) : ''}</b>${group.length} retailers`;
+        }
+      } else if (label && lead.el._label === undefined) {
+        lead.el._label = label.innerHTML;
+      }
+
       const half = (label ? label.offsetWidth : 60) / 2 + 6;
-      const centre = (project(value) / 100) * width;
-      let lane = laneEnds.findIndex(end => centre - half > end);
+      let lane = laneEnds.findIndex(end => lead.centre - half > end);
       if (lane === -1) lane = LANE_COUNT - 1;
-      laneEnds[lane] = centre + half;
-      el.style.setProperty('--leader', lane * LANE_HEIGHT + 'px');
+      laneEnds[lane] = lead.centre + half;
+      lead.el.style.setProperty('--leader', lane * LANE_HEIGHT + 'px');
       if (label) label.style.marginTop = (5 + lane * LANE_HEIGHT) + 'px';
     }
   }
@@ -606,7 +639,7 @@ function setupAxis(root) {
       band.classList.toggle('is-roomy', px > 78);
     }
 
-    layoutLabels();
+    clusterAndLabel();
     if (readout) {
       readout.textContent = view.lo <= full.lo && view.hi >= full.hi
         ? `${axisMoney(full.lo)} to ${axisMoney(full.hi)}, everything`
