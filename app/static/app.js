@@ -640,16 +640,24 @@ function setupAxis(root) {
         const lo = group[0].value;
         const hi = group[group.length - 1].value;
         if (label) {
-          if (lead._label === undefined) lead.el._label = label.innerHTML;
-          label.innerHTML = `<b>${axisMoney(lo)}${hi > lo ? '&ndash;' + axisMoney(hi) : ''}</b>${group.length} retailers`;
+          if (lead.el._label === undefined) lead.el._label = label.innerHTML;
+          label.innerHTML = `<b>${axisMoney(lo)}${hi > lo ? ' to ' + axisMoney(hi) : ''}</b>${group.length} retailers`;
         }
       } else if (label && lead.el._label === undefined) {
         lead.el._label = label.innerHTML;
       }
 
       const half = (label ? label.offsetWidth : 60) / 2 + LABEL_PAD;
-      let lane = laneEnds.findIndex(end => lead.centre - half > end);
-      if (lane === -1) lane = LANE_COUNT - 1;
+      // No lane has room. Hide the label rather than stacking it on the one already
+      // in the bottom lane: an unreadable overlap is worse than an absent label, and
+      // the dot still carries the figure in its title. The block comment above
+      // promises labels never cover each other; this is what keeps that true.
+      const lane = laneEnds.findIndex(end => lead.centre - half > end);
+      if (lane === -1) {
+        if (label) label.style.visibility = 'hidden';
+        continue;
+      }
+      if (label) label.style.visibility = '';
       laneEnds[lane] = lead.centre + half;
       lead.el.style.setProperty('--leader', lane * LANE_HEIGHT + 'px');
       if (label) label.style.marginTop = (5 + lane * LANE_HEIGHT) + 'px';
@@ -705,7 +713,13 @@ function setupAxis(root) {
     draw();
   }
 
+  // Zoom on ctrl/cmd + wheel only. Swallowing every wheel event made the axis a
+  // scroll trap: with the pointer anywhere over a 150px plot the page stopped
+  // moving and the axis zoomed instead, with no modifier to escape it and no way
+  // to scroll past. With several products stacked that is a wall, not a quirk.
+  // A plain wheel now scrolls the page, which is what a wheel is for.
   plot.addEventListener('wheel', event => {
+    if (!event.ctrlKey && !event.metaKey) return;   // let the page have it
     event.preventDefault();
     const rect = plot.getBoundingClientRect();
     const ratio = rect.width ? (event.clientX - rect.left) / rect.width : 0.5;
