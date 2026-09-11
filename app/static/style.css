@@ -254,6 +254,18 @@ main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
 
 .axis-point.is-dim { opacity: .38; }
 
+/* A tie, drawn as a tie. Several retailers within a few dollars of each other are one
+ * marker saying how many, not a smudge of overlapping dots pretending to be distinct
+ * readings. Zoom separates them; that is the honest relationship. */
+.axis-point.is-clustered { display: none; }
+.axis-point.is-cluster i {
+  width: 12px; height: 12px; margin-top: -5.5px;
+  background: var(--surface);
+  border: 2px solid var(--ink-soft);
+  box-shadow: 2px 0 0 -1px var(--surface), 3px 0 0 0 var(--ink-soft);
+}
+.axis-point.is-cluster .axis-label b { color: var(--ink-soft); }
+
 @media (prefers-reduced-motion: reduce) {
   .axis-band em { transition: none; }
 }
