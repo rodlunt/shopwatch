@@ -226,3 +226,46 @@ def test_a_missing_target_drops_its_band_rather_than_collapsing_the_others():
     labels = [b["label"] for b in scale["bands"]]
     assert "historical low" not in labels
     assert labels[0] == "excellent" and scale["bands"][0]["from"] == 0
+
+
+# ----------------------------------------------------------------- ruled out
+
+def _delivered(rows):
+    """Attach the Delivered objects best_listing reads, as store.enrich_listing does."""
+    for row in rows:
+        row["delivered"] = pricing.delivered_price(
+            row["advertised_price"], freight=row.get("freight"))
+    return rows
+
+
+def test_a_ruled_out_listing_is_never_the_answer_however_cheap():
+    """The board headlined a rejected $869 for hours. Cheapest and best are not the
+    same question once a decision has been made about one of them."""
+    rows = _delivered([
+        {"retailer_name": "Crowdshop", "advertised_price": 869, "freight": 0,
+         "ruled_out": True},
+        {"retailer_name": "Appliance Central", "advertised_price": 990, "freight": 0,
+         "ruled_out": False},
+    ])
+    best = pricing.best_listing(rows)
+    assert best["retailer_name"] == "Appliance Central"
+
+
+def test_ruling_everything_out_leaves_no_answer_rather_than_a_rejected_one():
+    rows = _delivered([
+        {"retailer_name": "Crowdshop", "advertised_price": 869, "freight": 0,
+         "ruled_out": True},
+    ])
+    assert pricing.best_listing(rows) is None
+
+
+def test_a_ruled_out_listing_is_still_plotted():
+    """It stays visible on purpose: a decision you can see is easier to revisit."""
+    scale = pricing.threshold_scale(BOARD, 990, [
+        {"id": 1, "retailer_name": "Crowdshop", "delivered_price": 869,
+         "delivered_resolved": False, "ruled_out": True},
+        {"id": 2, "retailer_name": "Appliance Central", "delivered_price": 990,
+         "delivered_resolved": True, "ruled_out": False},
+    ])
+    plotted = {p["retailer"]: p["ruled_out"] for p in scale["points"]}
+    assert plotted == {"Crowdshop": True, "Appliance Central": False}

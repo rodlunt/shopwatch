@@ -457,6 +457,28 @@ def api_set_verification(listing_id: int, payload: dict = Body(...)) -> Any:
         }
 
 
+@app.post("/api/retailers/{listing_id}/ruled-out")
+def api_set_ruled_out(listing_id: int, payload: dict = Body(...)) -> Any:
+    """Rule a listing out, or put it back in the running.
+
+    Distinct from deactivating it. Deactivating means "this is not a real listing";
+    ruling out means "this is real and I will not buy it", which the board still has to
+    show you, and still has to exclude from the answer.
+    """
+    ruled_out = bool(payload.get("ruled_out", True))
+    reason = (payload.get("reason") or "").strip() or None
+    with session() as conn:
+        if conn.execute("SELECT 1 FROM listings WHERE id = ?", (listing_id,)).fetchone() is None:
+            raise HTTPException(404, "no such listing")
+        conn.execute(
+            "UPDATE listings SET ruled_out = ?, ruled_out_reason = ?, ruled_out_at = ?,"
+            " updated_at = ? WHERE id = ?",
+            (1 if ruled_out else 0, reason if ruled_out else None,
+             utcnow() if ruled_out else None, utcnow(), listing_id),
+        )
+    return {"listing_id": listing_id, "ruled_out": ruled_out, "reason": reason}
+
+
 @app.delete("/api/retailers/{listing_id}")
 def api_deactivate_listing(listing_id: int) -> Any:
     with session() as conn:
