@@ -519,6 +519,16 @@ wire('btn-undo-purchase', async event => {
   } catch (err) { toast(`Could not undo: ${err.message}`, 'bad'); }
 });
 
+wire('btn-give-up-product', async event => {
+  if (!confirm('Give up on this? It comes off the board, but every listing, price and history row is kept, so it is not gone for good.')) return;
+  const productId = Number(event.currentTarget.dataset.product);
+  try {
+    await api(`/api/products/${productId}`, { method: 'DELETE' });
+    toast('Archived. It has come off the board.', 'good');
+    location.href = '/';
+  } catch (err) { toast(`Could not archive: ${err.message}`, 'bad'); }
+});
+
 wire('btn-edit-product', () => document.getElementById('product-dialog').showModal());
 wire('ep-save', async () => {
   const productId = Number(location.pathname.split('/').pop());
