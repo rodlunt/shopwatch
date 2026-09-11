@@ -259,6 +259,7 @@ def test_recording_an_offer_never_touches_a_listing(seeded):
 def test_only_known_retailers_are_read():
     assert mailwatch.retailer_for("JB Hi-Fi <deals@email.jbhifi.com.au>") == "JB Hi-Fi"
     assert mailwatch.retailer_for("TGG <x@email.thegoodguys.com.au>") == "The Good Guys"
+    assert mailwatch.retailer_for("AO <deals@appliancesonline.com.au>") == "Appliances Online"
     assert mailwatch.retailer_for("Mum <mum@example.com>") is None, "personal mail is never opened"
     assert mailwatch.retailer_for("") is None
 
