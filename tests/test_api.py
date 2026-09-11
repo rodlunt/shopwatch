@@ -289,3 +289,69 @@ def test_the_zoom_target_says_what_the_keys_do(client):
     html = client.get("/").text
     assert "aria-describedby" in html
     assert "arrow keys" in html, "a focusable zoom target with undiscoverable keys is not usable"
+
+
+# --------------------------------------------------- the ruled-out API surface
+
+
+def _first_listing(client):
+    products = client.get("/api/products").json()
+    pid = next(p["id"] for p in products if p["model"] == "HW-Q930H/XY")
+    return client.get(f"/api/products/{pid}/retailers").json()[0]
+
+
+def test_ruling_out_and_back_in_round_trips(client):
+    listing = _first_listing(client)
+    lid = listing["id"]
+
+    out = client.post(f"/api/retailers/{lid}/ruled-out",
+                      json={"ruled_out": True, "reason": "group-buy, freight never quotable"})
+    assert out.status_code == 200
+    assert out.json()["ruled_out"] is True
+
+    back = client.post(f"/api/retailers/{lid}/ruled-out", json={"ruled_out": False})
+    assert back.status_code == 200
+    assert back.json()["ruled_out"] is False
+
+
+def test_putting_it_back_keeps_the_reason_it_was_ruled_out_for(client):
+    """The migration promised the reason travels with the listing.
+
+    Nulling it on the way back destroyed the decision trail silently: un-rule and
+    re-rule, and the original reasoning was gone with nothing recording it existed.
+    """
+    lid = _first_listing(client)["id"]
+    client.post(f"/api/retailers/{lid}/ruled-out",
+                json={"ruled_out": True, "reason": "group-buy, freight never quotable"})
+    back = client.post(f"/api/retailers/{lid}/ruled-out", json={"ruled_out": False}).json()
+
+    assert back["ruled_out"] is False, "the flag must clear"
+    assert back["reason"] == "group-buy, freight never quotable", "the reason must survive"
+    assert back["at"] is not None, "so must when it happened"
+
+
+def test_ruling_out_an_unknown_listing_is_a_404(client):
+    assert client.post("/api/retailers/999999/ruled-out",
+                       json={"ruled_out": True}).status_code == 404
+
+
+def test_a_ruled_out_listing_stops_being_nominated_through_the_api(client):
+    """End to end: the flag set over HTTP changes what the board answers."""
+    products = client.get("/api/products").json()
+    pid = next(p["id"] for p in products if p["model"] == "HW-Q930H/XY")
+    listings = client.get(f"/api/products/{pid}/retailers").json()
+    priced = [x for x in listings if x.get("delivered_price") is not None]
+    assert priced, "control: the seed must have something priced, or this proves nothing"
+    cheapest = min(priced, key=lambda x: x["delivered_price"])
+
+    before = client.get(f"/api/products/{pid}").json()
+    assert before["best_retailer"] == cheapest["retailer_name"], (
+        "control: the cheapest listing is nominated before anything is ruled out"
+    )
+
+    client.post(f"/api/retailers/{cheapest['id']}/ruled-out",
+                json={"ruled_out": True, "reason": "not buying from them"})
+    after = client.get(f"/api/products/{pid}").json()
+    assert after["best_retailer"] != cheapest["retailer_name"], (
+        "a ruled-out listing cannot be nominated as best"
+    )

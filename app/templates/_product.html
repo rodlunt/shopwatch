@@ -223,6 +223,12 @@
       </p>
       <button type="button" class="linkish" data-rule-in="{{ l.id }}">Put back in the running</button>
     {% else %}
+      {% if l.ruled_out_reason %}
+        <p class="ruled-out-why muted">
+          Previously ruled out{% if l.ruled_out_at %} on {{ l.ruled_out_at|dt }}{% endif %}:
+          {{ l.ruled_out_reason }}
+        </p>
+      {% endif %}
       <button type="button" class="linkish" data-rule-out-open="{{ l.id }}">Rule this one out</button>
       <div class="rule-out-form" data-rule-out-form="{{ l.id }}" hidden>
         <label for="ro-{{ l.id }}">Why is it out?</label>
