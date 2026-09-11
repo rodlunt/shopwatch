@@ -164,13 +164,26 @@ class ImapSource:
                     when = datetime.strptime(since, "%Y-%m-%d").strftime("%d-%b-%Y")
                     date_clause = f" SINCE {when}"
 
+                # A None result set is ambiguous on iCloud: it means both "no matches"
+                # and "that search was malformed". Treating it as a failure cried wolf
+                # on every empty folder; treating it as zero would hide a broken query.
+                # So fire a control first - a search that MUST return something - and
+                # only then read a None as a genuine zero.
+                status, control = conn.search(None, "ALL")
+                if status != "OK" or not control or control[0] is None:
+                    log.warning("%s: control search returned nothing, folder unusable", folder)
+                    continue
+                log.debug("%s holds %d messages", folder, len(control[0].split()))
+
                 uids: list[bytes] = []
                 for domain in sorted(RETAILERS):
                     criteria = f'(FROM "{domain}"{date_clause})'
                     status, data = conn.search(None, criteria)
-                    if status != "OK" or not data or data[0] is None:
-                        log.warning("search failed in %s for %s", folder, domain)
+                    if status != "OK":
+                        log.warning("%s: search for %s returned %s", folder, domain, status)
                         continue
+                    if not data or data[0] is None:
+                        continue  # a real zero, the control proved the folder answers
                     uids.extend(data[0].split())
 
                 for uid in dict.fromkeys(uids):
