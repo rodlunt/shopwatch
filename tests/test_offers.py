@@ -478,3 +478,42 @@ def test_body_html_picks_the_richest_part():
     msg.set_content("plain text version")
     msg.add_alternative("<html><body>" + "x" * 500 + "</body></html>", subtype="html")
     assert len(mailwatch.body_html(msg)) > 400
+
+
+# ------------------------------------------- noticing a subscription we cannot see
+
+
+def test_a_watched_retailer_on_an_unknown_domain_is_noticed():
+    """The trap this closes: sign up to a list, the campaigns arrive from an ESP
+    domain, and an allowlist silently drops them while looking perfectly healthy."""
+    miss = mailwatch.unmatched_retailer('"Harvey Norman" <deals@hn.cmail19.com>')
+    assert miss == ("Harvey Norman", "cmail19.com") or miss[0] == "Harvey Norman"
+
+
+def test_a_retailer_already_on_the_allowlist_is_not_flagged():
+    """The control: the real Harvey Norman sender must not produce a false alarm."""
+    sender = '"Harvey Norman" <do_not_reply@harveynorman.com.au>'
+    assert mailwatch.retailer_for(sender) == "Harvey Norman"
+
+
+def test_ordinary_mail_is_never_flagged():
+    assert mailwatch.unmatched_retailer("Mum <mum@example.com>") is None
+    assert mailwatch.unmatched_retailer("") is None
+    assert mailwatch.unmatched_retailer("no-display-name@example.com") is None
+
+
+def test_the_flag_is_collected_during_a_scan():
+    import email.message
+
+    def msgs():
+        m = email.message.EmailMessage()
+        m["From"] = '"The Good Guys" <promo@sendgrid.example>'
+        m["Subject"] = "20% off everything"
+        m["Message-ID"] = "<x@y>"
+        m.set_content("20% off everything this weekend")
+        yield m
+
+    seen: dict = {}
+    found = mailwatch.candidates(msgs(), unmatched=seen)
+    assert found == [], "it is not on the allowlist, so it is not processed"
+    assert seen == {"The Good Guys": {"sendgrid.example"}}, "but it is reported"
