@@ -42,13 +42,13 @@
       <div class="axis-line" aria-hidden="true"></div>
 
       {% for pt in s.points %}
-        <span class="axis-point{{ ' is-best' if s.best and pt.value == s.best.value else '' }}{{ ' is-open' if not pt.resolved else '' }}"
-              data-point data-value="{{ pt.value }}" style="left: {{ pt.pos }}%"
-              title="{{ pt.retailer }} {{ pt.value|money }}{{ ' before freight' if not pt.resolved else '' }}">
+        <span class="axis-point{{ ' is-best' if s.best and not pt.ruled_out and pt.value == s.best.value else '' }}{{ ' is-open' if not pt.resolved else '' }}{{ ' is-ruled-out' if pt.ruled_out else '' }}"
+              data-point data-value="{{ pt.value }}"{% if pt.ruled_out %} data-ruled-out="1"{% endif %} style="left: {{ pt.pos }}%"
+              title="{{ pt.retailer }} {{ pt.value|money }}{{ ' before freight' if not pt.resolved else '' }}{{ ' (ruled out)' if pt.ruled_out else '' }}">
           <i></i>
           <span class="axis-label">
             <b>{{ pt.value|money }}</b>
-            {{ pt.retailer }}{% if not pt.resolved %} <em>before freight</em>{% endif %}
+            {{ pt.retailer }}{% if pt.ruled_out %} <em>ruled out</em>{% elif not pt.resolved %} <em>before freight</em>{% endif %}
           </span>
         </span>
       {% endfor %}
@@ -60,7 +60,7 @@
 
 
 {% macro listing_row(l, product) %}
-<div class="listing {{ 'is-act' if l.classification in ['HISTORICAL_LOW','EXCELLENT'] else ('is-close' if l.classification == 'TRIGGER_MET' else '') }}"
+<div class="listing {{ 'is-ruled-out' if l.ruled_out else ('is-act' if l.classification in ['HISTORICAL_LOW','EXCELLENT'] else ('is-close' if l.classification == 'TRIGGER_MET' else '')) }}"
      data-listing-row="{{ l.id }}">
   <button class="listing-row" aria-expanded="false" data-toggle-detail="{{ l.id }}">
     <span class="caret">&#9654;</span>
@@ -87,7 +87,9 @@
 
 
 {% macro tag(l) %}
-  {%- if l.verification.model.status == 'FLAGGED' -%}
+  {%- if l.ruled_out -%}
+    <span class="tag ruled-out">ruled out</span>
+  {%- elif l.verification.model.status == 'FLAGGED' -%}
     <span class="tag fault">model mismatch</span>
   {%- elif l.classification in ['HISTORICAL_LOW','EXCELLENT'] -%}
     <span class="tag act">{{ 'historical low' if l.classification == 'HISTORICAL_LOW' else 'excellent' }}</span>
@@ -180,6 +182,28 @@
     </div>
   </details>
   {% endif %}
+
+  {# Ruling out is a decision, so it is recorded with its reason and can be undone.
+     It is not the same as deactivating: this listing stays on the board and on the
+     axis, it simply stops being eligible to be the answer. #}
+  <div class="ruled-out-control">
+    {% if l.ruled_out %}
+      <p class="ruled-out-why">
+        <b>Ruled out.</b>
+        {%- if l.ruled_out_reason %} {{ l.ruled_out_reason }}{% endif %}
+        {%- if l.ruled_out_at %} <span class="muted">({{ l.ruled_out_at|dt }})</span>{% endif %}
+      </p>
+      <button type="button" class="linkish" data-rule-in="{{ l.id }}">Put back in the running</button>
+    {% else %}
+      <button type="button" class="linkish" data-rule-out-open="{{ l.id }}">Rule this one out</button>
+      <div class="rule-out-form" data-rule-out-form="{{ l.id }}" hidden>
+        <label for="ro-{{ l.id }}">Why is it out?</label>
+        <input id="ro-{{ l.id }}" type="text" data-rule-out-reason="{{ l.id }}"
+               placeholder="Group-buy, freight never quotable">
+        <button type="button" class="linkish" data-rule-out="{{ l.id }}">Rule it out</button>
+      </div>
+    {% endif %}
+  </div>
 {% endmacro %}
 
 
