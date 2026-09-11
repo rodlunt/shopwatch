@@ -55,7 +55,7 @@ function renderValue(span, value) {
   const kind = span.dataset.kind;
   span.dataset.raw = (value === null || value === undefined) ? '' : value;
   if (value === null || value === undefined || value === '') {
-    span.replaceChildren(el('span', '\u2014', 'unresolved'));
+    span.replaceChildren(el('span', '-', 'unresolved'));
   } else if (kind === 'money') {
     span.textContent = money(value);
   } else {
@@ -81,8 +81,13 @@ function applyListing(listing) {
     if (node) tag.replaceChildren(node); else tag.replaceChildren();
   }
 
-  row.classList.toggle('is-act', ['HISTORICAL_LOW', 'EXCELLENT'].includes(listing.classification));
-  row.classList.toggle('is-close', listing.classification === 'TRIGGER_MET');
+  // Same precedence as the server macro: a ruled-out listing is never styled as a
+  // buy, however its price classifies. Applying both left the row green and struck
+  // through at once.
+  const out = Boolean(listing.ruled_out);
+  row.classList.toggle('is-ruled-out', out);
+  row.classList.toggle('is-act', !out && ['HISTORICAL_LOW', 'EXCELLENT'].includes(listing.classification));
+  row.classList.toggle('is-close', !out && listing.classification === 'TRIGGER_MET');
 
   for (const [field, prov] of Object.entries(listing.provenance || {})) {
     const span = row.querySelector(`[data-edit][data-field="${field}"]`);
@@ -147,6 +152,10 @@ function el(tag, text, className) {
 }
 
 function tagFor(listing) {
+  // Ruled out comes first, exactly as the server macro orders it. Without this an
+  // inline edit re-rendered a ruled-out listing as "excellent" or "at target", with
+  // is-act and is-ruled-out both applied, until the next reload.
+  if (listing.ruled_out) return el('span', 'ruled out', 'tag ruled-out');
   if (listing.verification?.model?.status === 'FLAGGED') return el('span', 'model mismatch', 'tag fault');
   if (listing.classification === 'HISTORICAL_LOW') return el('span', 'historical low', 'tag act');
   if (listing.classification === 'EXCELLENT') return el('span', 'excellent', 'tag act');
