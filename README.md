@@ -552,7 +552,7 @@ when an alert could not be delivered. A run that exits 0 genuinely did something
 ### cron
 
 ```cron
-# /etc/cron.d/shopwatch — twice a day, output captured, failures mailed
+# /etc/cron.d/shopwatch: twice a day, output captured, failures mailed
 MAILTO=you@example.com
 17 7,19 * * * root cd /opt/shopwatch && docker compose exec -T shopwatch \
   python -m app.price_watch --trigger cron >> /var/log/shopwatch.log 2>&1
@@ -704,8 +704,8 @@ Recording a purchase:
 
 * moves the product to `PURCHASED`, which **stops its alerts** and takes it out of the
   watch, so a bought item does not keep telling you its price is good;
-* writes a `price_history` row with source `purchase` and `freight_resolved = 1` — a price
-  someone actually paid is the most trustworthy observation there is;
+* writes a `price_history` row with source `purchase` and `freight_resolved = 1`, because
+  a price someone actually paid is the most trustworthy observation there is;
 * keeps everything else. `DELETE /api/products/{id}/purchase` undoes the record and returns
   the product to `ACTIVE`, deliberately leaving the history row behind: it records a price
   that really was paid, and history is append-only even when the bookkeeping was wrong.
@@ -852,7 +852,7 @@ Appliances Online has the opposite problem.
 
 **Harvey Norman is the instructive one.** It returns HTTP 200 with a "Pardon Our
 Interruption" interstitial, so a naive adapter parses it, finds no price, and reports
-`unresolved` — identical to what it reports for a product page that genuinely has no
+`unresolved`, identical to what it reports for a product page that genuinely has no
 price. `retailers.base.detect_block()` catches that family of pages and raises
 `FetchError` instead, so a block reaches the run as an **error**, which is what it is.
 Add a marker there if a new retailer starts doing the same.
@@ -888,7 +888,7 @@ one.
 delivered price beats it, and never raises it again. That is right for a market that moves
 and wrong for a typo: a mistyped freight or price that produces a resolved delivered figure
 sets the low permanently, and every later listing then reads as dearer than a price that
-never existed. This bit during development — a `$25` freight typed into a persistence test
+never existed. This bit during development: a `$25` freight typed into a persistence test
 set the low to `$894`.
 
 There is no heuristic guarding it, deliberately: any rule that rejects "implausible" lows
