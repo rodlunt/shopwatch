@@ -108,11 +108,64 @@ Received: {received}
 """
 
 
+CLI_PROMPT = EXTRACTION_PROMPT + """
+Return ONLY a JSON object matching this shape, with no prose and no code fence:
+{schema}
+"""
+
+
 @dataclass
 class ExtractionResult:
     offer: ExtractedOffer | None
     model: str
     error: str | None = None
+
+
+def extract_via_cli(subject: str, sender: str, received: str, body: str,
+                    claude_bin: str = "claude", timeout: int = 180) -> ExtractionResult:
+    """Extract using headless Claude Code instead of the API.
+
+    This is the path that costs nothing beyond the subscription already paying for
+    /check-seek on the same machine, and needs no ANTHROPIC_API_KEY: the CLI carries
+    its own OAuth token. Slower per message than the API, which does not matter for a
+    job that runs twice a day over a handful of emails.
+    """
+    import subprocess
+
+    schema = json.dumps(ExtractedOffer.model_json_schema().get("properties", {}), indent=1)
+    prompt = CLI_PROMPT.format(
+        subject=subject, sender=sender, received=received, body=body[:12000], schema=schema
+    )
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p"], input=prompt, capture_output=True, text=True, timeout=timeout
+        )
+    except FileNotFoundError:
+        return ExtractionResult(None, "claude-cli", f"{claude_bin} not found")
+    except subprocess.TimeoutExpired:
+        return ExtractionResult(None, "claude-cli", f"timed out after {timeout}s")
+    if proc.returncode != 0:
+        return ExtractionResult(None, "claude-cli", (proc.stderr or "non-zero exit")[:200])
+
+    return parse_cli_output(proc.stdout)
+
+
+def parse_cli_output(text: str) -> ExtractionResult:
+    """Pull the JSON object out of a CLI reply and validate it against the schema.
+
+    Kept separate from the subprocess call so it can be tested without running anything.
+    """
+    raw = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
+    if fence:
+        raw = fence.group(1).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        return ExtractionResult(None, "claude-cli", f"no JSON in reply: {raw[:120]}")
+    try:
+        return ExtractionResult(ExtractedOffer.model_validate_json(raw[start:end + 1]), "claude-cli")
+    except Exception as exc:
+        return ExtractionResult(None, "claude-cli", f"reply did not match the schema: {exc}")
 
 
 def extract(subject: str, sender: str, received: str, body: str,
@@ -224,9 +277,10 @@ def match_products(conn: sqlite3.Connection, offer: dict[str, Any]) -> list[dict
             "basis_delivered": basis,
             "projected_delivered": projected,
             "crosses_trigger": crosses and not provisional,
+            # Just the arithmetic. The summary is shown alongside it, and repeating
+            # it here produced a run-on sentence saying the same thing twice.
             "rationale": (
-                f"{offer.get('summary') or offer.get('applies_to')} "
-                f"would take {retailer_name} from ${basis:,.0f} to ${projected:,.0f}"
+                f"Would take {retailer_name} from ${basis:,.0f} to ${projected:,.0f}"
                 + (", before freight, which is still unknown" if provisional else "")
                 + (f", under your ${trigger:,.0f} trigger" if crosses and not provisional else "")
             ),

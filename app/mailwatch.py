@@ -121,6 +121,100 @@ def received_at(message) -> str:
     return utcnow()
 
 
+class ImapSource:
+    """Read the account directly instead of Thunderbird's copy.
+
+    Reuses the credential the /check-seek runner already has on opti, so nothing new
+    is stored anywhere. Two things learned from that pipeline and repeated here:
+    Trash is read alongside INBOX because Rodney swipe-deletes mail he has skimmed,
+    and a malformed IMAP search returns an empty result set rather than an error, so
+    a None result is treated as a failure and not as "no messages".
+    """
+
+    HOST = "imap.mail.me.com"
+
+    def __init__(self, email_addr: str, password: str, folders: list[str] | None = None):
+        self.email_addr = email_addr
+        self.password = password
+        self.folders = folders or [
+            f.strip() for f in os.environ.get("ICLOUD_FOLDERS", "INBOX,Trash").split(",")
+            if f.strip()
+        ]
+
+    def messages(self, since: str | None = None) -> Iterator[Any]:
+        import email as email_mod
+        import imaplib
+
+        conn = imaplib.IMAP4_SSL(self.HOST, 993)
+        try:
+            conn.login(self.email_addr, self.password)
+            for folder in self.folders:
+                status, _ = conn.select(folder, readonly=True)
+                if status != "OK":
+                    log.warning("cannot open folder %s", folder)
+                    continue
+                # Filter on the server, one search per retailer domain. Fetching every
+                # message in INBOX and Trash just to read the From header pulls hundreds
+                # of megabytes and takes minutes; the first live run never finished.
+                # IMAP dates are unquoted, and a malformed search yields an empty result
+                # set rather than an error, so a None result is a failure not "none found".
+                date_clause = ""
+                if since:
+                    from datetime import datetime
+                    when = datetime.strptime(since, "%Y-%m-%d").strftime("%d-%b-%Y")
+                    date_clause = f" SINCE {when}"
+
+                # A None result set is ambiguous on iCloud: it means both "no matches"
+                # and "that search was malformed". Treating it as a failure cried wolf
+                # on every empty folder; treating it as zero would hide a broken query.
+                # So fire a control first - a search that MUST return something - and
+                # only then read a None as a genuine zero.
+                status, control = conn.search(None, "ALL")
+                if status != "OK" or not control or control[0] is None:
+                    log.warning("%s: control search returned nothing, folder unusable", folder)
+                    continue
+                log.debug("%s holds %d messages", folder, len(control[0].split()))
+
+                uids: list[bytes] = []
+                for domain in sorted(RETAILERS):
+                    criteria = f'(FROM "{domain}"{date_clause})'
+                    status, data = conn.search(None, criteria)
+                    if status != "OK":
+                        log.warning("%s: search for %s returned %s", folder, domain, status)
+                        continue
+                    if not data or data[0] is None:
+                        continue  # a real zero, the control proved the folder answers
+                    uids.extend(data[0].split())
+
+                for uid in dict.fromkeys(uids):
+                    status, fetched = conn.fetch(uid, "(RFC822)")
+                    if status != "OK" or not fetched:
+                        continue
+                    # A FETCH response interleaves (header, body) tuples with bare
+                    # bytes and ints for flags and closing parens. Only the tuples
+                    # carry a message; indexing fetched[0][1] blindly crashes on the
+                    # rest, which is what happened the first time this ran for real.
+                    for item in fetched:
+                        if (isinstance(item, tuple) and len(item) >= 2
+                                and isinstance(item[1], bytes)):
+                            yield email_mod.message_from_bytes(item[1])
+                            break
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+
+
+def imap_from_environment() -> ImapSource | None:
+    """An ImapSource when the credential is present, else None. Never prompts."""
+    addr = os.environ.get("ICLOUD_EMAIL", "").strip()
+    password = os.environ.get("ICLOUD_APP_PASSWORD", "").strip()
+    if addr and password:
+        return ImapSource(addr, password)
+    return None
+
+
 @dataclass
 class Candidate:
     message_id: str
@@ -131,40 +225,44 @@ class Candidate:
     body: str
 
 
-def candidates(paths: list[Path], since: str | None = None,
-               limit: int | None = None) -> Iterator[Candidate]:
-    """Retailer messages worth a model call, newest first."""
-    seen: set[str] = set()
-    found: list[Candidate] = []
+def mbox_messages(paths: list[Path]) -> Iterator[Any]:
     for path in paths:
         try:
             box = mailbox.mbox(str(path))
         except Exception as exc:
             log.warning("could not open %s: %s", path, exc)
             continue
-        for message in box:
-            sender = str(message.get("From", ""))
-            retailer = retailer_for(sender)
-            if not retailer:
-                continue
-            mid = str(message.get("Message-ID") or "").strip()
-            if not mid or mid in seen:
-                continue
-            when = received_at(message)
-            if since and when[:10] < since:
-                continue
-            subject = str(message.get("Subject", ""))
-            try:
-                subject = str(email.header.make_header(email.header.decode_header(subject)))
-            except Exception:
-                pass
-            body = body_text(message)
-            if not offers.worth_extracting(subject, body):
-                continue
-            seen.add(mid)
-            found.append(Candidate(mid, retailer, sender, subject, when, body))
+        yield from box
+
+
+def candidates(messages: Iterator[Any], since: str | None = None,
+               limit: int | None = None) -> list[Candidate]:
+    """Retailer messages worth a model call, newest first, de-duplicated by Message-ID."""
+    seen: set[str] = set()
+    found: list[Candidate] = []
+    for message in messages:
+        sender = str(message.get("From", ""))
+        retailer = retailer_for(sender)
+        if not retailer:
+            continue
+        mid = str(message.get("Message-ID") or "").strip()
+        if not mid or mid in seen:
+            continue
+        when = received_at(message)
+        if since and when[:10] < since:
+            continue
+        subject = str(message.get("Subject", ""))
+        try:
+            subject = str(email.header.make_header(email.header.decode_header(subject)))
+        except Exception:
+            pass
+        body = body_text(message)
+        if not offers.worth_extracting(subject, body):
+            continue
+        seen.add(mid)
+        found.append(Candidate(mid, retailer, sender, subject, when, body))
     found.sort(key=lambda c: c.received, reverse=True)
-    return iter(found[:limit] if limit else found)
+    return found[:limit] if limit else found
 
 
 @dataclass
@@ -250,12 +348,18 @@ def default_sink_config() -> tuple[str | None, str | None, str | None]:
 def run(paths: list[Path] | None = None, since: str | None = None,
         limit: int | None = None, dry_run: bool = False,
         model: str = offers.MODEL, client: Any = None,
-        sink: Sink | None = None) -> RunSummary:
+        sink: Sink | None = None, source: Any = None,
+        use_cli: bool = False, claude_bin: str = "claude") -> RunSummary:
+    """One pass. `source` is anything yielding email.Message; defaults to the local mbox."""
     summary = RunSummary()
-    paths = paths or default_mailbox_paths()
-    if not paths:
-        summary.errors.append("no Thunderbird mail store found")
-        return summary
+    if source is None:
+        paths = paths or default_mailbox_paths()
+        if not paths:
+            summary.errors.append("no Thunderbird mail store found and no IMAP credential")
+            return summary
+        messages = mbox_messages(paths)
+    else:
+        messages = source.messages(since=since)
 
     with session() as conn:
         active = sink or LocalSink(conn)
@@ -264,7 +368,7 @@ def run(paths: list[Path] | None = None, since: str | None = None,
         except Exception as exc:
             summary.errors.append(f"could not reach the board: {type(exc).__name__}: {exc}")
             return summary
-        for cand in candidates(paths, since=since, limit=limit):
+        for cand in candidates(messages, since=since, limit=limit):
             summary.scanned += 1
             if cand.message_id in known:
                 summary.already_seen += 1
@@ -272,10 +376,16 @@ def run(paths: list[Path] | None = None, since: str | None = None,
             if dry_run:
                 continue
 
-            result = offers.extract(
-                cand.subject, cand.sender, cand.received, cand.body,
-                client=client, model=model,
-            )
+            if use_cli:
+                result = offers.extract_via_cli(
+                    cand.subject, cand.sender, cand.received, cand.body,
+                    claude_bin=claude_bin,
+                )
+            else:
+                result = offers.extract(
+                    cand.subject, cand.sender, cand.received, cand.body,
+                    client=client, model=model,
+                )
             if result.error:
                 summary.errors.append(f"{cand.subject[:50]}: {result.error}")
                 continue
@@ -317,6 +427,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=offers.MODEL)
     parser.add_argument("--mailbox", action="append", type=Path,
                         help="explicit mail file; repeatable")
+    parser.add_argument("--imap", action="store_true",
+                        help="read the account directly (ICLOUD_EMAIL / ICLOUD_APP_PASSWORD)")
+    parser.add_argument("--cli", action="store_true",
+                        help="extract with headless Claude Code instead of the API; needs no key")
+    parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
     parser.add_argument("--local", action="store_true",
                         help="write to the local database instead of posting to the board")
     parser.add_argument("--json", action="store_true")
@@ -338,8 +453,18 @@ def main(argv: list[str] | None = None) -> int:
               "write into the database this machine can see.", file=sys.stderr)
         return 2
 
+    source = None
+    if args.imap:
+        source = imap_from_environment()
+        if source is None:
+            print("--imap needs ICLOUD_EMAIL and ICLOUD_APP_PASSWORD in the environment.",
+                  file=sys.stderr)
+            return 2
+        log.info("reading %s over IMAP", source.email_addr)
+
     summary = run(paths=args.mailbox, since=args.since, limit=args.limit,
-                  dry_run=args.dry_run, model=args.model, sink=sink)
+                  dry_run=args.dry_run, model=args.model, sink=sink, source=source,
+                  use_cli=args.cli, claude_bin=args.claude_bin)
 
     if args.json:
         print(json.dumps(summary.as_dict(), indent=2))
