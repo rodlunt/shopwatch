@@ -218,3 +218,51 @@ def test_seeding_twice_does_not_duplicate_or_clobber(seeded):
         assert conn.execute(
             "SELECT advertised_price FROM listings WHERE id = ?", (listing["id"],)
         ).fetchone()[0] == 799.0
+
+
+# --------------------------------------------------------- asset cache busting
+
+
+def test_asset_token_changes_when_a_static_file_changes(tmp_path, monkeypatch):
+    """The token must be derived from the bytes, not from a constant somebody bumps.
+
+    Caddy serves /static immutable for 30 days. The old token was a hand-maintained
+    version string that was never bumped, so every stylesheet change since the first
+    commit was invisible to a returning browser with nothing reporting it.
+    """
+    from app import main
+
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "style.css").write_text("body{color:red}")
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+
+    before = main._asset_version()
+    (static / "style.css").write_text("body{color:blue}")
+    after = main._asset_version()
+
+    assert before != after, "a changed stylesheet must produce a new token"
+    assert len(after) == 12
+
+
+def test_asset_token_is_stable_when_nothing_changes(tmp_path, monkeypatch):
+    """A restart that changes no asset must not expire every browser's cache."""
+    from app import main
+
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "app.js").write_text("console.log(1)")
+    monkeypatch.setattr(main, "BASE_DIR", tmp_path)
+
+    assert main._asset_version() == main._asset_version()
+
+
+def test_healthz_still_reports_the_semantic_version():
+    """The asset hash answers "is your cache stale". It is not the app's version."""
+    from fastapi.testclient import TestClient
+
+    from app import __version__, main
+
+    with TestClient(main.app) as client:
+        assert client.get("/healthz").json()["version"] == __version__
+        assert client.get("/api/meta").json()["version"] == __version__
