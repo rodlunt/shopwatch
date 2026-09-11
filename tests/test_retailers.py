@@ -148,3 +148,35 @@ def test_fetch_returns_the_body_for_a_real_page(monkeypatch):
     adapter = retailers.get_adapter("harvey_norman")
     adapter.config.request_delay = 0
     assert "HW-Q930H/XY" in adapter.fetch("https://www.harveynorman.com.au/anything")
+
+
+# ------------------------------------- a retailer stock number is not a mismatch
+
+JSON_LD = """
+<html><script type="application/ld+json">
+{"@type": "Product", "sku": "%s", "offers": {"@type": "Offer", "price": "1699.00",
+ "availability": "https://schema.org/InStock"}}
+</script></html>
+"""
+
+
+def test_a_retailer_stock_number_is_not_a_model_mismatch():
+    """JB Hi-Fi shows 893039 and The Good Guys 50098655 on the right product page.
+
+    Flagging those put a red fault tag on two correct listings, so the first
+    scheduled run would have made the board look broken rather than working.
+    """
+    obs = base.observation_from_json_ld(JSON_LD % "893039", expected_model="HW-Q930H/XY")
+    assert obs.advertised_price == 1699.0, "control: the page was parsed at all"
+    assert not any("mismatch" in w for w in obs.warnings), obs.warnings
+
+
+def test_a_genuinely_different_model_still_flags():
+    """The check still has to catch the thing it exists for: a different product."""
+    obs = base.observation_from_json_ld(JSON_LD % "HW-Q930F/XY", expected_model="HW-Q930H/XY")
+    assert any("mismatch" in w for w in obs.warnings), "a real mismatch must still flag"
+
+
+def test_the_same_model_punctuated_differently_is_not_a_mismatch():
+    obs = base.observation_from_json_ld(JSON_LD % "HW Q930H XY", expected_model="HW-Q930H/XY")
+    assert not any("mismatch" in w for w in obs.warnings)
