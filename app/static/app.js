@@ -505,3 +505,211 @@ wire('ep-save', async () => {
     location.reload();
   } catch (err) { toast(`Could not save product: ${err.message}`, 'bad'); }
 });
+
+/* ----------------------------------------------------------------- price axis
+ *
+ * The axis carries every contender, so its domain is set by the dearest one and the
+ * three targets end up crushed together at the cheap end. Zoom is therefore not a
+ * nicety: at full extent the interesting part of the axis is a few percent wide.
+ *
+ * Two invariants:
+ *   - the visible window is always stated in the readout. A zoomed axis that does not
+ *     say where it is looking reads as the full picture and is worse than no axis.
+ *   - labels are assigned to lanes by measured width, so a label never covers the line
+ *     or another label. Server-rendered positions are the no-JS fallback, which is
+ *     honest but unzoomed.
+ */
+
+const AXIS_MIN_SPAN = 20;        // never zoom past a $20 window: the dots would separate
+                                 // into meaninglessness and the readout would imply
+                                 // precision the prices do not have.
+const LANE_HEIGHT = 30;
+const LANE_COUNT = 3;
+
+function axisMoney(value) {
+  return '$' + Math.round(value).toLocaleString('en-AU');
+}
+
+function setupAxis(root) {
+  const plot = root.querySelector('[data-axis-plot]');
+  const readout = root.querySelector('[data-axis-window]');
+  const controls = root.querySelector('[data-axis-controls]');
+  if (!plot) return;
+
+  const full = { lo: Number(root.dataset.lo), hi: Number(root.dataset.hi) };
+  if (!isFinite(full.lo) || !isFinite(full.hi) || full.hi <= full.lo) return;
+
+  const points = Array.from(plot.querySelectorAll('[data-point]'));
+  const thresholds = Array.from(plot.querySelectorAll('[data-threshold]'));
+  const bands = Array.from(plot.querySelectorAll('[data-band]'));
+
+  // Bands were positioned server-side against the full domain. Recover each band's
+  // price range once, so zooming re-projects from prices rather than compounding
+  // percentages, which would drift.
+  const span = full.hi - full.lo;
+  for (const band of bands) {
+    band._from = full.lo + (Number(band.dataset.from) / 100) * span;
+    band._to = full.lo + (Number(band.dataset.to) / 100) * span;
+  }
+
+  let view = { ...full };
+  if (controls) controls.hidden = false;
+
+  const project = value => ((value - view.lo) / (view.hi - view.lo)) * 100;
+
+  function place(el, value) {
+    const pos = project(value);
+    const visible = pos >= -12 && pos <= 112;
+    el.style.left = pos + '%';
+    el.style.visibility = visible ? '' : 'hidden';
+    return visible;
+  }
+
+  function layoutLabels() {
+    // Greedy lane packing, cheapest first. A label goes in the highest lane whose
+    // last occupant it does not overlap, so the common case stays on one line and
+    // only genuine collisions push downward.
+    const laneEnds = new Array(LANE_COUNT).fill(-Infinity);
+    const width = plot.clientWidth || 1;
+    const ordered = points
+      .map(el => ({ el, value: Number(el.dataset.value) }))
+      .sort((a, b) => a.value - b.value);
+
+    for (const { el, value } of ordered) {
+      if (el.style.visibility === 'hidden') continue;
+      const label = el.querySelector('.axis-label');
+      const half = (label ? label.offsetWidth : 60) / 2 + 6;
+      const centre = (project(value) / 100) * width;
+      let lane = laneEnds.findIndex(end => centre - half > end);
+      if (lane === -1) lane = LANE_COUNT - 1;
+      laneEnds[lane] = centre + half;
+      el.style.setProperty('--leader', lane * LANE_HEIGHT + 'px');
+      if (label) label.style.marginTop = (5 + lane * LANE_HEIGHT) + 'px';
+    }
+  }
+
+  function draw() {
+    for (const el of points) place(el, Number(el.dataset.value));
+    for (const el of thresholds) place(el, Number(el.dataset.value));
+
+    for (const band of bands) {
+      const from = project(band._from);
+      const to = project(band._to);
+      const left = Math.max(from, -5);
+      const right = Math.min(to, 105);
+      const visible = right > left;
+      band.style.visibility = visible ? '' : 'hidden';
+      band.style.left = left + '%';
+      band.style.width = Math.max(right - left, 0) + '%';
+      // Name the band only when there is room for the words.
+      const px = ((right - left) / 100) * (plot.clientWidth || 1);
+      band.classList.toggle('is-roomy', px > 78);
+    }
+
+    layoutLabels();
+    if (readout) {
+      readout.textContent = view.lo <= full.lo && view.hi >= full.hi
+        ? `${axisMoney(full.lo)} to ${axisMoney(full.hi)}, everything`
+        : `${axisMoney(view.lo)} to ${axisMoney(view.hi)}`;
+    }
+  }
+
+  function clamp(next) {
+    let { lo, hi } = next;
+    if (hi - lo < AXIS_MIN_SPAN) {
+      const mid = (lo + hi) / 2;
+      lo = mid - AXIS_MIN_SPAN / 2;
+      hi = mid + AXIS_MIN_SPAN / 2;
+    }
+    // Allow a little overscroll so an edge dot is not pinned to the frame, but never
+    // let the window wander off the data entirely.
+    const pad = (full.hi - full.lo) * 0.25;
+    if (lo < full.lo - pad) { hi += (full.lo - pad) - lo; lo = full.lo - pad; }
+    if (hi > full.hi + pad) { lo -= hi - (full.hi + pad); hi = full.hi + pad; }
+    view = { lo, hi };
+  }
+
+  function zoomAt(factor, anchorRatio) {
+    const width = view.hi - view.lo;
+    const anchor = view.lo + width * anchorRatio;
+    const next = width * factor;
+    clamp({ lo: anchor - next * anchorRatio, hi: anchor + next * (1 - anchorRatio) });
+    draw();
+  }
+
+  plot.addEventListener('wheel', event => {
+    event.preventDefault();
+    const rect = plot.getBoundingClientRect();
+    const ratio = rect.width ? (event.clientX - rect.left) / rect.width : 0.5;
+    zoomAt(event.deltaY > 0 ? 1.18 : 0.85, Math.min(Math.max(ratio, 0), 1));
+  }, { passive: false });
+
+  let dragging = null;
+  plot.addEventListener('pointerdown', event => {
+    dragging = { x: event.clientX, lo: view.lo, hi: view.hi };
+    plot.setPointerCapture(event.pointerId);
+  });
+  plot.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    const rect = plot.getBoundingClientRect();
+    if (!rect.width) return;
+    const moved = ((event.clientX - dragging.x) / rect.width) * (dragging.hi - dragging.lo);
+    clamp({ lo: dragging.lo - moved, hi: dragging.hi - moved });
+    draw();
+  });
+  const endDrag = () => { dragging = null; };
+  plot.addEventListener('pointerup', endDrag);
+  plot.addEventListener('pointercancel', endDrag);
+
+  plot.addEventListener('keydown', event => {
+    const step = (view.hi - view.lo) * 0.15;
+    if (event.key === 'ArrowRight') { clamp({ lo: view.lo + step, hi: view.hi + step }); }
+    else if (event.key === 'ArrowLeft') { clamp({ lo: view.lo - step, hi: view.hi - step }); }
+    else if (event.key === '+' || event.key === '=') { zoomAt(0.8, 0.5); return; }
+    else if (event.key === '-') { zoomAt(1.25, 0.5); return; }
+    else if (event.key === '0') { view = { ...full }; }
+    else return;
+    event.preventDefault();
+    draw();
+  });
+
+  if (controls) {
+    controls.addEventListener('click', event => {
+      const button = event.target.closest('[data-axis-zoom]');
+      if (!button) return;
+      const mode = button.dataset.axisZoom;
+      if (mode === 'in') zoomAt(0.7, 0.5);
+      else if (mode === 'out') zoomAt(1.4, 0.5);
+      else if (mode === 'fit') { view = { ...full }; draw(); }
+      else if (mode === 'targets') {
+        // The three targets plus a little air. This is the view that answers "how far
+        // off are we", which is the question the product exists to answer.
+        const values = thresholds.map(el => Number(el.dataset.value)).filter(isFinite);
+        if (!values.length) return;
+        const lo = Math.min(...values);
+        const hi = Math.max(...values);
+        const pad = Math.max((hi - lo) * 0.35, 40);
+        clamp({ lo: lo - pad, hi: hi + pad });
+        draw();
+      }
+    });
+  }
+
+  // Tone each dot by the territory it actually lands in, so the colour on the axis and
+  // the colour in the list below come from the same fact rather than being set twice.
+  const toneBands = bands
+    .filter(b => b.classList.contains('tone-act') || b.classList.contains('tone-close'))
+    .map(b => ({ to: b._to, tone: b.classList.contains('tone-act') ? 'at-act' : 'at-close' }))
+    .sort((a, b) => a.to - b.to);
+  for (const el of points) {
+    const value = Number(el.dataset.value);
+    const hit = toneBands.find(b => value <= b.to);
+    if (hit) el.classList.add(hit.tone);
+  }
+
+  const observer = new ResizeObserver(() => draw());
+  observer.observe(plot);
+  draw();
+}
+
+for (const root of document.querySelectorAll('[data-axis]')) setupAxis(root);
