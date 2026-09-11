@@ -14,7 +14,14 @@
     <span class="muted">Unresolved freight is ranked with a
       {{ config.unresolved_freight_penalty|money }} penalty so it cannot outrank a confirmed price.</span>
   </div>
-  <p class="small"><button id="btn-new-product">New product</button></p>
+  <p class="small" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button id="btn-new-product" class="primary">New product</button>
+    <span class="muted">Show:</span>
+    {% for s in statuses + ['ALL'] %}
+      <a class="btn {{ 'primary' if status == s else '' }}" style="text-decoration:none"
+         href="/?status={{ s }}&amp;sort={{ sort }}">{{ s|capitalize }} ({{ counts.get(s, 0) }})</a>
+    {% endfor %}
+  </p>
 </div>
 
 {% for product in products %}
@@ -25,6 +32,19 @@
       <div class="model">{{ product.model }}{% if product.brand %} · {{ product.brand }}{% endif %} · {{ product.category }}</div>
     </div>
     <span class="badge verdict-{{ product.verdict }}">{{ product.verdict }}</span>
+    <span class="badge status-{{ product.status }}">{{ product.status }}</span>
+    {% if product.purchase %}
+      <span class="small muted">bought {{ product.purchase.purchased_at[:10] }} from
+        {{ product.purchase.retailer_name or 'unrecorded' }} for
+        <b>{{ product.purchase.price_paid|money }}</b>
+        {%- if product.moved_since_purchase is not none %},
+          {% if product.moved_since_purchase == 0 %}unchanged since
+          {%- else %}now {{ product.moved_since_purchase|abs|money }}
+            {{ 'CHEAPER' if product.moved_since_purchase < 0 else 'dearer' }}{% endif %}
+        {%- endif %}
+        {%- if product.protection_open %} &middot; <b>protection open to
+          {{ product.purchase.price_protection_until }}</b>{% endif %}</span>
+    {% endif %}
     <span class="spacer"></span>
     <a class="btn" href="/products/{{ product.id }}">Open</a>
   </header>
@@ -34,7 +54,9 @@
      class="small"><b>Fit:</b> {{ product.fit_notes }}</div>{% endif %}
 </section>
 {% else %}
-<div class="panel"><p>No products yet. Run <code>python -m app.seed</code> or add one.</p></div>
+<div class="panel"><p>{% if status != 'ALL' %}No {{ status|lower }} products.
+  <a href="/?status=ALL&amp;sort={{ sort }}">Show all</a>.{% else %}No products yet. Run
+  <code>python -m app.seed</code> or add one.{% endif %}</p></div>
 {% endfor %}
 
 <dialog id="new-product-dialog">

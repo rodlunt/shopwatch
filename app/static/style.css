@@ -121,6 +121,19 @@ td.wrap { white-space: normal; min-width: 180px; max-width: 320px; }
 .badge.manual  { background: var(--manual-bg); color: var(--manual); }
 .badge.none    { background: var(--none-bg);   color: var(--none); }
 
+.status-ACTIVE    { background: var(--none-bg);   color: var(--ink); }
+.status-PURCHASED { background: var(--good-bg);   color: var(--good); }
+.status-PARKED    { background: var(--none-bg);   color: var(--none); opacity: .8; }
+
+.bought {
+  padding: 8px 12px; border-bottom: 1px solid var(--line);
+  background: var(--good-bg); color: var(--good);
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 12.5px;
+}
+.bought b { font-size: 14px; }
+.bought .spacer { flex: 1; }
+.bought.dropped { background: var(--warn-bg); color: var(--warn); }
+
 .verdict-BUY    { background: var(--good-bg);   color: var(--good); }
 .verdict-MAYBE  { background: var(--warn-bg);   color: var(--warn); }
 .verdict-IGNORE { background: var(--bad-bg);    color: var(--bad); }

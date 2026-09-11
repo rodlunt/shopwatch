@@ -138,11 +138,27 @@ def run(
         run_id = _open_run(conn, trigger)
         summary["run_id"] = run_id
 
-        where = "WHERE l.active = 1" + (" AND l.product_id = ?" if product_id else "")
-        params = (product_id,) if product_id else ()
+        # Only products still being hunted are checked, plus purchased ones inside an
+        # open price-protection window. Polling a retailer about something already bought
+        # and not under protection is a request nobody reads the answer to.
+        where = (
+            "WHERE l.active = 1 AND ("
+            "  p.status = 'ACTIVE'"
+            "  OR (p.status = 'PURCHASED' AND EXISTS ("
+            "       SELECT 1 FROM purchases pu WHERE pu.product_id = p.id"
+            "         AND pu.price_protection_until IS NOT NULL"
+            "         AND substr(pu.price_protection_until, 1, 10) >= ?))"
+            ")"
+        )
+        params: list = [utcnow()[:10]]
+        if product_id:
+            where += " AND l.product_id = ?"
+            params.append(product_id)
         listings = conn.execute(
             "SELECT l.*, r.adapter AS retailer_adapter, r.name AS retailer_name"
-            " FROM listings l JOIN retailers r ON r.id = l.retailer_id " + where,
+            " FROM listings l"
+            " JOIN retailers r ON r.id = l.retailer_id"
+            " JOIN products p ON p.id = l.product_id " + where,
             params,
         ).fetchall()
 

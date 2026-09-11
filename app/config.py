@@ -34,39 +34,65 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _str(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    return default if value is None else value
+
+
 @dataclass
 class Config:
+    """Runtime settings.
+
+    Every field uses `default_factory`, without exception. A plain default such as
+    `port: int = _int("SHOPWATCH_PORT", 8477)` is evaluated once when the class is
+    created, so it freezes whatever the environment held at import time and silently
+    ignores every later change. That is not a test-only problem: it makes load_config()'s
+    contract a lie. Keep the factories.
+    """
+
     db_path: Path = field(
         default_factory=lambda: Path(os.environ.get("SHOPWATCH_DB", "data/shopwatch.db"))
     )
-    currency: str = os.environ.get("SHOPWATCH_CURRENCY", "AUD")
+    currency: str = field(default_factory=lambda: _str("SHOPWATCH_CURRENCY", "AUD"))
 
     # How many days before a successfully-fetched field is considered STALE.
-    stale_after_days: int = _int("SHOPWATCH_STALE_AFTER_DAYS", 7)
+    stale_after_days: int = field(
+        default_factory=lambda: _int("SHOPWATCH_STALE_AFTER_DAYS", 7)
+    )
 
     # Ranking penalty applied to a listing whose freight is unresolved, so that an
     # unknown-freight listing cannot silently outrank a slightly dearer listing with a
     # confirmed delivered price. Ranking only: never written to the stored price.
-    unresolved_freight_penalty: float = _float("SHOPWATCH_UNRESOLVED_FREIGHT_PENALTY", 60.0)
+    unresolved_freight_penalty: float = field(
+        default_factory=lambda: _float("SHOPWATCH_UNRESOLVED_FREIGHT_PENALTY", 60.0)
+    )
 
     # Scraping manners.
-    request_timeout: float = _float("SHOPWATCH_REQUEST_TIMEOUT", 20.0)
-    request_delay: float = _float("SHOPWATCH_REQUEST_DELAY", 3.0)
-    user_agent: str = os.environ.get(
-        "SHOPWATCH_USER_AGENT",
-        "Mozilla/5.0 (X11; Linux x86_64) shopwatch/0.1 (personal price watch)",
+    request_timeout: float = field(
+        default_factory=lambda: _float("SHOPWATCH_REQUEST_TIMEOUT", 20.0)
     )
-    scraping_enabled: bool = _bool("SHOPWATCH_SCRAPING_ENABLED", True)
+    request_delay: float = field(
+        default_factory=lambda: _float("SHOPWATCH_REQUEST_DELAY", 3.0)
+    )
+    user_agent: str = field(
+        default_factory=lambda: _str(
+            "SHOPWATCH_USER_AGENT",
+            "Mozilla/5.0 (X11; Linux x86_64) shopwatch/0.1 (personal price watch)",
+        )
+    )
+    scraping_enabled: bool = field(
+        default_factory=lambda: _bool("SHOPWATCH_SCRAPING_ENABLED", True)
+    )
 
     # Alerting.
-    ntfy_url: str = os.environ.get("SHOPWATCH_NTFY_URL", "")
-    ntfy_token: str = os.environ.get("SHOPWATCH_NTFY_TOKEN", "")
-    ntfy_priority: str = os.environ.get("SHOPWATCH_NTFY_PRIORITY", "high")
-    webhook_url: str = os.environ.get("SHOPWATCH_WEBHOOK_URL", "")
-    alerts_enabled: bool = _bool("SHOPWATCH_ALERTS_ENABLED", True)
+    ntfy_url: str = field(default_factory=lambda: _str("SHOPWATCH_NTFY_URL", ""))
+    ntfy_token: str = field(default_factory=lambda: _str("SHOPWATCH_NTFY_TOKEN", ""))
+    ntfy_priority: str = field(default_factory=lambda: _str("SHOPWATCH_NTFY_PRIORITY", "high"))
+    webhook_url: str = field(default_factory=lambda: _str("SHOPWATCH_WEBHOOK_URL", ""))
+    alerts_enabled: bool = field(default_factory=lambda: _bool("SHOPWATCH_ALERTS_ENABLED", True))
 
-    host: str = os.environ.get("SHOPWATCH_HOST", "0.0.0.0")
-    port: int = _int("SHOPWATCH_PORT", 8477)
+    host: str = field(default_factory=lambda: _str("SHOPWATCH_HOST", "0.0.0.0"))
+    port: int = field(default_factory=lambda: _int("SHOPWATCH_PORT", 8477))
 
 
 def load_config() -> Config:
@@ -74,4 +100,6 @@ def load_config() -> Config:
     return Config()
 
 
+#: Convenience handle for scripts. Call load_config() instead anywhere the environment
+#: may have changed since import.
 CONFIG = load_config()

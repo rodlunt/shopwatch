@@ -320,10 +320,77 @@ wire('al-save', async () => {
   } catch (err) { toast(`Could not add listing: ${err.message}`, 'bad'); }
 });
 
+/* ----------------------------------------------------------------- purchases */
+
+wire('btn-mark-purchased', () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const date = document.getElementById('pu-date');
+  if (date && !date.value) date.value = today;
+  prefillFromListing();
+  document.getElementById('purchase-dialog').showModal();
+});
+
+/* Picking a listing fills the numbers from what the board already knows, so the common
+   case is two clicks. Every field stays editable: what you paid is frequently not what
+   the page said. */
+function prefillFromListing() {
+  const select = document.getElementById('pu-listing');
+  if (!select) return;
+  const option = select.selectedOptions[0];
+  if (!option || !option.value) return;
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el && value !== undefined && value !== '') el.value = value;
+  };
+  set('pu-price', option.dataset.delivered);
+  set('pu-advertised', option.dataset.advertised);
+  set('pu-freight', option.dataset.freight);
+  set('pu-condition', option.dataset.condition);
+}
+document.getElementById('pu-listing')?.addEventListener('change', prefillFromListing);
+
+wire('pu-save', async () => {
+  const productId = Number(location.pathname.split('/').pop());
+  const value = id => (document.getElementById(id)?.value || '').trim();
+  const number = id => value(id) === '' ? null : Number(value(id));
+  if (value('pu-price') === '') {
+    toast('Delivered price paid is required: it is the number the whole board ranks on.', 'bad');
+    return;
+  }
+  const body = {
+    listing_id: value('pu-listing') ? Number(value('pu-listing')) : null,
+    retailer_name: value('pu-retailer') || null,
+    price_paid: number('pu-price'),
+    advertised_paid: number('pu-advertised'),
+    freight_paid: number('pu-freight'),
+    purchased_at: value('pu-date') || null,
+    condition: value('pu-condition'),
+    order_reference: value('pu-order') || null,
+    warranty_months: number('pu-warranty'),
+    price_protection_until: value('pu-protection') || null,
+    notes: value('pu-notes') || null
+  };
+  try {
+    await api(`/api/products/${productId}/purchase`, { method: 'POST', body });
+    toast('Purchase recorded. Alerts for this product are off.', 'good');
+    location.reload();
+  } catch (err) { toast(`Could not record the purchase: ${err.message}`, 'bad'); }
+});
+
+wire('btn-undo-purchase', async event => {
+  if (!confirm('Undo the purchase record and return this product to ACTIVE? The price history row is kept.')) return;
+  const productId = Number(event.currentTarget.dataset.product);
+  try {
+    await api(`/api/products/${productId}/purchase`, { method: 'DELETE' });
+    toast('Purchase record removed. Product is ACTIVE again.', 'good');
+    location.reload();
+  } catch (err) { toast(`Could not undo: ${err.message}`, 'bad'); }
+});
+
 wire('btn-edit-product', () => document.getElementById('product-dialog').showModal());
 wire('ep-save', async () => {
   const productId = Number(location.pathname.split('/').pop());
-  const text = ['name', 'model', 'brand', 'category', 'generation', 'verdict', 'vesa',
+  const text = ['name', 'model', 'brand', 'category', 'generation', 'verdict', 'status', 'vesa',
     'fit_notes', 'notes', 'lowest_known_notes', 'lowest_known_date', 'lowest_known_retailer'];
   const numeric = ['trigger_price', 'excellent_price', 'historical_low_price',
     'lowest_known_price', 'width_mm', 'height_mm', 'depth_mm', 'weight_kg'];

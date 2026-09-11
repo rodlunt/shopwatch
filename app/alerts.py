@@ -86,7 +86,18 @@ def _conditions(rule: Mapping[str, Any]) -> set[str]:
 def evaluate_product(
     conn: sqlite3.Connection, product: Mapping[str, Any]
 ) -> list[Alert]:
-    """Every alert this product's rules would raise against its current listings."""
+    """Every alert this product would raise right now.
+
+    A product that is not ACTIVE raises nothing from its normal rules: once it is bought
+    or parked, a "trigger met" notification is noise. The one exception is an open
+    price-protection window on a purchase, which raises its own kind of alert.
+    """
+    status = product.get("status", "ACTIVE")
+    if status != "ACTIVE":
+        if status == "PURCHASED" and product.get("protection_open"):
+            return _protection_alerts(conn, product)
+        return []
+
     rules = conn.execute(
         "SELECT * FROM alert_rules WHERE product_id = ? AND enabled = 1", (product["id"],)
     ).fetchall()
@@ -128,6 +139,56 @@ def evaluate_product(
     return alerts
 
 
+def _protection_alerts(conn: sqlite3.Connection, product: Mapping[str, Any]) -> list[Alert]:
+    """Fire when a purchased product is now available for less than was paid.
+
+    Only confirmed delivered prices count: telling someone to chase a price guarantee on
+    an unconfirmed figure sends them to a checkout to find out it was never cheaper.
+    """
+    purchase = product.get("purchase")
+    if not purchase:
+        return []
+    paid = purchase["price_paid"]
+    best = None
+    for listing in product["listings"]:
+        delivered = listing["delivered"]
+        if not delivered.known or not delivered.resolved:
+            continue
+        if delivered.value >= paid:
+            continue
+        if best is None or delivered.value < best["delivered"].value:
+            best = listing
+    if best is None:
+        return []
+
+    drop = round(paid - best["delivered"].value, 2)
+    last = purchase.get("last_alert_price")
+    if last is not None and abs(last - best["delivered"].value) < 20.0:
+        return []
+
+    return [
+        Alert(
+            product_name=product["name"],
+            model=product["model"],
+            retailer=best["retailer_name"],
+            delivered=best["delivered"].value,
+            classification=best["classification"],
+            condition=best["condition"] or "NEW",
+            rule_id=-purchase["id"],  # negative id marks a purchase-derived alert
+            rule_name="Price protection",
+            url=best["url"],
+            listing_id=best["id"],
+            stock=best["stock_status"],
+            resolved=True,
+            reason=(
+                f"${drop:.0f} below the ${paid:.0f} you paid on "
+                f"{str(purchase['purchased_at'])[:10]}; protection window closes "
+                f"{purchase['price_protection_until']}"
+            ),
+        )
+    ]
+
+
 def evaluate_all(conn: sqlite3.Connection) -> list[Alert]:
     alerts: list[Alert] = []
     for product in store.list_products(conn):
@@ -136,6 +197,17 @@ def evaluate_all(conn: sqlite3.Connection) -> list[Alert]:
 
 
 def record_fired(conn: sqlite3.Connection, alert: Alert) -> None:
+    """Remember what fired, so the same price does not alert every run.
+
+    A negative rule_id is a purchase-derived price-protection alert, whose suppression
+    state lives on the purchase row rather than on an alert rule.
+    """
+    if alert.rule_id < 0:
+        conn.execute(
+            "UPDATE purchases SET last_alert_price = ? WHERE id = ?",
+            (alert.delivered, -alert.rule_id),
+        )
+        return
     conn.execute(
         "UPDATE alert_rules SET last_fired_at = ?, last_fired_price = ? WHERE id = ?",
         (utcnow(), alert.delivered, alert.rule_id),

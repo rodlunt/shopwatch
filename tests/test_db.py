@@ -52,3 +52,29 @@ def test_backup_and_restore_round_trip(db, tmp_path):
     assert list(db.parent.glob("test.replaced-*.db")), (
         "the database that was replaced is kept, not discarded"
     )
+
+
+def test_config_rereads_the_environment(monkeypatch):
+    """Guards the dataclass-default trap: a plain default freezes at import time.
+
+    The control is the pair: the same call must return both values as the environment
+    changes underneath it.
+    """
+    from app.config import load_config
+
+    monkeypatch.setenv("SHOPWATCH_UNRESOLVED_FREIGHT_PENALTY", "60")
+    monkeypatch.setenv("SHOPWATCH_SCRAPING_ENABLED", "true")
+    assert load_config().unresolved_freight_penalty == 60.0
+    assert load_config().scraping_enabled is True
+
+    monkeypatch.setenv("SHOPWATCH_UNRESOLVED_FREIGHT_PENALTY", "125")
+    monkeypatch.setenv("SHOPWATCH_SCRAPING_ENABLED", "false")
+    assert load_config().unresolved_freight_penalty == 125.0
+    assert load_config().scraping_enabled is False
+
+
+def test_a_junk_numeric_setting_falls_back_instead_of_crashing_the_app(monkeypatch):
+    from app.config import load_config
+
+    monkeypatch.setenv("SHOPWATCH_STALE_AFTER_DAYS", "not-a-number")
+    assert load_config().stale_after_days == 7

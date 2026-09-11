@@ -13,7 +13,7 @@ from .config import load_config
 from .db import utcnow
 
 PRODUCT_FIELDS = [
-    "name", "model", "brand", "category", "generation", "verdict", "notes",
+    "name", "model", "brand", "category", "generation", "verdict", "status", "notes",
     "trigger_price", "excellent_price", "historical_low_price",
     "lowest_known_price", "lowest_known_date", "lowest_known_retailer", "lowest_known_notes",
     "width_mm", "height_mm", "depth_mm", "weight_kg",
@@ -24,6 +24,12 @@ PRODUCT_FIELDS = [
 LISTING_FIELDS = provenance.TRACKED_FIELDS + ["product_id", "retailer_id", "active"]
 
 VERDICTS = ["BUY", "MAYBE", "IGNORE"]
+
+#: Where a product sits in the process, as distinct from the verdict on it.
+#: ACTIVE    - being researched or hunted, alerts armed
+#: PURCHASED - bought; alerts off unless a price-protection window is open
+#: PARKED    - set aside without deleting anything
+STATUSES = ["ACTIVE", "PURCHASED", "PARKED"]
 
 
 def normalise_model(model: str | None) -> str:
@@ -244,13 +250,141 @@ def product_view(
     )
     product["listings"] = listings
     product["category_fields"] = category_fields(conn, product["category"])
+
+    purchase = latest_purchase(conn, product_id)
+    product["purchase"] = purchase
+    if purchase:
+        # Did it get cheaper after you bought it? The whole reason to keep watching.
+        product["moved_since_purchase"] = (
+            round(product["best_delivered"] - purchase["price_paid"], 2)
+            if product["best_delivered"] is not None
+            else None
+        )
+        product["protection_open"] = protection_open(purchase)
+    else:
+        product["moved_since_purchase"] = None
+        product["protection_open"] = False
     return product
 
 
-def list_products(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict[str, Any]]:
-    where = "" if include_archived else " WHERE archived = 0"
-    ids = [r["id"] for r in conn.execute(f"SELECT id FROM products{where} ORDER BY name")]
-    return [p for p in (product_view(conn, pid) for pid in ids) if p]
+# -------------------------------------------------------------------------- purchases
+
+
+def protection_open(purchase: Mapping[str, Any] | None) -> bool:
+    """Is a price-protection window still running? Dates are plain YYYY-MM-DD."""
+    if not purchase or not purchase.get("price_protection_until"):
+        return False
+    return str(purchase["price_protection_until"])[:10] >= utcnow()[:10]
+
+
+def latest_purchase(conn: sqlite3.Connection, product_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM purchases WHERE product_id = ? ORDER BY purchased_at DESC, id DESC LIMIT 1",
+        (product_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def record_purchase(
+    conn: sqlite3.Connection, product_id: int, data: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Record a purchase and move the product to PURCHASED.
+
+    The listing is optional: plenty of things get bought in a shop, over the phone, or
+    from somewhere that was never on the board. `price_paid` is the delivered figure and
+    is the only required number, because it is the only one that settles the question.
+    """
+    price_paid = data.get("price_paid")
+    if price_paid in (None, ""):
+        raise ValueError("price_paid (delivered) is required")
+    try:
+        price_paid = float(price_paid)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"price_paid must be a number, got {price_paid!r}") from exc
+
+    listing_id = data.get("listing_id")
+    retailer_id, retailer_name = None, data.get("retailer_name")
+    if listing_id:
+        row = conn.execute(
+            "SELECT l.retailer_id, r.name FROM listings l JOIN retailers r ON r.id = l.retailer_id"
+            " WHERE l.id = ?",
+            (listing_id,),
+        ).fetchone()
+        if row:
+            retailer_id, retailer_name = row["retailer_id"], row["name"]
+    elif retailer_name:
+        retailer_id = ensure_retailer(conn, retailer_name)["id"]
+
+    cur = conn.execute(
+        "INSERT INTO purchases (product_id, listing_id, retailer_id, retailer_name,"
+        " purchased_at, price_paid, advertised_paid, freight_paid, condition,"
+        " order_reference, warranty_months, price_protection_until, notes, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            product_id, listing_id, retailer_id, retailer_name,
+            data.get("purchased_at") or utcnow()[:10], price_paid,
+            data.get("advertised_paid"), data.get("freight_paid"),
+            (data.get("condition") or "NEW").upper(), data.get("order_reference"),
+            data.get("warranty_months"), data.get("price_protection_until"),
+            data.get("notes"), utcnow(),
+        ),
+    )
+    conn.execute(
+        "UPDATE products SET status = 'PURCHASED', updated_at = ? WHERE id = ?",
+        (utcnow(), product_id),
+    )
+    # The purchase is itself an observation, and the best one: it is a price someone
+    # actually paid rather than one a page advertised.
+    conn.execute(
+        "INSERT INTO price_history (product_id, listing_id, retailer_id, observed_at,"
+        " advertised_price, delivered_price, freight, freight_resolved, condition, source, note)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 'purchase', ?)",
+        (
+            product_id, listing_id, retailer_id, data.get("purchased_at") or utcnow(),
+            data.get("advertised_paid"), price_paid, data.get("freight_paid"),
+            (data.get("condition") or "NEW").upper(),
+            data.get("notes") or "purchase recorded",
+        ),
+    )
+    return dict(conn.execute("SELECT * FROM purchases WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+
+def undo_purchase(conn: sqlite3.Connection, product_id: int) -> bool:
+    """Delete the most recent purchase and return the product to ACTIVE.
+
+    The price_history row is deliberately left behind: it records a price that really was
+    paid, and history is append-only even when the bookkeeping was wrong.
+    """
+    purchase = latest_purchase(conn, product_id)
+    if not purchase:
+        return False
+    conn.execute("DELETE FROM purchases WHERE id = ?", (purchase["id"],))
+    conn.execute(
+        "UPDATE products SET status = 'ACTIVE', updated_at = ? WHERE id = ?",
+        (utcnow(), product_id),
+    )
+    return True
+
+
+STATUS_ORDER = {"ACTIVE": 0, "PURCHASED": 1, "PARKED": 2}
+
+
+def list_products(
+    conn: sqlite3.Connection,
+    include_archived: bool = False,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Products with their matrices assembled. ACTIVE first, so the hunt stays on top."""
+    clauses = [] if include_archived else ["archived = 0"]
+    params: list[Any] = []
+    if status and status.upper() != "ALL":
+        clauses.append("status = ?")
+        params.append(status.upper())
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    ids = [r["id"] for r in conn.execute(f"SELECT id FROM products{where} ORDER BY name", params)]
+    products = [p for p in (product_view(conn, pid) for pid in ids) if p]
+    products.sort(key=lambda p: (STATUS_ORDER.get(p["status"], 9), p["name"].lower()))
+    return products
 
 
 # --------------------------------------------------------------------------- history

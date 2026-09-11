@@ -95,18 +95,29 @@ def jsonable(value: Any) -> Any:
 
 
 @app.get("/", response_class=HTMLResponse)
-def board(request: Request, sort: str = "delivered") -> Any:
+def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> Any:
     with session() as conn:
-        products = [store.product_view(conn, p["id"], sort=sort) for p in
-                    conn.execute("SELECT id FROM products WHERE archived = 0 ORDER BY name")]
+        products = store.list_products(conn, status=None if status == "ALL" else status)
+        for product in products:
+            product["listings"] = store.listings_for_product(conn, product, sort=sort)
+        counts = {
+            row["status"]: row["n"]
+            for row in conn.execute(
+                "SELECT status, COUNT(*) n FROM products WHERE archived = 0 GROUP BY status"
+            )
+        }
+        counts["ALL"] = sum(counts.values())
         retailer_list = store.list_retailers(conn)
     return templates.TemplateResponse(
         request,
         "board.html",
         {
-            "products": [p for p in products if p],
+            "products": products,
             "retailers": retailer_list,
             "sort": sort,
+            "status": status,
+            "counts": counts,
+            "statuses": store.STATUSES,
             "config": load_config(),
             "classes": pricing.CLASS_LABELS,
             "version": __version__,
@@ -138,6 +149,7 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
             "classes": pricing.CLASS_LABELS,
             "conditions": pricing.CONDITIONS,
             "verdicts": store.VERDICTS,
+            "statuses": store.STATUSES,
             "aspects": provenance.VERIFICATION_ASPECTS,
             "tracked_fields": provenance.TRACKED_FIELDS,
             "config": load_config(),
@@ -157,9 +169,9 @@ def healthz() -> dict[str, Any]:
 
 
 @app.get("/api/products")
-def api_products(include_archived: bool = False) -> Any:
+def api_products(include_archived: bool = False, status: str | None = None) -> Any:
     with session() as conn:
-        return jsonable(store.list_products(conn, include_archived))
+        return jsonable(store.list_products(conn, include_archived, status))
 
 
 @app.post("/api/products", status_code=201)
@@ -198,6 +210,45 @@ def api_archive_product(product_id: int) -> Any:
             raise HTTPException(404, "no such product")
         store.update_product(conn, product_id, {"archived": 1})
     return {"archived": product_id}
+
+
+@app.post("/api/products/{product_id}/purchase", status_code=201)
+def api_record_purchase(product_id: int, payload: dict = Body(...)) -> Any:
+    """Mark a product bought. Moves it to PURCHASED and stops its alerts.
+
+    Set `price_protection_until` (YYYY-MM-DD) to keep watching inside a retailer's price
+    guarantee window; leave it off and the watch stops for this product entirely.
+    """
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        try:
+            purchase = store.record_purchase(conn, product_id, payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"purchase": purchase, "product": jsonable(store.product_view(conn, product_id))}
+
+
+@app.delete("/api/products/{product_id}/purchase")
+def api_undo_purchase(product_id: int) -> Any:
+    """Undo a purchase record. The price-history row it created is kept."""
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        if not store.undo_purchase(conn, product_id):
+            raise HTTPException(404, "no purchase recorded for this product")
+        return {"product": jsonable(store.product_view(conn, product_id))}
+
+
+@app.get("/api/purchases")
+def api_purchases() -> Any:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT pu.*, p.name AS product_name, p.model FROM purchases pu"
+            " JOIN products p ON p.id = pu.product_id"
+            " ORDER BY pu.purchased_at DESC, pu.id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 @app.get("/api/products/{product_id}/retailers")
@@ -474,6 +525,7 @@ def api_meta() -> Any:
         "version": __version__,
         "conditions": pricing.CONDITIONS,
         "verdicts": store.VERDICTS,
+        "statuses": store.STATUSES,
         "classifications": pricing.CLASS_LABELS,
         "provenance_states": provenance.STATES,
         "verification_aspects": provenance.VERIFICATION_ASPECTS,

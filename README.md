@@ -287,6 +287,67 @@ it, and `{"record_history": false}` to skip the history row.
 
 ---
 
+## Running several products at once
+
+A product carries two independent fields, deliberately not merged:
+
+| Field | Question it answers | Values |
+|---|---|---|
+| `verdict` | Is this worth buying? | `BUY` / `MAYBE` / `IGNORE` |
+| `status` | Where is it in the process? | `ACTIVE` / `PURCHASED` / `PARKED` |
+
+You can be `verdict=BUY status=ACTIVE` (want it, still hunting) or `verdict=MAYBE
+status=PURCHASED` (bought it anyway). Collapsing the two loses that.
+
+The board defaults to `ACTIVE`, with counts per status in the filter row, and always sorts
+ACTIVE first so a new research target never buries the thing you are actually hunting. Add
+as many products as you like: `POST /api/products` or the **New product** button needs only
+a name and an exact model, and everything else can be filled in later.
+
+`PARKED` is for a product you have not given up on but do not want notifications about. It
+keeps every listing, price and history row, and stops the watch checking it.
+
+## Marking a purchase
+
+**Mark purchased** on the product page, or:
+
+```bash
+curl -X POST http://SERVER-IP:8477/api/products/1/purchase \
+  -H 'Content-Type: application/json' -d '{
+    "listing_id": 1,
+    "price_paid": 894,
+    "advertised_paid": 869,
+    "freight_paid": 25,
+    "order_reference": "CS-12345",
+    "warranty_months": 12,
+    "price_protection_until": "2026-10-11"
+  }'
+```
+
+`price_paid` is the **delivered** figure and is the only required field, because it is the
+only number that settles the question. `listing_id` is optional: plenty of things get
+bought in a shop or from someone who was never on the board, so pass `retailer_name`
+instead and it still records cleanly.
+
+Recording a purchase:
+
+* moves the product to `PURCHASED`, which **stops its alerts** and takes it out of the
+  watch, so a bought item does not keep telling you its price is good;
+* writes a `price_history` row with source `purchase` and `freight_resolved = 1` — a price
+  someone actually paid is the most trustworthy observation there is;
+* keeps everything else. `DELETE /api/products/{id}/purchase` undoes the record and returns
+  the product to `ACTIVE`, deliberately leaving the history row behind: it records a price
+  that really was paid, and history is append-only even when the bookkeeping was wrong.
+
+### Price protection
+
+`price_protection_until` (a `YYYY-MM-DD` date) is optional and off by default. Set it and
+the watch keeps running on that product and raises a **Price protection** alert if a
+*confirmed* delivered price drops below what you paid, which is what you need to claim
+against a retailer's price guarantee. Unconfirmed prices are ignored: sending someone to a
+checkout to discover it was never actually cheaper is worse than saying nothing. Leave the
+field empty and buying simply stops the watch.
+
 ## Importing external research
 
 The import path exists so research done elsewhere can land on the board without hand
@@ -376,7 +437,7 @@ or add an entry to `CATEGORY_PROFILES` in `app/seed.py` and re-run `python -m ap
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest        # 81 tests
+.venv/bin/python -m pytest        # 101 tests
 .venv/bin/python -m ruff check .
 ```
 

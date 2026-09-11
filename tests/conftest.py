@@ -16,6 +16,10 @@ def db(tmp_path, monkeypatch):
     path = tmp_path / "test.db"
     monkeypatch.setenv("SHOPWATCH_DB", str(path))
     monkeypatch.setenv("SHOPWATCH_ALERTS_ENABLED", "false")
+    # The suite must never reach the network or sleep on the politeness delay. Adapters
+    # are stubbed where behaviour is under test; this stops anything else leaking out.
+    monkeypatch.setenv("SHOPWATCH_SCRAPING_ENABLED", "false")
+    monkeypatch.setenv("SHOPWATCH_REQUEST_DELAY", "0")
     monkeypatch.setenv("SHOPWATCH_UNRESOLVED_FREIGHT_PENALTY", "60")
     migrate(path)
     return path
