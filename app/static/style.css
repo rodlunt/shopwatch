@@ -7,6 +7,9 @@
  *
  * No webfont on purpose. This runs on the LAN behind Pi-hole, and a blocked or offline
  * font request is a broken page, so the type stack is whatever the machine already has.
+ * Segoe UI leads the stack by request. It ships with Windows and is absent on Linux and
+ * macOS, where the stack falls through to the platform UI face, so the page is Segoe on
+ * some machines and not on others by design rather than by accident.
  */
 
 :root {
@@ -28,7 +31,7 @@
 
   --manual:     #6b3fa0;
 
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   --gap: 20px;
@@ -125,39 +128,141 @@ main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
 .verdict.close { color: var(--close); }
 .verdict.bought { color: var(--ink-soft); }
 
-/* ------------------------------------------------------------------ ruler */
+/* ------------------------------------------------------------------- axis */
 
-.ruler { padding: 4px 24px 48px; }   /* room for two-line marks; .product clips overflow */
-.ruler-track {
-  position: relative; height: 3px; background: var(--rule); border-radius: 2px;
-  margin: 30px 0 0;
-}
-.ruler-mark { position: absolute; top: -5px; transform: translateX(-50%); }
-.ruler-mark i {
-  display: block; width: 1px; height: 13px; background: var(--muted); margin: 0 auto;
-}
-.ruler-mark span {
-  display: block; margin-top: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap;
-}
-.ruler-mark span b { display: block; font-family: var(--mono); color: var(--ink-soft); font-weight: 500; }
+/* One price axis carrying every contender. Two rules hold it together:
+ *   - nothing is drawn ON the line. Thresholds and what each stretch means sit above
+ *     it, contenders below it, each label tied back with a leader.
+ *   - the dearest retailer is routinely double the cheapest, so at full extent the
+ *     three targets land within a few percent of each other. That is what the zoom is
+ *     for, and why the window readout is always visible: a zoomed axis that does not
+ *     say where it is looking is a lie told with a straight face.
+ */
 
-.ruler-best {
-  position: absolute; top: -34px; transform: translateX(-50%); text-align: center;
-  white-space: nowrap;
+.axis { padding: 2px 24px 14px; }
+
+.axis-head {
+  display: flex; align-items: baseline; gap: 12px;
+  margin: 0 0 6px;
 }
-.ruler-best b {
-  display: block; font-family: var(--mono); font-size: 17px; font-weight: 650;
-  letter-spacing: -0.02em;
+.axis-window {
+  margin: 0; font-family: var(--mono); font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.ruler-best i {
-  display: block; width: 0; height: 0; margin: 3px auto 0;
-  border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-top: 6px solid var(--ink);
+.axis-controls { margin-left: auto; display: flex; gap: 4px; }
+.axis-controls button {
+  padding: 3px 9px; font-size: 12px; line-height: 1.4;
+  border: 1px solid var(--rule); border-radius: 7px;
+  background: var(--surface); color: var(--ink-soft); cursor: pointer;
 }
-.ruler-best.act b { color: var(--act); } .ruler-best.act i { border-top-color: var(--act); }
-.ruler-best.close b { color: var(--close); } .ruler-best.close i { border-top-color: var(--close); }
-.ruler-best.quiet b { color: var(--ink); }
-.ruler-best small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+.axis-controls button:hover { background: var(--rule-soft); color: var(--ink); }
+.axis-controls button:focus-visible { outline: 2px solid var(--close); outline-offset: 1px; }
+
+.axis-plot {
+  position: relative;
+  height: 150px;
+  overflow: hidden;
+  border-radius: 10px;
+  touch-action: none;
+  cursor: grab;
+}
+.axis-plot:active { cursor: grabbing; }
+.axis-plot:focus-visible { outline: 2px solid var(--close); outline-offset: 2px; }
+
+/* --- what each stretch of the axis means --------------------------------- */
+
+.axis-bands { position: absolute; inset: 0 0 auto; top: 34px; height: 34px; }
+.axis-band {
+  position: absolute; top: 0; height: 100%;
+  border-left: 1px solid var(--rule);
+  background: var(--rule-soft);
+}
+.axis-band em {
+  position: absolute; left: 6px; bottom: 4px;
+  font-style: normal; font-size: 10.5px; letter-spacing: .01em;
+  color: var(--muted); white-space: nowrap;
+  opacity: 0; transition: opacity .12s ease;
+}
+/* A band only names itself when it is wide enough to read, so a squeezed band is
+ * silent instead of overprinting its neighbour. JS sets this from measured width. */
+.axis-band.is-roomy em { opacity: 1; }
+
+.axis-band.tone-act   { background: var(--act-bg);   border-left-color: var(--act); }
+.axis-band.tone-act   em { color: var(--act); }
+.axis-band.tone-close { background: var(--close-bg); border-left-color: var(--close); }
+.axis-band.tone-close em { color: var(--close); }
+.axis-band.tone-quiet { background: transparent; }
+
+/* --- thresholds, above the line ------------------------------------------ */
+
+.axis-threshold {
+  position: absolute; top: 2px; transform: translateX(-50%);
+  text-align: center; white-space: nowrap; pointer-events: none;
+}
+.axis-threshold b {
+  display: block; font-family: var(--mono); font-size: 12px; font-weight: 600;
+  color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+.axis-threshold span { display: block; font-size: 10.5px; color: var(--muted); }
+
+/* --- the line itself ------------------------------------------------------ */
+
+.axis-line {
+  position: absolute; left: 0; right: 0; top: 68px;
+  height: 2px; background: var(--rule); border-radius: 2px;
+}
+
+/* --- contenders, below the line ------------------------------------------ */
+
+.axis-point { position: absolute; top: 68px; transform: translateX(-50%); }
+.axis-point i {
+  display: block; width: 9px; height: 9px; margin: -4px auto 0;
+  border-radius: 50%; background: var(--ink-soft);
+  border: 2px solid var(--paper);
+  box-sizing: content-box;
+}
+.axis-point .axis-label {
+  display: block; margin-top: 5px; font-size: 11px; line-height: 1.35;
+  color: var(--muted); white-space: nowrap; text-align: center;
+  transform: translateX(-50%); margin-left: 50%;
+}
+.axis-point .axis-label b {
+  display: block; font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+.axis-point .axis-label em {
+  font-style: normal; color: var(--muted); opacity: .8;
+}
+
+/* The leader is what keeps the text off the line: the label can drop into a lower
+ * lane and still be attached to its dot. Height is set per-lane by JS. */
+.axis-point::before {
+  content: ""; position: absolute; left: 50%; top: 2px;
+  width: 1px; height: var(--leader, 0px);
+  background: var(--rule); transform: translateX(-.5px);
+}
+
+.axis-point.is-open i { background: var(--paper); border-color: var(--muted); box-shadow: 0 0 0 1px var(--muted); }
+.axis-point.is-best i { background: var(--ink); width: 11px; height: 11px; margin-top: -5px; }
+.axis-point.is-best .axis-label b { color: var(--ink); font-size: 13px; }
+
+/* Colour only where it changes what you would do, same rule as the rest of the page. */
+.axis-point.at-act i    { background: var(--act); }
+.axis-point.at-act .axis-label b { color: var(--act); }
+.axis-point.at-close i  { background: var(--close); }
+.axis-point.at-close .axis-label b { color: var(--close); }
+
+.axis-point.is-dim { opacity: .38; }
+
+@media (prefers-reduced-motion: reduce) {
+  .axis-band em { transition: none; }
+}
+
+@media (max-width: 560px) {
+  .axis { padding: 2px 14px 12px; }
+  .axis-plot { height: 168px; }
+  .axis-controls button { padding: 5px 10px; }
+}
 
 /* ------------------------------------------------------------------ contenders */
 
