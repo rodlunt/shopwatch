@@ -161,3 +161,101 @@ def best_listing(rows: list[Mapping[str, Any]], penalty: float = 60.0) -> Mappin
     if not priced:
         return None
     return min(priced, key=lambda r: rank_key(r["delivered"], penalty))
+
+
+# --------------------------------------------------------------------------- scale
+
+
+def threshold_scale(targets: Mapping[str, Any], best: Any = None) -> dict[str, Any] | None:
+    """Positions (0-100) for plotting targets and the current best on one axis.
+
+    The three price targets are the whole point of the product, so they get shown as a
+    scale rather than as three numbers in a row: "how far off are we" is the question,
+    and a distance is easier to see than to calculate. Returns None when there is nothing
+    to plot, so the caller can leave the space empty instead of drawing an empty axis.
+    """
+    marks = []
+    for key, label in (
+        ("historical_low_price", "hist low"),
+        ("excellent_price", "excellent"),
+        ("trigger_price", "trigger"),
+    ):
+        value = _num(targets.get(key))
+        if value is not None:
+            marks.append({"key": key, "label": label, "value": value})
+    if not marks:
+        return None
+
+    best_value = best.value if isinstance(best, Delivered) else _num(best)
+    values = [m["value"] for m in marks] + ([best_value] if best_value is not None else [])
+    lo, hi = min(values), max(values)
+    span = hi - lo
+    # A flat span (single threshold, or best exactly on it) would divide by zero and
+    # stack every mark on one pixel. Give it an arbitrary but proportionate width.
+    pad = span * 0.14 if span else max(hi * 0.06, 1.0)
+    lo, hi = lo - pad, hi + pad
+
+    def pos(value: float) -> float:
+        return round((value - lo) / (hi - lo) * 100, 2)
+
+    for mark in marks:
+        mark["pos"] = pos(mark["value"])
+    return {
+        "marks": marks,
+        "best": {"value": best_value, "pos": pos(best_value)} if best_value is not None else None,
+        "lo": round(lo, 2),
+        "hi": round(hi, 2),
+    }
+
+
+def verdict_line(product: Mapping[str, Any]) -> tuple[str, str]:
+    """The answer, in a sentence, before any data. Returns (tone, sentence).
+
+    Tone is one of quiet / close / act / bought and drives how loudly it is shown. The
+    wording states what to do and why, because "ABOVE TARGET" on a badge does not tell
+    you whether you are ten dollars off or eight hundred.
+    """
+    purchase = product.get("purchase")
+    if product.get("status") == "PURCHASED" and purchase:
+        paid = purchase["price_paid"]
+        moved = product.get("moved_since_purchase")
+        when = str(purchase["purchased_at"])[:10]
+        where = purchase.get("retailer_name") or "an unrecorded seller"
+        if moved is not None and moved < 0 and product.get("protection_open"):
+            return ("act", f"Now ${abs(moved):,.0f} cheaper than the ${paid:,.0f} you paid on "
+                           f"{when}. Price protection is still open.")
+        return ("bought", f"Bought {when} from {where} for ${paid:,.0f} delivered.")
+
+    if product.get("status") == "PARKED":
+        return ("quiet", "Parked. Nothing is being checked or alerted on.")
+
+    listings = product.get("listings") or []
+    if not listings:
+        return ("quiet", "No retailers yet. Add one to start tracking a price.")
+
+    best = product.get("best_listing")
+    if best is None or product.get("best_delivered") is None:
+        return ("quiet", "No prices recorded yet across "
+                         f"{len(listings)} retailer{'s' if len(listings) != 1 else ''}.")
+
+    price = product["best_delivered"]
+    where = product["best_retailer"]
+    rating = product["best_classification"]
+
+    if not product.get("best_resolved"):
+        return ("close", f"Unconfirmed. {where} shows ${price:,.0f} but freight is unknown, "
+                         f"so the real figure could land anywhere above it.")
+
+    trigger = _num(product.get("trigger_price"))
+    if rating == HISTORICAL_LOW:
+        return ("act", f"Buy. ${price:,.0f} delivered from {where} is historical-low territory.")
+    if rating == EXCELLENT:
+        return ("act", f"Buy. ${price:,.0f} delivered from {where}, under your "
+                       f"${_num(product.get('excellent_price')):,.0f} excellent mark.")
+    if rating == TRIGGER_MET:
+        return ("act", f"Worth acting on. ${price:,.0f} delivered from {where}, under your "
+                       f"${trigger:,.0f} trigger.")
+    if trigger is not None:
+        return ("quiet", f"Not yet. Best is ${price:,.0f} from {where}, "
+                         f"${price - trigger:,.0f} over your ${trigger:,.0f} trigger.")
+    return ("quiet", f"Best is ${price:,.0f} delivered from {where}. No trigger set.")

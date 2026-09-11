@@ -1,233 +1,209 @@
 {% extends "base.html" %}
-{% import "_matrix.html" as m with context %}
+{% import "_product.html" as c with context %}
 {% block title %}{{ product.name }} — Shopwatch{% endblock %}
 
 {% block content %}
-<section class="product">
-  <header>
-    <div>
-      <h2>{{ product.name }}</h2>
-      <div class="model">{{ product.model }}{% if product.brand %} · {{ product.brand }}{% endif %}
-        · {{ product.category }}{% if product.generation %} · {{ product.generation }}{% endif %}</div>
-    </div>
-    <span class="badge verdict-{{ product.verdict }}">{{ product.verdict }}</span>
-    <span class="badge status-{{ product.status }}">{{ product.status }}</span>
-    <span class="spacer"></span>
-    <button id="btn-edit-product">Edit product</button>
-    <button id="btn-add-listing">Add retailer</button>
-    <button id="btn-watch-product" data-product="{{ product.id }}">Watch this product</button>
-    {% if product.status == 'PURCHASED' %}
-      <button id="btn-undo-purchase" data-product="{{ product.id }}">Undo purchase</button>
-    {% else %}
-      <button id="btn-mark-purchased" class="primary">Mark purchased</button>
-    {% endif %}
-  </header>
+{% call c.card(product, linked=false) %}
+  <button id="btn-edit-product">Edit</button>
+  <button id="btn-add-listing">Add retailer</button>
+  <button id="btn-watch-product" data-product="{{ product.id }}">Check prices now</button>
+  {% if product.status == 'PURCHASED' %}
+    <button id="btn-undo-purchase" data-product="{{ product.id }}">Undo purchase</button>
+  {% else %}
+    <button id="btn-mark-purchased" class="primary">I bought this</button>
+  {% endif %}
+{% endcall %}
 
-  {% if product.purchase %}
-  <div class="bought {{ 'dropped' if product.moved_since_purchase is not none and product.moved_since_purchase < 0 else '' }}">
-    <span>BOUGHT {{ product.purchase.purchased_at[:10] }}
-      {%- if product.purchase.retailer_name %} from {{ product.purchase.retailer_name }}{% endif %}
-      for <b>{{ product.purchase.price_paid|money }}</b> delivered
-      ({{ product.purchase.condition }})</span>
+{% if product.purchase %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <div class="bought-strip">
+    <span>Bought {{ product.purchase.purchased_at[:10] }}{% if product.purchase.retailer_name %}
+      from {{ product.purchase.retailer_name }}{% endif %} for
+      <b class="num">{{ product.purchase.price_paid|money }}</b> delivered</span>
     {% if product.purchase.order_reference %}<span>Order {{ product.purchase.order_reference }}</span>{% endif %}
-    {% if product.moved_since_purchase is not none %}
-      <span>Best now {{ product.best_delivered|money }},
-        {% if product.moved_since_purchase == 0 %}<b>unchanged since you bought it</b>
-        {%- else %}<b>{{ product.moved_since_purchase|abs|money }}
-          {{ 'CHEAPER than you paid' if product.moved_since_purchase < 0 else 'dearer' }}</b>
-        {%- endif %}</span>
-    {% endif %}
     {% if product.purchase.price_protection_until %}
-      <span>Price protection {{ 'open until' if product.protection_open else 'closed' }}
+      <span>Price protection {{ 'runs to' if product.protection_open else 'closed' }}
         {{ product.purchase.price_protection_until }}</span>
     {% else %}
-      <span class="muted">No price-protection window set, so the watch has stopped for this product.</span>
+      <span class="muted">No price-protection window, so checking has stopped.</span>
     {% endif %}
-    {% if product.purchase.notes %}<span>{{ product.purchase.notes }}</span>{% endif %}
   </div>
-  {% endif %}
-  {{ m.targets(product) }}
-  {% if product.notes or product.fit_notes or product.lowest_known_notes %}
-  <div style="padding:8px 12px;border-bottom:1px solid var(--line-soft)" class="small">
-    {% if product.notes %}<div><b>Notes:</b> {{ product.notes }}</div>{% endif %}
-    {% if product.fit_notes %}<div><b>Fit:</b> {{ product.fit_notes }}</div>{% endif %}
-    {% if product.lowest_known_notes %}<div><b>Historical low:</b> {{ product.lowest_known_notes }}</div>{% endif %}
-  </div>
-  {% endif %}
-  {{ m.matrix(product, sort) }}
-</section>
+</div>
+{% endif %}
 
-<div class="grid">
+{% if product.notes or product.fit_notes %}
+<div class="panel">
+  <h3>Why this one</h3>
+  {% if product.fit_notes %}<p style="margin:0 0 8px;max-width:70ch">{{ product.fit_notes }}</p>{% endif %}
+  {% if product.notes %}<p class="muted small" style="margin:0;max-width:70ch">{{ product.notes }}</p>{% endif %}
+</div>
+{% endif %}
+
+<div class="grid2">
   <div class="panel">
-    <h3>Fit &amp; dimensions</h3>
+    <h3>Will it fit</h3>
+    {% if product.width_mm or product.height_mm or product.depth_mm or product.weight_kg %}
     <dl class="spec">
-      <dt>Width</dt><dd>{{ product.width_mm or '—' }} mm</dd>
-      <dt>Height</dt><dd>{{ product.height_mm or '—' }} mm</dd>
-      <dt>Depth</dt><dd>{{ product.depth_mm or '—' }} mm</dd>
-      <dt>Weight</dt><dd>{{ product.weight_kg or '—' }} kg</dd>
-      <dt>Packaged</dt><dd>{{ product.packaged_width_mm or '—' }} × {{ product.packaged_height_mm or '—' }} × {{ product.packaged_depth_mm or '—' }} mm, {{ product.packaged_weight_kg or '—' }} kg</dd>
+      {% if product.width_mm %}<dt>Width</dt><dd class="num">{{ product.width_mm }} mm</dd>{% endif %}
+      {% if product.height_mm %}<dt>Height</dt><dd class="num">{{ product.height_mm }} mm</dd>{% endif %}
+      {% if product.depth_mm %}<dt>Depth</dt><dd class="num">{{ product.depth_mm }} mm</dd>{% endif %}
+      {% if product.weight_kg %}<dt>Weight</dt><dd class="num">{{ product.weight_kg }} kg</dd>{% endif %}
       {% if product.vesa %}<dt>VESA</dt><dd>{{ product.vesa }}</dd>{% endif %}
-      {% if product.mounting_notes %}<dt>Mounting</dt><dd>{{ product.mounting_notes }}</dd>{% endif %}
     </dl>
+    {% else %}<p class="muted small" style="margin:0">No dimensions recorded. Add them in Edit.</p>{% endif %}
     {% if product.components %}
-      <h3 style="margin-top:10px">Components</h3>
-      <dl class="spec">
-      {% for key, value in product.components.items() %}
-        <dt>{{ key.replace('_',' ') }}</dt>
-        <dd>{% if value is mapping %}{% for k, v in value.items() %}{{ k }}: {{ v }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}{{ value }}{% endif %}</dd>
-      {% endfor %}
+    <details class="more" style="margin-top:10px">
+      <summary>Components</summary>
+      <dl class="spec" style="padding-top:8px">
+        {% for key, value in product.components.items() %}
+          <dt>{{ key.replace('_',' ') }}</dt>
+          <dd class="small">{% if value is mapping %}{% for k, v in value.items() %}{{ k }}: {{ v }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}{{ value }}{% endif %}</dd>
+        {% endfor %}
       </dl>
+    </details>
     {% endif %}
   </div>
 
   <div class="panel">
-    <h3>Specifications ({{ product.category }})</h3>
+    <h3>Specifications</h3>
     {% if product.specs %}
     <dl class="spec">
       {% for key, value in product.specs.items() %}
-        <dt>{{ key.replace('_',' ') }}</dt><dd>{{ value }}</dd>
+        <dt>{{ key.replace('_',' ') }}</dt>
+        <dd>{% if value is sameas true %}Yes{% elif value is sameas false %}No{% else %}{{ value }}{% endif %}</dd>
       {% endfor %}
     </dl>
-    {% else %}<p class="muted small">No category specifications recorded.</p>{% endif %}
-    {% if product.category_fields %}
-      <p class="small muted" style="margin-top:8px">Available fields for this category:
-        {% for f in product.category_fields %}<code>{{ f.field_key }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
-    {% endif %}
+    {% else %}<p class="muted small" style="margin:0">Nothing recorded for this category yet.</p>{% endif %}
   </div>
 
   <div class="panel">
-    <h3>Alert rules</h3>
-    <table class="plain">
-      <tr><th>Rule</th><th>Conditions</th><th class="right">At or under</th><th>Last fired</th></tr>
-      {% for r in rules %}
-      <tr>
-        <td>{{ r.name }}{% if not r.enabled %} <span class="badge none">OFF</span>{% endif %}</td>
-        <td class="small muted">{{ r.conditions }}{% if r.require_resolved %} · freight confirmed{% endif %}{% if r.require_complete %} · complete system{% endif %}</td>
-        <td class="right">{{ r.max_delivered|money }}</td>
-        <td class="small muted">{{ r.last_fired_at|dt }}{% if r.last_fired_price %} @ {{ r.last_fired_price|money }}{% endif %}</td>
-      </tr>
-      {% else %}<tr><td colspan="4" class="muted">No rules.</td></tr>{% endfor %}
-    </table>
-    <p class="small"><button id="btn-dry-alerts">What would fire now?</button></p>
+    <h3>When you will be told</h3>
+    {% for r in rules %}
+      <p style="margin:0 0 10px">
+        <b>{{ r.name }}</b>{% if not r.enabled %} <span class="tag">off</span>{% endif %}<br>
+        <span class="muted small">At or under <b class="num">{{ r.max_delivered|money }}</b> delivered,
+        {{ r.conditions|lower|replace(',', ', ')|replace('_',' ') }}{% if r.require_resolved %}, freight confirmed{% endif %}{% if r.require_complete %}, complete system{% endif %}.
+        {% if r.last_fired_at %}Last sent {{ r.last_fired_at|dt }}.{% else %}Never sent.{% endif %}</span>
+      </p>
+    {% else %}<p class="muted small" style="margin:0">No alert rules on this product.</p>{% endfor %}
+    <button id="btn-dry-alerts">What would be sent right now?</button>
   </div>
 </div>
 
 <div class="panel">
-  <h3>Price history ({{ history|length }} observations)</h3>
-  <div class="matrix-wrap">
-  <table class="plain">
-    <tr><th>Observed</th><th>Retailer</th><th class="right">Advertised</th><th class="right">Freight</th>
-        <th class="right">Delivered</th><th>Stock</th><th>Condition</th><th>Source</th><th>Note</th></tr>
-    {% for h in history %}
-    <tr>
-      <td class="small">{{ h.observed_at|dt }}</td>
-      <td>{{ h.retailer_name or '—' }}</td>
-      <td class="right">{{ h.advertised_price|money }}</td>
-      <td class="right">{% if h.freight_resolved %}{{ h.freight|money }}{% else %}<span class="unresolved">unresolved</span>{% endif %}</td>
-      <td class="right"><b>{{ h.delivered_price|money }}</b></td>
-      <td class="small">{{ h.stock_status or '' }}</td>
-      <td class="small">{{ h.condition or '' }}</td>
-      <td class="small muted">{{ h.source or '' }}</td>
-      <td class="small muted">{{ h.note or '' }}</td>
-    </tr>
-    {% else %}<tr><td colspan="9" class="muted">No history recorded yet.</td></tr>{% endfor %}
-  </table>
-  </div>
+  <h3>Price history</h3>
+  {% if history %}
+  <details class="more" open>
+    <summary>{{ history|length }} observation{{ 's' if history|length != 1 }}</summary>
+    <div class="scroll-x" style="margin-top:10px">
+    <table class="plain">
+      <tr><th>When</th><th>Retailer</th><th class="r">Advertised</th><th class="r">Freight</th>
+          <th class="r">Delivered</th><th>Condition</th><th>Source</th></tr>
+      {% for h in history %}
+      <tr>
+        <td class="muted">{{ h.observed_at|dt }}</td>
+        <td>{{ h.retailer_name or '—' }}</td>
+        <td class="r num">{{ h.advertised_price|money }}</td>
+        <td class="r num">{% if h.freight_resolved %}{{ h.freight|money }}{% else %}<span class="unresolved">unknown</span>{% endif %}</td>
+        <td class="r num"><b>{{ h.delivered_price|money }}</b></td>
+        <td class="small">{{ (h.condition or '')|replace('_',' ')|capitalize }}</td>
+        <td class="small muted">{{ h.source or '' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+  </details>
+  {% else %}<p class="muted small" style="margin:0">Nothing recorded yet. Prices land here as they are checked or imported.</p>{% endif %}
 </div>
 
-<dialog id="listing-dialog">
-  <header>Add retailer listing</header>
-  <div class="body">
-    <div class="form-grid">
-      <label>Retailer <input id="al-retailer" list="retailer-names" placeholder="Bing Lee"></label>
-      <label>Product URL <input id="al-url" placeholder="https://..."></label>
-      <label>Model on page <input id="al-model" value="{{ product.model }}"></label>
-      <label>Advertised price <input id="al-price" type="number" step="0.01"></label>
-      <label>Freight (blank = unresolved) <input id="al-freight" type="number" step="0.01"></label>
-      <label>Cashback <input id="al-cashback" type="number" step="0.01"></label>
-      <label>Condition <select id="al-condition">{% for c in conditions %}<option>{{ c }}</option>{% endfor %}</select></label>
-      <label>Stock <input id="al-stock"></label>
-      <label>Pickup <input id="al-pickup"></label>
-      <label>Warranty <input id="al-warranty"></label>
-      <label class="wide">Included components <input id="al-contents"></label>
-      <label class="wide">Notes <input id="al-notes"></label>
-    </div>
-  </div>
-  <footer><button data-close>Cancel</button><button class="primary" id="al-save">Add listing</button></footer>
-</dialog>
-<datalist id="retailer-names">{% for r in retailers %}<option>{{ r.name }}</option>{% endfor %}</datalist>
-
 <dialog id="purchase-dialog">
-  <header>Mark purchased</header>
+  <header>Record what you paid</header>
   <div class="body">
-    <p class="small muted">
-      Records what you actually paid and moves this product to PURCHASED, which stops its
-      alerts and takes it out of the watch. The price history is kept.
-    </p>
     <div class="form-grid">
       <label>Bought from
         <select id="pu-listing">
-          <option value="">(not on the board / in store)</option>
+          <option value="">Somewhere not on this list</option>
           {% for l in product.listings %}
             <option value="{{ l.id }}" data-delivered="{{ l.delivered_price if l.delivered_price is not none else '' }}"
                     data-advertised="{{ l.advertised_price if l.advertised_price is not none else '' }}"
                     data-freight="{{ l.freight if l.freight is not none else '' }}"
                     data-condition="{{ l.condition }}">{{ l.retailer_name }}
-              {%- if l.delivered_price is not none %} — {{ l.delivered_price|money }} delivered{% endif %}</option>
+              {%- if l.delivered_price is not none %} — {{ l.delivered_price|money }}{% endif %}</option>
           {% endfor %}
         </select>
       </label>
-      <label>Retailer if not listed <input id="pu-retailer" placeholder="e.g. a shop, Gumtree, a mate"></label>
-      <label>Delivered price paid * <input id="pu-price" type="number" step="0.01" required></label>
-      <label>Headline price <input id="pu-advertised" type="number" step="0.01"></label>
-      <label>Freight paid <input id="pu-freight" type="number" step="0.01"></label>
+      <label>Or type the seller <input id="pu-retailer" placeholder="a shop, Marketplace, a mate"></label>
+      <label>Total you paid <input id="pu-price" type="number" step="0.01" required><small>Delivered, including freight</small></label>
+      <label>Ticket price <input id="pu-advertised" type="number" step="0.01"></label>
+      <label>Freight <input id="pu-freight" type="number" step="0.01"></label>
       <label>Date <input id="pu-date" type="date"></label>
       <label>Condition <select id="pu-condition">{% for c in conditions %}<option>{{ c }}</option>{% endfor %}</select></label>
-      <label>Order reference <input id="pu-order"></label>
-      <label>Warranty (months) <input id="pu-warranty" type="number" step="1"></label>
-      <label>Price protection until
+      <label>Order number <input id="pu-order"></label>
+      <label>Warranty, months <input id="pu-warranty" type="number" step="1"></label>
+      <label>Keep watching until
         <input id="pu-protection" type="date">
-        <span class="small muted">Optional. Set it and the watch keeps running on this
-          product and alerts if it drops below what you paid.</span>
+        <small>Optional. Tells you if it drops below what you paid, for a price guarantee.</small>
       </label>
       <label class="wide">Notes <input id="pu-notes"></label>
     </div>
   </div>
-  <footer><button data-close>Cancel</button><button class="primary" id="pu-save">Record purchase</button></footer>
+  <footer><button data-close>Cancel</button><button class="primary" id="pu-save">Save purchase</button></footer>
 </dialog>
 
-<dialog id="product-dialog">
-  <header>Edit product</header>
+<dialog id="listing-dialog">
+  <header>Add a retailer</header>
   <div class="body">
     <div class="form-grid">
-      <label>Name <input id="ep-name" value="{{ product.name }}"></label>
+      <label>Retailer <input id="al-retailer" list="retailer-names" placeholder="Bing Lee"></label>
+      <label>Page address <input id="al-url" placeholder="https://..."></label>
+      <label>Model on the page <input id="al-model" value="{{ product.model }}"></label>
+      <label>Advertised price <input id="al-price" type="number" step="0.01"></label>
+      <label>Freight <input id="al-freight" type="number" step="0.01"><small>Leave blank if you do not know it yet</small></label>
+      <label>Cashback <input id="al-cashback" type="number" step="0.01"></label>
+      <label>Condition <select id="al-condition">{% for c in conditions %}<option>{{ c }}</option>{% endfor %}</select></label>
+      <label>Stock <input id="al-stock"></label>
+      <label>Pickup <input id="al-pickup"></label>
+      <label>Warranty <input id="al-warranty"></label>
+      <label class="wide">What is in the box <input id="al-contents"></label>
+      <label class="wide">Notes <input id="al-notes"></label>
+    </div>
+  </div>
+  <footer><button data-close>Cancel</button><button class="primary" id="al-save">Add retailer</button></footer>
+</dialog>
+<datalist id="retailer-names">{% for r in retailers %}<option>{{ r.name }}</option>{% endfor %}</datalist>
+
+<dialog id="product-dialog">
+  <header>Edit {{ product.name }}</header>
+  <div class="body">
+    <div class="form-grid">
+      <label>What is it <input id="ep-name" value="{{ product.name }}"></label>
       <label>Exact model <input id="ep-model" value="{{ product.model }}"></label>
       <label>Brand <input id="ep-brand" value="{{ product.brand or '' }}"></label>
       <label>Category <input id="ep-category" value="{{ product.category }}" list="cat-list"></label>
       <label>Generation <input id="ep-generation" value="{{ product.generation or '' }}"></label>
-      <label>Verdict <select id="ep-verdict">{% for v in verdicts %}<option {% if v == product.verdict %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
-      <label>Status <select id="ep-status">{% for st in statuses %}<option {% if st == product.status %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
-      <label>Trigger (delivered) <input id="ep-trigger_price" type="number" step="0.01" value="{{ product.trigger_price or '' }}"></label>
-      <label>Excellent (delivered) <input id="ep-excellent_price" type="number" step="0.01" value="{{ product.excellent_price or '' }}"></label>
-      <label>Hist-low territory <input id="ep-historical_low_price" type="number" step="0.01" value="{{ product.historical_low_price or '' }}"></label>
-      <label>Lowest known price <input id="ep-lowest_known_price" type="number" step="0.01" value="{{ product.lowest_known_price or '' }}"></label>
-      <label>Lowest known date <input id="ep-lowest_known_date" value="{{ product.lowest_known_date or '' }}" placeholder="YYYY-MM-DD"></label>
-      <label>Lowest known retailer <input id="ep-lowest_known_retailer" value="{{ product.lowest_known_retailer or '' }}"></label>
+      <label>Worth buying? <select id="ep-verdict">{% for v in verdicts %}<option {% if v == product.verdict %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+      <label>State <select id="ep-status">{% for st in statuses %}<option {% if st == product.status %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
+      <label>Buy at or under <input id="ep-trigger_price" type="number" step="0.01" value="{{ product.trigger_price or '' }}"><small>Delivered</small></label>
+      <label>A good price is <input id="ep-excellent_price" type="number" step="0.01" value="{{ product.excellent_price or '' }}"></label>
+      <label>Historical low territory <input id="ep-historical_low_price" type="number" step="0.01" value="{{ product.historical_low_price or '' }}"></label>
+      <label>Best it has ever been <input id="ep-lowest_known_price" type="number" step="0.01" value="{{ product.lowest_known_price or '' }}"></label>
+      <label>When <input id="ep-lowest_known_date" value="{{ product.lowest_known_date or '' }}" placeholder="YYYY-MM-DD"></label>
+      <label>Where <input id="ep-lowest_known_retailer" value="{{ product.lowest_known_retailer or '' }}"></label>
       <label>Width mm <input id="ep-width_mm" type="number" step="0.1" value="{{ product.width_mm or '' }}"></label>
       <label>Height mm <input id="ep-height_mm" type="number" step="0.1" value="{{ product.height_mm or '' }}"></label>
       <label>Depth mm <input id="ep-depth_mm" type="number" step="0.1" value="{{ product.depth_mm or '' }}"></label>
       <label>Weight kg <input id="ep-weight_kg" type="number" step="0.01" value="{{ product.weight_kg or '' }}"></label>
       <label>VESA <input id="ep-vesa" value="{{ product.vesa or '' }}"></label>
-      <label class="wide">Fit notes <input id="ep-fit_notes" value="{{ product.fit_notes or '' }}"></label>
-      <label class="wide">Historical-low notes <input id="ep-lowest_known_notes" value="{{ product.lowest_known_notes or '' }}"></label>
+      <label class="wide">Why this one <input id="ep-fit_notes" value="{{ product.fit_notes or '' }}"></label>
       <label class="wide">Notes <input id="ep-notes" value="{{ product.notes or '' }}"></label>
-      <label class="wide">Category specifications (JSON)
+      <label class="wide">Note on the historical low <input id="ep-lowest_known_notes" value="{{ product.lowest_known_notes or '' }}"></label>
+      <label class="wide">Specifications, JSON
         <textarea id="ep-specs" style="min-height:90px">{{ product.specs|tojson }}</textarea></label>
-      <label class="wide">Components (JSON)
+      <label class="wide">Components, JSON
         <textarea id="ep-components" style="min-height:70px">{{ product.components|tojson }}</textarea></label>
     </div>
   </div>
-  <footer><button data-close>Cancel</button><button class="primary" id="ep-save">Save product</button></footer>
+  <footer><button data-close>Cancel</button><button class="primary" id="ep-save">Save</button></footer>
 </dialog>
 <datalist id="cat-list">{% for c in categories %}<option>{{ c }}</option>{% endfor %}</datalist>
 {% endblock %}

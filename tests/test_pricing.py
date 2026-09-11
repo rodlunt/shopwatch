@@ -71,3 +71,98 @@ def test_unpriced_listings_sort_last():
 def test_difference_from_historical_low():
     assert pricing.difference_from_low(pricing.delivered_price(869, 0), 800) == 69.0
     assert pricing.difference_from_low(pricing.delivered_price(869, 0), None) is None
+
+
+# --------------------------------------------------------------- the headline sentence
+
+BOARD = {
+    "name": "Bar", "model": "M-1", "status": "ACTIVE",
+    "trigger_price": 900, "excellent_price": 850, "historical_low_price": 800,
+}
+
+
+def product(**over):
+    base = dict(BOARD, listings=[{}], best_listing={"id": 1}, best_delivered=None,
+                best_retailer="Crowdshop", best_resolved=True,
+                best_classification=pricing.ABOVE_TARGET)
+    base.update(over)
+    return base
+
+
+def test_verdict_says_what_to_do_and_how_far_off():
+    tone, line = pricing.verdict_line(product(best_delivered=990, best_classification=pricing.ABOVE_TARGET))
+    assert tone == "quiet"
+    assert "$90 over your $900 trigger" in line, line
+
+
+def test_verdict_calls_a_crossed_trigger_worth_acting_on():
+    tone, line = pricing.verdict_line(product(best_delivered=894, best_classification=pricing.TRIGGER_MET))
+    assert tone == "act"
+    assert line.startswith("Worth acting on.")
+
+
+def test_verdict_says_buy_at_a_historical_low():
+    tone, line = pricing.verdict_line(product(best_delivered=790, best_classification=pricing.HISTORICAL_LOW))
+    assert tone == "act" and "historical-low" in line
+
+
+def test_verdict_refuses_to_celebrate_an_unconfirmed_price():
+    tone, line = pricing.verdict_line(
+        product(best_delivered=869, best_resolved=False, best_classification=pricing.UNRESOLVED))
+    assert tone == "close"
+    assert "freight is unknown" in line
+
+
+def test_verdict_for_an_empty_or_priceless_board():
+    assert pricing.verdict_line(product(listings=[]))[1].startswith("No retailers yet")
+    assert "No prices recorded" in pricing.verdict_line(product(best_listing=None))[1]
+
+
+def test_verdict_for_something_already_bought():
+    tone, line = pricing.verdict_line(product(
+        status="PURCHASED",
+        purchase={"price_paid": 629, "purchased_at": "2026-09-11", "retailer_name": "Sydney Tools"},
+        moved_since_purchase=0, protection_open=False))
+    assert tone == "bought" and "$629" in line
+
+
+def test_verdict_shouts_when_a_bought_item_drops_inside_protection():
+    tone, line = pricing.verdict_line(product(
+        status="PURCHASED",
+        purchase={"price_paid": 629, "purchased_at": "2026-09-11", "retailer_name": "Sydney Tools"},
+        moved_since_purchase=-80, protection_open=True))
+    assert tone == "act"
+    assert "$80 cheaper" in line and "protection" in line.lower()
+
+
+# ------------------------------------------------------------------------- the ruler
+
+
+def test_scale_places_marks_in_order_and_within_bounds():
+    scale = pricing.threshold_scale(BOARD, 869)
+    assert [m["key"] for m in scale["marks"]] == [
+        "historical_low_price", "excellent_price", "trigger_price"]
+    positions = [m["pos"] for m in scale["marks"]]
+    assert positions == sorted(positions)
+    assert all(0 <= p <= 100 for p in positions + [scale["best"]["pos"]])
+
+
+def test_a_cheaper_best_sits_left_of_a_dearer_one():
+    cheap = pricing.threshold_scale(BOARD, 820)["best"]["pos"]
+    dear = pricing.threshold_scale(BOARD, 890)["best"]["pos"]
+    assert cheap < dear
+
+
+def test_scale_without_a_price_still_plots_the_targets():
+    scale = pricing.threshold_scale(BOARD, None)
+    assert scale["best"] is None and len(scale["marks"]) == 3
+
+
+def test_no_targets_means_no_axis_rather_than_an_empty_one():
+    assert pricing.threshold_scale({}, 500) is None
+
+
+def test_a_single_target_does_not_divide_by_zero():
+    scale = pricing.threshold_scale({"trigger_price": 900}, 900)
+    assert 0 <= scale["marks"][0]["pos"] <= 100
+    assert 0 <= scale["best"]["pos"] <= 100

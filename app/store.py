@@ -251,6 +251,8 @@ def product_view(
     product["listings"] = listings
     product["category_fields"] = category_fields(conn, product["category"])
 
+    product["scale"] = pricing.threshold_scale(product, product["best_delivered"])
+
     purchase = latest_purchase(conn, product_id)
     product["purchase"] = purchase
     if purchase:
@@ -264,6 +266,17 @@ def product_view(
     else:
         product["moved_since_purchase"] = None
         product["protection_open"] = False
+
+    product["tone"], product["verdict_line"] = pricing.verdict_line(product)
+    # Contenders are what you choose between; the rest are folded away by default.
+    product["contenders"] = [
+        listing for listing in listings
+        if listing["classification"] != pricing.ABOVE_TARGET
+    ][:4]
+    if not product["contenders"]:
+        product["contenders"] = listings[:2]
+    contender_ids = {listing["id"] for listing in product["contenders"]}
+    product["also_ran"] = [listing for listing in listings if listing["id"] not in contender_ids]
     return product
 
 
