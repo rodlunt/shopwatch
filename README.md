@@ -473,9 +473,15 @@ That was a deliberate decision, made in #7, not a default inherited by accident.
 
 ### Scheduling the watch
 
-There is no timer yet, deliberately: three of the five seeded retailers cannot be scraped
-at all (see **Retailer scraping limitations**), so a schedule would currently be a no-op
-that looks like coverage. Add one once at least one adapter reliably returns a price:
+There is no timer yet. The reason recorded here used to be "three of the five seeded
+retailers cannot be scraped at all, so a schedule would be a no-op that looks like
+coverage". That was measured before two adapters had ever been run, and it is wrong:
+JB Hi-Fi and The Good Guys both return a price, stock status and condition from a plain
+fetch with no warnings. A schedule would refresh two real listings, which is not a no-op.
+
+What a run would still produce is two failures every time, Harvey Norman blocked and
+Appliance Central parsing nothing. Those are recorded as errors against the run rather
+than alerted on, so they are visible without being noisy. Run it by hand with:
 
 ```bash
 ssh root@100.115.75.8 'docker compose -f /srv/prod/shopwatch/docker-compose.yml \
@@ -793,13 +799,25 @@ Probed 2026-09-11 from an Australian residential IP: first with the adapters' ow
 `fetch()`, then the same products read in a signed-in desktop browser. Re-run rather than
 trust this table; it is a snapshot.
 
-| Retailer | Plain adapter | Browser | What the page gives up |
-|---|---|---|---|
-| Crowdshop | 200, 273 KB | n/a | price, stock; freight needs checkout |
-| Harvey Norman | **Incapsula challenge** (HTTP 200) | reads fine | price, model, warranty, GTIN; no freight or stock |
-| JB Hi-Fi | untested URL | reads fine | price, model, SKU/PLU, store stock, C&C; **no freight figure** |
-| The Good Guys | untested URL | reads fine | price, model, **freight $28 quoted on-page**, C&C, in-store stock |
-| Appliance Central | **403** | reads fine | price, model, checkout coupon, stock, warranty; freight conditional |
+Re-probed 2026-09-11 from the container, against the live listing URLs, after the
+retailer-SKU fix. This replaces an earlier table that recorded two adapters as
+"untested URL" and Appliance Central as a 403; both were wrong by the time anyone
+acted on them.
+
+| Retailer | Adapter | URL on file | Plain fetch | Yields a price |
+|---|---|---|---|---|
+| **JB Hi-Fi** | yes | yes | 886 KB | **$1,699, In Stock, no warnings** |
+| **The Good Guys** | yes | yes | 1220 KB | **$1,699, In Stock, no warnings** |
+| Appliance Central | yes | yes | 100 KB, **not a 403** | no, parses nothing |
+| Harvey Norman | yes | yes | **Incapsula interstitial** | no, raised as FetchError |
+| Crowdshop | yes | **none** | n/a | unreachable: the watcher needs a URL |
+| Appliances Online | **none** | yes | n/a | no adapter written |
+| Bing Lee, Betta | none | none | n/a | search-page prices only |
+
+**Two of the four watchable listings return a price.** "Watchable" means an adapter,
+a URL and an active listing, which is what `price_watch` requires. Crowdshop has an
+adapter and no URL, so it is not reachable however well the adapter works, and
+Appliances Online has the opposite problem.
 
 **Harvey Norman is the instructive one.** It returns HTTP 200 with a "Pardon Our
 Interruption" interstitial, so a naive adapter parses it, finds no price, and reports
