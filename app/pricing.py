@@ -313,6 +313,32 @@ def _bands(
     return bands
 
 
+def suggest_price_target(
+    listings: Iterable[Mapping[str, Any]], floor: int = 2
+) -> dict[str, Any] | None:
+    """A same-day price-target suggestion from whatever real listings a wizard found.
+
+    Refuses below `floor` priced listings rather than printing a number from one data
+    point dressed up as a target - the wizard's "work it out for me" step needs to say
+    "not enough data yet" instead. When it does return a suggestion, the caller must
+    render it with wording distinct from CLASS_LABELS (never "historical low territory"
+    or "excellent"): those are earned through real tracking over time, and a same-day
+    guess wearing the same words would be indistinguishable from an earned one.
+    """
+    prices = sorted(
+        v for v in (_num(listing.get("delivered_price")) for listing in listings)
+        if v is not None
+    )
+    if len(prices) < floor:
+        return None
+    return {
+        "suggested_trigger": prices[0],
+        "based_on_count": len(prices),
+        "note": f"estimate, from {len(prices)} listing{'s' if len(prices) != 1 else ''} - "
+                "not an earned historical low",
+    }
+
+
 def verdict_line(product: Mapping[str, Any]) -> tuple[str, str]:
     """The answer, in a sentence, before any data. Returns (tone, sentence).
 

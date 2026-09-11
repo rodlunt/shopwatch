@@ -30,21 +30,78 @@
 </div>
 {% endfor %}
 
-<dialog id="new-product-dialog">
-  <header>Track something new</header>
+<dialog id="wizard-dialog">
+  <header>
+    Track something new
+    <span class="wizard-step-count" id="wiz-step-count"></span>
+  </header>
   <div class="body">
-    <div class="form-grid">
-      <label>What is it <input id="np-name" placeholder="Samsung Q-Series soundbar"></label>
-      <label>Exact model <input id="np-model" placeholder="HW-Q930H/XY"><small>Used to match imports, so get it exact</small></label>
-      <label>Brand <input id="np-brand"></label>
-      <label>Category <input id="np-category" value="general" list="np-cats"></label>
-      <label>Buy at or under <input id="np-trigger" type="number" step="1"><small>Delivered, not the ticket price</small></label>
-      <label>A good price is <input id="np-excellent" type="number" step="1"></label>
-      <label>Best it has ever been <input id="np-histlow" type="number" step="1"></label>
-      <label>Worth buying? <select id="np-verdict"><option>MAYBE</option><option>BUY</option><option>IGNORE</option></select></label>
+
+    <div class="wizard-step" data-step="basics">
+      <p class="wizard-tier">Required</p>
+      <div class="form-grid">
+        <label>What is it <input id="wiz-name" placeholder="Samsung Q-Series soundbar"></label>
+        <label>Exact model <input id="wiz-model" placeholder="HW-Q930H/XY">
+          <small>Used to match imports, so get it exact</small></label>
+      </div>
+      <p id="wiz-model-warning" class="wizard-warning" hidden></p>
     </div>
+
+    <div class="wizard-step" data-step="optional" hidden>
+      <p class="wizard-tier">Optional - fill in what you know, skip the rest</p>
+      <div class="form-grid">
+        <label>Brand <input id="wiz-brand"></label>
+        <label>Category <input id="wiz-category" value="general" list="wiz-cats"></label>
+        <label>Worth buying?
+          <select id="wiz-verdict"><option>MAYBE</option><option>BUY</option><option>IGNORE</option></select>
+        </label>
+        <label class="wide">Notes <textarea id="wiz-notes" rows="2"></textarea></label>
+      </div>
+    </div>
+
+    <div class="wizard-step" data-step="price" hidden>
+      <p class="wizard-tier">Optional - do you have a price target?</p>
+      <div class="form-grid">
+        <label>Buy at or under <input id="wiz-trigger" type="number" step="1">
+          <small>Delivered, not the ticket price</small></label>
+        <label>A good price is <input id="wiz-excellent" type="number" step="1"></label>
+        <label>Best it has ever been <input id="wiz-histlow" type="number" step="1"></label>
+      </div>
+      <p class="muted">No idea yet? Leave these blank. Once the research step below finds
+        real prices, I can suggest one from what it actually found - never from a single
+        listing dressed up as a target.</p>
+    </div>
+
+    <div class="wizard-step" data-step="retailers" hidden>
+      <p class="wizard-tier">Which retailers should the research pass check?</p>
+      <div id="wiz-retailer-list" class="wizard-retailer-list"></div>
+      <div class="form-grid">
+        <label class="wide">Add another retailer <input id="wiz-new-retailer" placeholder="Retailer name"></label>
+      </div>
+    </div>
+
+    <div class="wizard-step" data-step="go" hidden>
+      <p id="wiz-cost-notice" class="wizard-warning"></p>
+    </div>
+
+    <div class="wizard-step" data-step="running" hidden>
+      <p>Researching. This can take a few minutes per retailer.</p>
+      <ul id="wiz-progress" class="wizard-progress"></ul>
+    </div>
+
+    <div class="wizard-step" data-step="done" hidden>
+      <p id="wiz-done-summary"></p>
+      <ul id="wiz-results" class="wizard-progress"></ul>
+      <div id="wiz-suggestion" class="wizard-suggestion" hidden></div>
+    </div>
+
   </div>
-  <footer><button data-close>Cancel</button><button class="primary" id="np-save">Start tracking</button></footer>
+  <footer>
+    <button data-close id="wiz-cancel">Cancel</button>
+    <button id="wiz-back" hidden>Back</button>
+    <button class="primary" id="wiz-next">Next</button>
+    <button class="primary" id="wiz-finish" hidden>Done</button>
+  </footer>
 </dialog>
-<datalist id="np-cats"><option>soundbar</option><option>tv</option><option>power_tool</option><option>appliance</option><option>general</option></datalist>
+<datalist id="wiz-cats"><option>soundbar</option><option>tv</option><option>power_tool</option><option>appliance</option><option>general</option></datalist>
 {% endblock %}

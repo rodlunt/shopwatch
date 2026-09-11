@@ -417,19 +417,214 @@ wire('btn-dry-alerts', async () => {
 
 /* ------------------------------------------------------------------ dialogs */
 
-wire('btn-new-product', () => document.getElementById('new-product-dialog').showModal());
-wire('np-save', async () => {
-  const value = id => document.getElementById(id).value.trim();
-  const number = id => value(id) === '' ? null : Number(value(id));
+/* --------------------------------------------------------------- product wizard
+ *
+ * A genuine multi-step wizard, not a grouped single form: the tiers (required,
+ * optional, price target, retailers, the costed research step) are each their own
+ * screen. One <dialog> whose body swaps between named .wizard-step blocks, since this
+ * app has no separate stepper component and one dialog element is the existing idiom.
+ */
+
+const WIZ_STEPS = ['basics', 'optional', 'price', 'retailers', 'go', 'running', 'done'];
+let wiz = { index: 0, productId: null, retailers: [], selected: new Set(), pollTimer: null };
+
+function wizVal(id) { return document.getElementById(id).value.trim(); }
+function wizNum(id) { const v = wizVal(id); return v === '' ? null : Number(v); }
+
+function wizRender() {
+  const step = WIZ_STEPS[wiz.index];
+  for (const node of document.querySelectorAll('.wizard-step')) {
+    node.hidden = node.dataset.step !== step;
+  }
+  document.getElementById('wiz-step-count').textContent =
+    ['running', 'done'].includes(step) ? '' : `Step ${wiz.index + 1} of 5`;
+  document.getElementById('wiz-back').hidden = wiz.index === 0 || ['running', 'done'].includes(step);
+  document.getElementById('wiz-next').hidden = ['running', 'done'].includes(step);
+  document.getElementById('wiz-next').textContent = step === 'go' ? "Let's go" : 'Next';
+  document.getElementById('wiz-finish').hidden = step !== 'done';
+  document.getElementById('wiz-cancel').textContent = step === 'done' ? 'Close' : 'Cancel';
+}
+
+async function wizLoadRetailers() {
+  wiz.retailers = await api('/api/retailers');
+  const list = document.getElementById('wiz-retailer-list');
+  list.replaceChildren();
+  for (const r of wiz.retailers) {
+    const row = el('label', '', 'wizard-retailer-row');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = r.id;
+    box.addEventListener('change', () => {
+      if (box.checked) wiz.selected.add(r.id); else wiz.selected.delete(r.id);
+    });
+    const caps = [];
+    if (r.adapter_available) caps.push('has an automated price check');
+    if (r.mail_alerts_parsed) caps.push('mailwatch reads its price alerts');
+    row.append(box, el('span', r.name, 'name'), el('span', caps.join(' · '), 'cap'));
+    list.appendChild(row);
+  }
+}
+
+function wizProgressRow(result) {
+  const li = el('li', '');
+  li.dataset.outcome = result.status.toLowerCase();
+  const ICONS = { pending: '…', found: '✓', needs_manual_check: '!', blocked: '✕', timed_out: '⏱' };
+  const LABELS = {
+    pending: 'waiting', found: 'found a price', needs_manual_check: 'needs manual check',
+    blocked: 'blocked - check by hand', timed_out: 'timed out - check by hand',
+  };
+  li.append(
+    el('span', ICONS[result.status.toLowerCase()] || '?', 'icon'),
+    el('span', result.retailer_name),
+    el('span', LABELS[result.status.toLowerCase()] || result.status),
+  );
+  if (result.note) li.appendChild(el('span', result.note, 'note'));
+  return li;
+}
+
+async function wizPoll() {
+  const job = await api(`/api/research-jobs/${wiz.jobId}`);
+  document.getElementById('wiz-progress').replaceChildren(...job.results.map(wizProgressRow));
+  if (job.status === 'DONE' || job.status === 'FAILED') {
+    clearInterval(wiz.pollTimer);
+    await wizShowDone(job);
+  }
+}
+
+async function wizShowDone(job) {
+  wiz.index = WIZ_STEPS.indexOf('done');
+  wizRender();
+  const summary = document.getElementById('wiz-done-summary');
+  const found = job.results.filter(r => r.status === 'FOUND').length;
+  const needsCheck = job.results.length - found;
+  summary.textContent = job.status === 'FAILED'
+    ? `Research failed: ${job.error || 'unknown error'}`
+    : `Found real prices at ${found} of ${job.results.length} retailers.`;
+  document.getElementById('wiz-results').replaceChildren(...job.results.map(wizProgressRow));
+
+  if (wiz.wantsSuggestion) {
+    const box = document.getElementById('wiz-suggestion');
+    try {
+      const suggestion = await api(`/api/products/${wiz.productId}/price-suggestion`);
+      box.hidden = false;
+      if (suggestion) {
+        box.replaceChildren(
+          el('p', `Suggested trigger: ${money(suggestion.suggested_trigger)} `
+            + `(${suggestion.note}).`),
+        );
+        const applyBtn = el('button', 'Apply as trigger price', 'primary');
+        applyBtn.addEventListener('click', async () => {
+          await api(`/api/products/${wiz.productId}`, { method: 'PATCH',
+            body: { trigger_price: suggestion.suggested_trigger } });
+          toast('Trigger price set.', 'good');
+          applyBtn.disabled = true;
+        });
+        box.appendChild(applyBtn);
+      } else {
+        box.textContent = 'Not enough data yet to suggest a price. Add one later once '
+          + 'more listings are on the board.';
+      }
+    } catch (err) { toast(`Could not fetch a suggestion: ${err.message}`, 'bad'); }
+  }
+}
+
+wire('btn-new-product', async () => {
+  wiz = { index: 0, productId: null, retailers: [], selected: new Set(), pollTimer: null };
+  for (const id of ['wiz-name', 'wiz-model', 'wiz-brand', 'wiz-notes', 'wiz-trigger',
+    'wiz-excellent', 'wiz-histlow', 'wiz-new-retailer']) {
+    document.getElementById(id).value = '';
+  }
+  document.getElementById('wiz-category').value = 'general';
+  document.getElementById('wiz-model-warning').hidden = true;
+  await wizLoadRetailers();
+  wizRender();
+  document.getElementById('wizard-dialog').showModal();
+});
+
+document.getElementById('wiz-model')?.addEventListener('blur', async event => {
+  const model = event.target.value.trim();
+  const warning = document.getElementById('wiz-model-warning');
+  if (!model) { warning.hidden = true; return; }
   try {
-    const product = await api('/api/products', { method: 'POST', body: {
-      name: value('np-name'), model: value('np-model'), brand: value('np-brand'),
-      category: value('np-category') || 'general', verdict: value('np-verdict'),
-      trigger_price: number('np-trigger'), excellent_price: number('np-excellent'),
-      historical_low_price: number('np-histlow')
-    }});
-    location.href = `/products/${product.id}`;
-  } catch (err) { toast(`Could not create product: ${err.message}`, 'bad'); }
+    const result = await api(`/api/products/check-model?model=${encodeURIComponent(model)}`);
+    if (result.duplicate_of) {
+      warning.hidden = false;
+      warning.textContent = `This looks like the same model as an existing product: `
+        + `"${result.duplicate_of.name}" (${result.duplicate_of.model}).`;
+    } else {
+      warning.hidden = true;
+    }
+  } catch { /* the deterministic check is a courtesy, never a blocker */ }
+});
+
+wire('wiz-back', () => { wiz.index = Math.max(0, wiz.index - 1); wizRender(); });
+
+wire('wiz-next', async () => {
+  const step = WIZ_STEPS[wiz.index];
+  try {
+    if (step === 'basics') {
+      if (!wizVal('wiz-name') || !wizVal('wiz-model')) {
+        toast('Name and model are both required.', 'bad');
+        return;
+      }
+    } else if (step === 'optional') {
+      const product = await api('/api/products', { method: 'POST', body: {
+        name: wizVal('wiz-name'), model: wizVal('wiz-model'), brand: wizVal('wiz-brand') || null,
+        category: wizVal('wiz-category') || 'general', verdict: wizVal('wiz-verdict'),
+        notes: wizVal('wiz-notes') || null,
+      }});
+      wiz.productId = product.id;
+    } else if (step === 'price') {
+      const trigger = wizNum('wiz-trigger'), excellent = wizNum('wiz-excellent'),
+        histLow = wizNum('wiz-histlow');
+      wiz.wantsSuggestion = trigger === null && excellent === null && histLow === null;
+      if (!wiz.wantsSuggestion) {
+        await api(`/api/products/${wiz.productId}`, { method: 'PATCH', body: {
+          trigger_price: trigger, excellent_price: excellent, historical_low_price: histLow,
+        }});
+      }
+    } else if (step === 'retailers') {
+      const newName = wizVal('wiz-new-retailer');
+      if (newName) {
+        const retailer = await api('/api/retailers', { method: 'POST', body: { name: newName } });
+        wiz.selected.add(retailer.id);
+        document.getElementById('wiz-new-retailer').value = '';
+      }
+      if (wiz.selected.size === 0) {
+        toast('Pick at least one retailer, or add one.', 'bad');
+        return;
+      }
+      document.getElementById('wiz-cost-notice').textContent =
+        `This will research ${wiz.selected.size} retailer${wiz.selected.size === 1 ? '' : 's'}. `
+        + 'It can take a few minutes and uses shared Claude quota, shared with other things '
+        + 'that use the same subscription. Go ahead?';
+    } else if (step === 'go') {
+      const job = await api('/api/research-jobs', { method: 'POST', body: {
+        product_id: wiz.productId, retailer_ids: [...wiz.selected],
+      }});
+      wiz.jobId = job.id;
+      wiz.index = WIZ_STEPS.indexOf('running');
+      wizRender();
+      document.getElementById('wiz-progress').replaceChildren(...job.results.map(wizProgressRow));
+      wiz.pollTimer = setInterval(wizPoll, 2000);
+      return;
+    }
+  } catch (err) {
+    toast(`Could not continue: ${err.message}`, 'bad');
+    return;
+  }
+  wiz.index += 1;
+  wizRender();
+});
+
+wire('wiz-finish', () => { location.href = `/products/${wiz.productId}`; });
+
+document.getElementById('wizard-dialog')?.addEventListener('close', () => {
+  if (wiz.pollTimer) clearInterval(wiz.pollTimer);
+  // A product created earlier in the wizard (from the 'optional' step onward) is real
+  // and already on the board even if the wizard is closed before "Done" - reload so it
+  // shows up rather than looking like the cancel discarded it.
+  if (wiz.productId) location.reload();
 });
 
 wire('btn-add-listing', () => document.getElementById('listing-dialog').showModal());
