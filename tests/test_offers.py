@@ -517,3 +517,25 @@ def test_the_flag_is_collected_during_a_scan():
     found = mailwatch.candidates(msgs(), unmatched=seen)
     assert found == [], "it is not on the allowlist, so it is not processed"
     assert seen == {"The Good Guys": {"sendgrid.example"}}, "but it is reported"
+
+
+def test_the_imap_search_uses_tokens_not_domains():
+    """iCloud will not match a bare domain that sits directly after the '@'.
+
+    FROM "harveynorman.com.au" returned 0 against the real account while
+    FROM "harveynorman" returned 2. Searching by domain silently missed every
+    retailer that sends from their bare domain.
+    """
+    assert "harveynorman" in mailwatch.SEARCH_TOKENS
+    assert not any("." in t for t in mailwatch.SEARCH_TOKENS), (
+        "a token with a dot is a domain, which is the bug this replaced"
+    )
+    # Every watched retailer must be reachable by at least one token.
+    for domain in mailwatch.RETAILERS:
+        assert any(t in domain for t in mailwatch.SEARCH_TOKENS), domain
+
+
+def test_a_broader_search_does_not_widen_what_gets_read():
+    """The search is loose on purpose; retailer_for stays strict."""
+    assert mailwatch.retailer_for("Fake <deals@harveynorman.evil.com>") is None
+    assert mailwatch.retailer_for("HN <x@harveynorman.com.au>") == "Harvey Norman"
