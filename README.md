@@ -473,15 +473,46 @@ That was a deliberate decision, made in #7, not a default inherited by accident.
 
 ### Scheduling the watch
 
-There is no timer yet. The reason recorded here used to be "three of the five seeded
-retailers cannot be scraped at all, so a schedule would be a no-op that looks like
-coverage". That was measured before two adapters had ever been run, and it is wrong:
-JB Hi-Fi and The Good Guys both return a price, stock status and condition from a plain
-fetch with no warnings. A schedule would refresh two real listings, which is not a no-op.
+**There is no timer, and the reason is egress monitoring, not scraping.**
 
-What a run would still produce is two failures every time, Harvey Norman blocked and
-Appliance Central parsing nothing. Those are recorded as errors against the run rather
-than alerted on, so they are visible without being noisy. Run it by hand with:
+The reason recorded here used to be "three of the five seeded retailers cannot be
+scraped at all, so a schedule would be a no-op that looks like coverage". That was
+measured before two adapters had ever been run, and it was wrong: JB Hi-Fi and The Good
+Guys both return a price, stock status and condition from a plain fetch with no
+warnings. A schedule would refresh two real listings.
+
+The actual blocker turned up the first time anything scraped from the container. opti
+runs `egress-watch`, which alerts on a container opening an outbound connection it has
+not made before. A single probe run produced four pushes to `security-events`:
+
+```
+egress: shopwatch -> Cloudflare [104.21.4.235]
+egress: shopwatch -> shops.myshopify.com (unrecognised)
+egress: shopwatch -> UNKNOWN (no reverse-DNS) [45.223.141.121]
+egress: shopwatch -> UNKNOWN (no reverse-DNS) [104.26.1.138]
+```
+
+That is egress-watch working correctly. The container had genuinely never reached a
+retailer before. But a scheduled run would fire those on **every** pass, and they cannot
+be suppressed cleanly:
+
+* retailers are Cloudflare-fronted and anycast IPs rotate, so `/32` allowlist entries go
+  stale and the alerts come back
+* `allowlist.conf` deliberately refuses wide CIDRs, in its own words because a
+  Cloudflare `/13` "would blind this tool to a compromised container beaconing to any
+  other Cloudflare-fronted host"
+* leaving it alone trains you to ignore `security-events`, which is the one topic that
+  has to keep meaning "something is wrong"
+
+**Decision, 2026-09-11: run it by hand, no timer.** Two of four watchable listings
+refresh, and both sit around $700 above the trigger, so automation buys very little
+today. That is not worth weakening egress monitoring for. Revisit if an Appliances
+Online adapter gets written, since they are the only reachable retailer in the price
+bracket that matters.
+
+A run also produces two failures every time, Harvey Norman blocked and Appliance Central
+parsing nothing. Those are recorded as errors against the run rather than alerted on.
+Run it by hand with:
 
 ```bash
 ssh root@100.115.75.8 'docker compose -f /srv/prod/shopwatch/docker-compose.yml \
