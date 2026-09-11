@@ -67,51 +67,84 @@ function applyListing(listing) {
   const row = document.querySelector(`[data-listing-row="${listing.id}"]`);
   if (!row) return;
 
-  const delivered = row.querySelector('[data-cell="delivered"]');
-  if (delivered) {
-    if (listing.delivered_price === null) {
-      delivered.innerHTML = '<span class="unresolved">—</span>';
-    } else {
-      delivered.innerHTML = `<b>${money(listing.delivered_price)}</b>` +
-        (listing.delivered_resolved ? '' :
-          ' <span class="badge none" title="Freight unresolved: provisional">PROV</span>');
-    }
+  const price = row.querySelector('[data-cell="delivered"]');
+  if (price) {
+    price.innerHTML = listing.delivered_price === null
+      ? '<span class="unresolved">no price</span>'
+      : `${money(listing.delivered_price)}<small>${listing.delivered_resolved ? 'delivered' : 'before freight'}</small>`;
   }
-  const cls = row.querySelector('[data-cell="classification"]');
-  if (cls) {
-    cls.innerHTML = `<span class="badge ${CLASS_STYLE[listing.classification] || 'none'}">` +
-      `${CLASS_LABEL[listing.classification] || listing.classification}</span>`;
-  }
-  const diff = row.querySelector('[data-cell="diff"]');
-  if (diff) {
-    diff.innerHTML = listing.diff_from_low === null ? '<span class="unresolved">—</span>'
-      : (listing.diff_from_low > 0 ? '+' : '') + money(listing.diff_from_low);
-  }
-  const checked = row.querySelector('[data-cell="checked"]');
-  if (checked && listing.last_checked_at) checked.textContent = listing.last_checked_at.slice(0, 16).replace('T', ' ');
+
+  const tag = row.querySelector('[data-cell="classification"]');
+  if (tag) tag.innerHTML = tagFor(listing);
+
+  row.classList.toggle('is-act', ['HISTORICAL_LOW', 'EXCELLENT'].includes(listing.classification));
+  row.classList.toggle('is-close', listing.classification === 'TRIGGER_MET');
 
   for (const [field, prov] of Object.entries(listing.provenance || {})) {
     const span = row.querySelector(`[data-edit][data-field="${field}"]`);
     if (!span) continue;
     renderValue(span, listing[field]);
-    const holder = span.parentElement;
-    holder.querySelectorAll('.lock, .badge').forEach(n => n.remove());
-    if (prov.manual_locked) {
-      const btn = document.createElement('button');
-      btn.className = 'lock';
-      btn.dataset.clearOverride = '';
-      btn.dataset.listing = listing.id;
-      btn.dataset.field = field;
-      btn.title = 'Manual override, locked against automated updates. Click to clear.';
-      btn.textContent = 'MANUAL';
-      holder.appendChild(btn);
-    } else if (prov.state === 'STALE' || prov.state === 'LIVE' || prov.state === 'IMPORTED') {
-      const badge = document.createElement('span');
-      badge.className = 'badge ' + (prov.state === 'LIVE' ? 'good' : prov.state === 'IMPORTED' ? 'warn' : 'none');
-      badge.textContent = prov.state === 'IMPORTED' ? 'IMP' : prov.state;
-      holder.appendChild(badge);
+    const label = span.closest('.field')?.querySelector('.k');
+    if (label) {
+      label.querySelectorAll('.lock, .src').forEach(n => n.remove());
+      label.insertAdjacentHTML('beforeend', provenanceMark(listing.id, field, prov));
     }
   }
+}
+
+/* The headline sentence and the ruler are derived from every listing at once, so an
+   edit to one row can change both. Without this the page contradicts itself: the row
+   reads "at target" under a sentence still saying "unconfirmed". */
+function applyProductSummary(product) {
+  if (!product) return;
+  const card = document.getElementById(`product-${product.id}`);
+  if (!card) return;
+
+  const verdict = card.querySelector('.verdict');
+  if (verdict) {
+    verdict.textContent = product.verdict_line;
+    verdict.className = `verdict ${product.tone}`;
+  }
+
+  const track = card.querySelector('.ruler-track');
+  if (!track || !product.scale) return;
+
+  track.querySelectorAll('.ruler-mark').forEach((mark, i) => {
+    const m = product.scale.marks[i];
+    if (m) mark.style.left = `${m.pos}%`;
+  });
+
+  let best = track.querySelector('.ruler-best');
+  if (!product.scale.best) { if (best) best.remove(); return; }
+  if (!best) {
+    best = document.createElement('span');
+    best.className = 'ruler-best';
+    track.appendChild(best);
+  }
+  best.className = `ruler-best ${product.tone}`;
+  best.style.left = `${product.scale.best.pos}%`;
+  best.innerHTML = `<b>${money(product.scale.best.value)}</b>` +
+    `<small>${product.best_retailer || ''}${product.best_resolved ? '' : ', freight unknown'}</small><i></i>`;
+}
+
+function tagFor(listing) {
+  if (listing.verification?.model?.status === 'FLAGGED') return '<span class="tag fault">model mismatch</span>';
+  if (['HISTORICAL_LOW', 'EXCELLENT'].includes(listing.classification)) {
+    return `<span class="tag act">${listing.classification === 'HISTORICAL_LOW' ? 'historical low' : 'excellent'}</span>`;
+  }
+  if (listing.classification === 'TRIGGER_MET') return '<span class="tag close">at target</span>';
+  if (listing.classification === 'UNRESOLVED') return '<span class="tag">unconfirmed</span>';
+  return '';
+}
+
+function provenanceMark(listingId, field, prov) {
+  if (prov.manual_locked) {
+    return ` <button class="lock" data-clear-override data-listing="${listingId}" data-field="${field}"` +
+           ` title="You set this by hand. Automated runs will not change it. Click to hand it back.">set by hand</button>`;
+  }
+  if (prov.state === 'STALE') return ' <span class="src">stale</span>';
+  if (prov.source) return ` <span class="src">${prov.source}</span>`;
+  return '';
 }
 
 function startEdit(span) {
@@ -166,6 +199,7 @@ function startEdit(span) {
       dirtyCells.delete(span);
       span.classList.remove('dirty', 'saving');
       applyListing(result.listing);
+      applyProductSummary(result.product);
       const target = document.querySelector(
         `[data-listing-row="${result.listing.id}"] [data-edit][data-field="${span.dataset.field}"]`);
       if (target) { target.classList.add('saved'); setTimeout(() => target.classList.remove('saved'), 1200); }
@@ -185,7 +219,37 @@ function startEdit(span) {
   input.addEventListener('blur', commit);
 }
 
+/* --------------------------------------------------------- progressive disclosure */
+
+function toggleRegion(button, region) {
+  const open = region.hidden;
+  region.hidden = !open;
+  button.setAttribute('aria-expanded', String(open));
+  const row = button.closest('.listing');
+  if (row) row.classList.toggle('open', open);
+  return open;
+}
+
 document.addEventListener('click', async event => {
+  const detailBtn = event.target.closest('[data-toggle-detail]');
+  if (detailBtn) {
+    const region = document.getElementById(`detail-${detailBtn.dataset.toggleDetail}`);
+    if (region) toggleRegion(detailBtn, region);
+    return;
+  }
+
+  const alsoRan = event.target.closest('[data-toggle-alsoran]');
+  if (alsoRan) {
+    const region = document.getElementById(`alsoran-${alsoRan.dataset.toggleAlsoran}`);
+    if (region) {
+      const open = toggleRegion(alsoRan, region);
+      const n = region.querySelectorAll('.listing').length;
+      alsoRan.textContent = open ? 'Hide the ones above target'
+                                 : `Show ${n} more, all above target`;
+    }
+    return;
+  }
+
   const cell = event.target.closest('[data-edit]');
   if (cell && !event.target.closest('input, select')) { startEdit(cell); return; }
 
@@ -197,8 +261,9 @@ document.addEventListener('click', async event => {
       const result = await api(`/api/retailers/${listing}/clear-override`,
         { method: 'POST', body: { field } });
       lock.remove();
-      toast(`Manual override cleared on ${field}. Automated runs own it again.`, 'good');
+      toast(`${field} handed back to automated updates.`, 'good');
       if (result.listing) applyListing(result.listing);
+      applyProductSummary(result.product);
     } catch (err) { toast(`Could not clear override: ${err.message}`, 'bad'); }
     return;
   }
