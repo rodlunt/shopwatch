@@ -97,12 +97,36 @@ def parse_price(text: Any) -> float | None:
 
 
 def model_matches(expected: str | None, found: str | None) -> bool:
-    """Loose punctuation-insensitive comparison, used to reject model mismatches."""
+    """Loose punctuation-insensitive comparison, used to reject model mismatches.
+
+    The normaliser used to keep "/", which made it not quite punctuation-insensitive:
+    a retailer writing "HW Q930H XY" instead of "HW-Q930H/XY" was reported as a
+    different product. Stripping it too is what the docstring always claimed.
+    """
     if not expected or not found:
         return False
-    norm = lambda s: re.sub(r"[^A-Z0-9/]", "", s.upper())  # noqa: E731
+    norm = lambda s: re.sub(r"[^A-Z0-9]", "", s.upper())  # noqa: E731
     a, b = norm(expected), norm(found)
     return a == b or a in b or b in a
+
+
+def looks_like_retailer_sku(found: str | None) -> bool:
+    """True when the identifier on the page is the retailer's own stock number.
+
+    JB Hi-Fi publishes 893039 and The Good Guys 50098655 on pages that are
+    unambiguously the right product. Comparing those against a manufacturer model
+    always fails, so both correct listings were about to be tagged as a fault the
+    moment anything scraped them: the board crying wolf about its own scraping.
+
+    An identifier with no letters in it is not a claim about the model. It is a
+    different kind of number.
+
+    Trade-off, stated rather than buried: a manufacturer model that is purely
+    numeric is no longer checked. Those are rare, the page value is still recorded
+    in `model_on_page` and shown on the listing, and a permanent false alarm on
+    every scheduled run costs more than a missed check on an unusual shape.
+    """
+    return bool(found) and not re.search(r"[A-Za-z]", found)
 
 
 def json_ld_blocks(html: str) -> list[dict[str, Any]]:
@@ -173,6 +197,7 @@ def observation_from_json_ld(html: str, expected_model: str | None = None) -> Ob
     mismatch = (
         expected_model
         and obs.model_on_page
+        and not looks_like_retailer_sku(obs.model_on_page)
         and not model_matches(expected_model, obs.model_on_page)
     )
     if mismatch:
