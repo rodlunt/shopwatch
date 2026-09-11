@@ -39,6 +39,9 @@ class Observation:
     """A normalised reading of one retailer page. None means unresolved, never zero."""
 
     model_on_page: str | None = None
+    #: Which schema.org key supplied model_on_page. A merchant stock number and a
+    #: manufacturer part number are both strings; only the key says which you have.
+    model_on_page_key: str | None = None
     advertised_price: float | None = None
     freight: float | None = None
     cashback: float | None = None
@@ -97,36 +100,36 @@ def parse_price(text: Any) -> float | None:
 
 
 def model_matches(expected: str | None, found: str | None) -> bool:
-    """Loose punctuation-insensitive comparison, used to reject model mismatches.
+    """Punctuation-insensitive comparison, tolerant of a dropped regional suffix.
 
-    The normaliser used to keep "/", which made it not quite punctuation-insensitive:
-    a retailer writing "HW Q930H XY" instead of "HW-Q930H/XY" was reported as a
-    different product. Stripping it too is what the docstring always claimed.
+    This used to accept a substring in either direction, which let a genuinely
+    different product through: "HW-Q930" matched "HW-Q930H/XY", and so did "XY",
+    "930" and "Q9". Two characters that happen to appear in the expected model were
+    enough. With merchant stock numbers now excluded from comparison entirely, this
+    rule is the whole of the remaining check, so it has to actually discriminate.
+
+    Two things genuinely vary. A page may wrap the model in a longer title
+    ("Samsung HW-Q930H/XY Soundbar"), and it may drop the regional suffix after the
+    slash ("HW-Q930H"). Both are the same product.
+
+    The containment is deliberately one-directional. The expected model appearing
+    inside a longer page string is a title; a SHORTER page string appearing inside
+    the expected model is a truncation, and "HW-Q930" is a different soundbar from
+    "HW-Q930H". Accepting both directions is what let "XY" and "930" through.
     """
     if not expected or not found:
         return False
     norm = lambda s: re.sub(r"[^A-Z0-9]", "", s.upper())  # noqa: E731
-    a, b = norm(expected), norm(found)
-    return a == b or a in b or b in a
+    forms = lambda s: {norm(s), norm(s.split("/")[0])}  # noqa: E731
+    if forms(expected) & forms(found):
+        return True
+    whole = norm(expected)
+    return bool(whole) and whole in norm(found)
 
 
-def looks_like_retailer_sku(found: str | None) -> bool:
-    """True when the identifier on the page is the retailer's own stock number.
-
-    JB Hi-Fi publishes 893039 and The Good Guys 50098655 on pages that are
-    unambiguously the right product. Comparing those against a manufacturer model
-    always fails, so both correct listings were about to be tagged as a fault the
-    moment anything scraped them: the board crying wolf about its own scraping.
-
-    An identifier with no letters in it is not a claim about the model. It is a
-    different kind of number.
-
-    Trade-off, stated rather than buried: a manufacturer model that is purely
-    numeric is no longer checked. Those are rare, the page value is still recorded
-    in `model_on_page` and shown on the listing, and a permanent false alarm on
-    every scheduled run costs more than a missed check on an unusual shape.
-    """
-    return bool(found) and not re.search(r"[A-Za-z]", found)
+#: schema.org keys that name the manufacturer's product rather than the shop's
+#: own stock numbering. Only these are worth comparing against an expected model.
+MANUFACTURER_KEYS = ("mpn", "model")
 
 
 def json_ld_blocks(html: str) -> list[dict[str, Any]]:
@@ -174,10 +177,14 @@ def observation_from_json_ld(html: str, expected_model: str | None = None) -> Ob
         if not any(str(t).lower() == "product" for t in types if t):
             continue
 
-        for key in ("mpn", "sku", "model", "productID"):
+        # Ordered so a manufacturer identifier wins when the page publishes both.
+        # schema.org already draws the line this code needs: mpn and model name the
+        # manufacturer's product, sku and productID are the merchant's own numbering.
+        for key in ("mpn", "model", "productID", "sku"):
             value = block.get(key)
             if isinstance(value, str) and value.strip():
                 obs.model_on_page = value.strip()
+                obs.model_on_page_key = key
                 break
 
         offers = block.get("offers")
@@ -194,10 +201,19 @@ def observation_from_json_ld(html: str, expected_model: str | None = None) -> Ob
         break
     if obs.advertised_price is None:
         obs.mark_unresolved("advertised_price")
+    # Only compare an identifier that claims to be the manufacturer's. A merchant
+    # stock number is not a wrong model, it is a different kind of number, and
+    # comparing it produced a permanent red fault tag on two correct listings.
+    #
+    # Deciding this by the schema.org key rather than by the shape of the string
+    # matters in both directions: a retailer publishing an alphanumeric stock number
+    # would still have raised a false mismatch under a digits-only test, and skipping
+    # every numeric identifier disabled the check outright for the two retailers it
+    # was meant to help.
     mismatch = (
         expected_model
         and obs.model_on_page
-        and not looks_like_retailer_sku(obs.model_on_page)
+        and obs.model_on_page_key in MANUFACTURER_KEYS
         and not model_matches(expected_model, obs.model_on_page)
     )
     if mismatch:
