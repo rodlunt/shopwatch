@@ -133,7 +133,7 @@
   {% set value = l[field] %}
   <span data-edit data-listing="{{ l.id }}" data-field="{{ field }}" data-kind="{{ kind }}"
         data-raw="{{ value if value is not none else '' }}">{%-
-    if value is none %}<span class="unresolved">—</span>{% elif kind == 'money' %}{{ value|money }}{% else %}{{ value }}{% endif -%}
+    if value is none %}<span class="unresolved">-</span>{% elif kind == 'money' %}{{ value|money }}{% else %}{{ value }}{% endif -%}
   </span>
 {% endmacro %}
 

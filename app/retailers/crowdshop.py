@@ -12,6 +12,10 @@ import re
 
 from .base import Observation, RetailerAdapter, observation_from_json_ld, parse_price, register
 
+#: The en dash in this character class is DELIBERATE and must not be "cleaned up".
+#: It is matching a dash that appears in the retailer's own HTML ("$100-$200" written
+#: with an en dash), not one we write. The house ban on en and em dashes governs output,
+#: not input we have to parse. Deleting it stops Crowdshop price ranges parsing.
 RANGE_RE = re.compile(r"\$?\s*(\d[\d,]*(?:\.\d{2})?)\s*[-–to]{1,2}\s*\$?\s*(\d[\d,]*(?:\.\d{2})?)")
 
 
