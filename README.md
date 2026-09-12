@@ -1,7 +1,7 @@
 # Shopwatch
 
 [![CI](https://github.com/rodlunt/shopwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/rodlunt/shopwatch/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12-informational)
 ![Version](https://img.shields.io/badge/version-0.2.0-informational)
 
