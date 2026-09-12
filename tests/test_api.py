@@ -498,6 +498,41 @@ def test_the_money_filter_does_not_emit_an_em_dash():
     assert _money(1699) == "$1,699", "control: a real value still formats"
 
 
+def test_safe_url_filter_allows_only_http_and_https():
+    """l.url is free text from three write paths (typed by hand, /api/import, the
+    research runner) and none of them constrain the scheme - this is the one place
+    that has to catch a javascript: URI before it ever reaches an href."""
+    from app.main import _safe_url
+
+    assert _safe_url("https://example.com/product") == "https://example.com/product"
+    assert _safe_url("http://example.com/product") == "http://example.com/product"
+    assert _safe_url("javascript:alert(document.cookie)") is None
+    assert _safe_url("JavaScript:alert(1)") is None, "scheme match must be case-insensitive"
+    assert _safe_url("  javascript:alert(1)") is None, "leading whitespace must not evade it"
+    assert _safe_url("data:text/html,<script>alert(1)</script>") is None
+    assert _safe_url("vbscript:msgbox(1)") is None
+    assert _safe_url("//evil.example.com") is None, "no scheme at all is rejected, not assumed safe"
+    assert _safe_url(None) is None
+    assert _safe_url("") is None
+    assert _safe_url(123) is None, "a non-string value must not reach .split()"
+
+
+def test_a_javascript_uri_listing_url_never_renders_as_a_clickable_href(client):
+    """End-to-end control, not just the unit test above: a malicious url stored on a
+    real listing must not survive into the rendered page as href="javascript:...".
+    Covers both places l.url renders - the row's own open-link icon and the
+    "Notes and source" detail link."""
+    pid = q930h(client)["id"]
+    listing = client.get(f"/api/products/{pid}/retailers").json()[0]
+    payload = "javascript:alert(document.cookie)"
+
+    client.patch(f"/api/retailers/{listing['id']}", json={"url": payload})
+    body = client.get(f"/products/{pid}").text
+
+    assert f'href="{payload}"' not in body
+    assert payload not in body, "the raw scheme must not appear anywhere in the response at all"
+
+
 def test_a_patch_response_carries_ruled_out_for_the_client(client):
     """The board re-renders a row from this payload after an inline edit.
 

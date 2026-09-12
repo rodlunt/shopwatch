@@ -116,6 +116,26 @@
     </span>
     <span class="tag-cell" data-cell="classification">{{ tag(l) }}</span>
   </button>
+  {% if l.url|safe_url %}
+  {# Outside the toggle button on purpose: an <a> nested inside a <button> is invalid
+     HTML and would fire both the navigation and the detail-expand toggle on one click.
+     Previously this link only existed inside the second-level "Notes and source"
+     <details> down in detail(l, product) - two clicks (expand the row, then expand
+     that) to reach a retailer's own page from what is otherwise the main card.
+     l.url is free text from three different write paths (typed by hand, pasted
+     import, the research runner) and none of them constrain the scheme - safe_url
+     rejects anything that isn't a real http(s) link, javascript: included. #}
+  <a class="listing-open" href="{{ l.url|safe_url }}" target="_blank" rel="noopener noreferrer"
+     title="Open {{ l.retailer_name }}&#39;s page"
+     aria-label="Open {{ l.retailer_name }}&#39;s page in a new tab">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block">
+      <path d="M6.5 3H3.6A1.6 1.6 0 0 0 2 4.6v7.8A1.6 1.6 0 0 0 3.6 14h7.8a1.6 1.6 0 0 0 1.6-1.6V9.5"/>
+      <path d="M9.5 2H14v4.5"/>
+      <path d="M6.5 9.5 14 2"/>
+    </svg>
+  </a>
+  {% endif %}
   <div class="detail" id="detail-{{ l.id }}" hidden>{{ detail(l, product) }}</div>
 </div>
 {% endmacro %}
@@ -212,7 +232,7 @@
     <div class="small muted" style="padding:8px 0; max-width:70ch; line-height:1.55">
       {% if l.price_guide %}<p style="margin:0 0 6px"><b>Price guide:</b> {{ l.price_guide }}</p>{% endif %}
       {% if l.seller_notes %}<p style="margin:0 0 6px">{{ l.seller_notes }}</p>{% endif %}
-      {% if l.url %}<a href="{{ l.url }}" target="_blank" rel="noopener">Open the retailer page</a>{% endif %}
+      {% if l.url|safe_url %}<a href="{{ l.url|safe_url }}" target="_blank" rel="noopener noreferrer">Open the retailer page</a>{% endif %}
       <p style="margin:6px 0 0">Last checked {{ l.last_checked_at|dt }}.</p>
     </div>
   </details>
