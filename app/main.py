@@ -155,13 +155,7 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
         # products that mostly are. Shown on the ACTIVE and ALL tabs, where "still
         # deciding between candidates" actually belongs; not on PURCHASED/PARKED.
         groups = store.list_groups(conn) if status in ("ACTIVE", "ALL") else []
-        counts = {
-            row["status"]: row["n"]
-            for row in conn.execute(
-                "SELECT status, COUNT(*) n FROM products WHERE archived = 0 GROUP BY status"
-            )
-        }
-        counts["ALL"] = sum(counts.values())
+        counts = store.status_counts(conn)
         retailer_list = store.list_retailers(conn)
     return templates.TemplateResponse(
         request,

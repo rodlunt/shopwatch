@@ -566,6 +566,38 @@ def list_products(
     return products
 
 
+def status_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Per-status tallies for the board's tabs, kept honest with what the tabs
+    actually show.
+
+    An ACTIVE member of a still-active group is folded into the group's card
+    (see list_products' exclude_grouped), but the group card discloses it - "N
+    candidates" - so counting it under ACTIVE still reconciles with what is on
+    screen across the group card plus any standalone ones. A PURCHASED (or
+    PARKED) member of a still-active group has no such stand-in: nothing on the
+    board shows it as bought, so counting it there produced a "Bought 1" badge
+    that opened onto an empty tab - a resolved-looking number with nothing behind
+    it. Excluded here for any status but ACTIVE; once its group archives (a real
+    purchase resolves the hunt) group_id stays but the exclusion no longer
+    applies, and it counts normally.
+    """
+    rows = conn.execute(
+        """
+        SELECT status, COUNT(*) n FROM products
+        WHERE archived = 0
+          AND NOT (
+            status != 'ACTIVE'
+            AND group_id IS NOT NULL
+            AND group_id IN (SELECT id FROM watch_groups WHERE archived = 0)
+          )
+        GROUP BY status
+        """
+    )
+    counts = {row["status"]: row["n"] for row in rows}
+    counts["ALL"] = sum(counts.values())
+    return counts
+
+
 # --------------------------------------------------------------------------- history
 
 

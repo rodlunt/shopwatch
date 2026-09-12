@@ -128,6 +128,34 @@ def test_list_products_exclude_grouped_hides_grouped_products(conn, two_candidat
     assert {p["id"] for p in ungrouped_only} == {b}
 
 
+def test_status_counts_excludes_a_purchased_member_of_a_still_active_group(conn, two_candidates):
+    """Buying a product before it is ever grouped skips the archive cascade
+    entirely (there is no group yet to archive), so attaching it to a group
+    afterwards is the one path that leaves a PURCHASED product sitting in a
+    group that never resolved - exactly the state that made "Bought" count one
+    with nothing behind it.
+    """
+    a, b = two_candidates
+    store.record_purchase(conn, a, {"price_paid": 899})
+    conn.commit()
+    assert store.get_product(conn, a)["status"] == "PURCHASED"
+    assert store.get_product(conn, a)["group_id"] is None
+
+    # Control: before grouping, the purchase counts normally.
+    assert store.status_counts(conn).get("PURCHASED") == 1
+
+    group_id = store.create_group(conn, {"name": "GPU search"})
+    conn.commit()
+    store.set_product_group(conn, a, group_id)
+    conn.commit()
+    assert store.get_group(conn, group_id)["archived"] == 0  # group stays active
+
+    counts = store.status_counts(conn)
+    assert counts.get("PURCHASED", 0) == 0
+    assert counts["ACTIVE"] == 1  # b, untouched
+    assert counts["ALL"] == 1
+
+
 def test_buying_one_candidate_archives_the_rest_of_the_group(conn, two_candidates):
     a, b = two_candidates
     group_id = store.create_group(conn, {"name": "GPU search"})
