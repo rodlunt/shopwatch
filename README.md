@@ -1,10 +1,24 @@
 # Shopwatch
 
+[![CI](https://github.com/rodlunt/shopwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/rodlunt/shopwatch/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.12-informational)
+![Version](https://img.shields.io/badge/version-0.2.0-informational)
+
 A self-hosted shopping comparison and price-watch board for a homelab. One product, many
 retailer listings, ranked by **delivered price** rather than headline price, with per-field
 provenance so hand-confirmed values are never clobbered by an automated refresh.
 
 Built to replace a single-file HTML comparison board. It is a research tool, not a shop.
+
+**Download it and run your own copy** - see [Deploy with Docker](#deploy-with-docker). The
+author's own instance stays live and keeps its own data; cloning this repo starts you with
+an empty board.
+
+![The board: every tracked product, ranked by delivered price](docs/screenshots/board.jpg)
+![A product's detail view: the price axis, listings and specs](docs/screenshots/product.jpg)
+![The guided product wizard](docs/screenshots/wizard.jpg)
+
 
 ---
 
@@ -416,21 +430,19 @@ WantedBy=timers.target
 
 ## The product wizard's research step
 
-**Not wired into opti yet.** The wizard replacing the old "Track something new" dialog
-(a guided, multi-step flow: required fields, then optional, then a price target, then
-retailers, then "Let's go") can trigger a live research pass across chosen retailers.
-The mechanism is written and tested but deliberately not deployed until reviewed
-separately - see `deploy/research-runner.py`'s own docstring.
+The wizard replacing the old "Track something new" dialog (a guided, multi-step flow:
+required fields, then optional, then a price target, then retailers, then "Let's go")
+can trigger a live research pass across chosen retailers.
 
 **Same shape as the mail watcher above, on purpose.** A research job never runs inside
 this container: `POST /api/research-jobs` just queues a row and returns immediately
-(202). A host-level script on opti - its own small venv, exactly like
-`mailwatch-venv` - polls `POST /api/research-jobs/claim`, runs the headless `claude`
-CLI once per retailer, and reports back via `POST /api/research-jobs/{id}/results` and
-`/complete`. The container never holds the Claude Code OAuth token and never gains new
-outbound egress; only the host script does, reusing the same
-`/srv/prod/career/runner.env` credential mailwatch already reuses. Nothing new to store
-or rotate.
+(202). A host-level script on opti - its own small venv (`research-venv`), exactly like
+`mailwatch-venv` - polls `POST /api/research-jobs/claim` every 2 minutes
+(`shopwatch-research-runner.timer`), runs the headless `claude` CLI once per retailer,
+and reports back via `POST /api/research-jobs/{id}/results` and `/complete`. The
+container never holds the Claude Code OAuth token and never gains new outbound egress;
+only the host script does, reusing the same `/srv/prod/career/runner.env` credential
+mailwatch already reuses. Nothing new to store or rotate.
 
 **At most one active job per product.** A database constraint (not just application
 logic) rejects a second `QUEUED` or `RUNNING` job for a product with a 409, so a

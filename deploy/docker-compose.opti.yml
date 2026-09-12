@@ -11,6 +11,8 @@ services:
   shopwatch:
     build:
       context: ./repo
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     container_name: shopwatch
     restart: unless-stopped
     # Non-secret tuning lives here, in git, where it can be reviewed. Only secrets

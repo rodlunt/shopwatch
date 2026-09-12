@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,11 @@ def _asset_version() -> str:
 #: Computed once at import. The container is recreated on deploy, so a changed asset
 #: always gets a fresh token, and a restart that changes nothing keeps the old one.
 ASSET_VERSION = _asset_version()
+
+#: Set by the Dockerfile's GIT_SHA build arg on a real opti deploy. Absent on a plain
+#: `docker build` (a downloader's own copy), where "local build" is the honest label.
+GIT_SHA = os.environ.get("GIT_SHA") or None
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 def _money(value: Any) -> str:
@@ -145,6 +151,8 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
             "config": load_config(),
             "classes": pricing.CLASS_LABELS,
             "version": ASSET_VERSION,
+            "app_version": __version__,
+            "git_sha": GIT_SHA,
         },
     )
 
@@ -178,6 +186,8 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
             "tracked_fields": provenance.TRACKED_FIELDS,
             "config": load_config(),
             "version": ASSET_VERSION,
+            "app_version": __version__,
+            "git_sha": GIT_SHA,
         },
     )
 
