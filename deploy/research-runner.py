@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
+import math
 import subprocess
 import time
 from typing import Any
@@ -80,6 +80,38 @@ class RunnerError(RuntimeError):
         self.note = note
 
 
+def _last_json_object(raw: str, start: int) -> dict[str, Any]:
+    """Scan for every complete JSON object at or after `start`, keeping the LAST one
+    that parses. A reply with an earlier draft, worked example, or reference case
+    followed by the real answer states the real one last in every case seen in
+    practice; a stray brace in trailing prose (a parenthetical, a size list) is
+    usually not valid JSON on its own and gets skipped. This does not guarantee
+    semantic correctness when a reply genuinely contains two independently valid
+    JSON objects, but matches every reproduced real-world pattern, where the later
+    one was the intended answer. A code fence's backticks are not brace characters,
+    so this also handles fenced replies (including two separately fenced blocks)
+    without needing to strip fences first. RecursionError (pathological nesting) is
+    treated the same as a parse failure: skip that candidate and keep looking.
+    """
+    decoder = json.JSONDecoder()
+    best: dict[str, Any] | None = None
+    idx = start
+    while True:
+        brace = raw.find("{", idx)
+        if brace == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, brace)
+        except (json.JSONDecodeError, RecursionError):
+            idx = brace + 1
+            continue
+        best = obj
+        idx = end
+    if best is None:
+        raise ValueError(f"reply was not valid JSON: no candidate object parsed ({raw[:150]!r})")
+    return best
+
+
 def parse_research_reply(raw: str) -> dict[str, Any]:
     """Pull the JSON object out of a CLI reply and validate it has a usable price.
 
@@ -87,18 +119,23 @@ def parse_research_reply(raw: str) -> dict[str, Any]:
     anything, same discipline as app/offers.py's parse_cli_output.
     """
     raw = (raw or "").strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
-    if fence:
-        raw = fence.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
-        raise RunnerError("NEEDS_MANUAL_CHECK", f"no JSON in reply: {raw[:150]}")
+    start = raw.find("{")
+    if start == -1:
+        raise RunnerError("NEEDS_MANUAL_CHECK", f"no JSON in reply: {raw[:150]!r}")
     try:
-        data = json.loads(raw[start:end + 1])
-    except json.JSONDecodeError as exc:
-        raise RunnerError("NEEDS_MANUAL_CHECK", f"reply was not valid JSON: {exc}") from exc
+        data = _last_json_object(raw, start)
+    except ValueError as exc:
+        raise RunnerError("NEEDS_MANUAL_CHECK", str(exc)) from exc
 
-    if not data.get("found") or data.get("price") is None:
+    price = data.get("price")
+    # bool is an int subclass in Python, and NaN is a float that survives an
+    # `is None` check - both are real replies seen from a model that ignored the
+    # requested shape, and both must not be treated as a usable price.
+    price_is_usable = (
+        isinstance(price, int | float) and not isinstance(price, bool)
+        and math.isfinite(price)
+    )
+    if data.get("found") is not True or not price_is_usable:
         raise RunnerError("NEEDS_MANUAL_CHECK", str(data.get("reason") or "not found"))
     return data
 

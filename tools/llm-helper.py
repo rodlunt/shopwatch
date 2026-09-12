@@ -28,7 +28,6 @@ import base64
 import getpass
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -81,26 +80,54 @@ def build_prompt(query: str) -> str:
     return PROMPT_TEMPLATE.format(query=query)
 
 
+def _last_json_object(raw: str, start: int) -> dict[str, Any]:
+    """Scan for every complete JSON object at or after `start`, keeping the LAST one
+    that parses. A reply with an earlier draft, worked example, or reference case
+    followed by the real answer states the real one last in every case seen in
+    practice; a stray brace in trailing prose (a parenthetical, a size list) is
+    usually not valid JSON on its own and gets skipped. This does not guarantee
+    semantic correctness when a reply genuinely contains two independently valid
+    JSON objects, but matches every reproduced real-world pattern, where the later
+    one was the intended answer. A code fence's backticks are not brace characters,
+    so this also handles fenced replies (including two separately fenced blocks)
+    without needing to strip fences first. RecursionError (pathological nesting) is
+    treated the same as a parse failure: skip that candidate and keep looking.
+    """
+    decoder = json.JSONDecoder()
+    best: dict[str, Any] | None = None
+    idx = start
+    while True:
+        brace = raw.find("{", idx)
+        if brace == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, brace)
+        except (json.JSONDecodeError, RecursionError):
+            idx = brace + 1
+            continue
+        best = obj
+        idx = end
+    if best is None:
+        raise ValueError(f"reply was not valid JSON: no candidate object parsed ({raw[:150]!r})")
+    return best
+
+
 def parse_reply(raw: str) -> dict[str, Any]:
     """Pull the JSON object out of a CLI reply. Same discipline as app/offers.py's
     parse_cli_output: tolerate a code fence or chatter around the JSON, but never guess
     at malformed content."""
     raw = (raw or "").strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
-    if fence:
-        raw = fence.group(1).strip()
     start = raw.find("{")
     if start == -1:
         raise ValueError(f"no JSON object in reply: {raw[:150]!r}")
-    # raw_decode reads exactly one JSON value from `start` and ignores anything after
-    # it, unlike a naive first-`{`/last-`}` slice, which breaks if the reply contains
-    # more than one brace pair (trailing chatter, a second example, etc.).
-    data, _ = json.JSONDecoder().raw_decode(raw, start)
+    data = _last_json_object(raw, start)
     candidates = data.get("candidates")
     if not isinstance(candidates, list):
         raise ValueError("reply had no 'candidates' list")
     cleaned = []
     for item in candidates[:5]:
+        if not isinstance(item, dict):
+            continue
         model = str(item.get("model") or "").strip()
         if not model:
             continue

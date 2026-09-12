@@ -304,6 +304,67 @@ def test_cli_output_survives_a_code_fence_and_surrounding_prose():
     assert result.offer.is_offer is False
 
 
+def test_cli_output_survives_trailing_prose_with_its_own_brace():
+    """A real Claude reply hit this: a clean JSON object followed by a parenthetical
+    aside containing its own brace, which broke a naive first-`{`/last-`}` slice (it
+    grabbed everything up to the LAST `}` in the whole reply, not just the JSON
+    object's own closing brace)."""
+    reply = ('{"is_offer": true, "kind": "percent_off", "amount": 15,'
+             ' "spend_threshold": null, "applies_to": "TVs", "categories": ["tv"],'
+             ' "excludes": null, "code": null, "expires": null, "requires_signup": false,'
+             ' "confidence": "high", "summary": "15% off TVs"}\n\n'
+             '(Note: sizes vary by model, e.g. {55, 65}.)')
+    result = offers.parse_cli_output(reply)
+    assert result.error is None
+    assert result.offer.amount == 15
+
+
+def test_cli_output_prefers_a_later_reference_offer_over_an_earlier_draft():
+    """A code-review pass caught the mirror-image defect the raw_decode fix
+    introduced: it took the FIRST complete JSON object, so a reply stating a draft
+    or reference case before the real answer silently returned the wrong one
+    instead of erroring. Every reproduced example had the real answer LAST -
+    reproduced here with a schema-COMPLETE leading draft, the worse variant, since
+    an incomplete leading blob would already fail schema validation loudly."""
+    reply = (
+        '{"is_offer": true, "kind": "percent_off", "amount": 10, "spend_threshold": null,'
+        ' "applies_to": "draft", "categories": ["tv"], "excludes": null, "code": null,'
+        ' "expires": null, "requires_signup": false, "confidence": "low", "summary": "draft"}\n'
+        'Actually, the real offer is:\n'
+        '{"is_offer": true, "kind": "percent_off", "amount": 25, "spend_threshold": null,'
+        ' "applies_to": "TVs", "categories": ["tv"], "excludes": null, "code": null,'
+        ' "expires": null, "requires_signup": false, "confidence": "high", "summary": "25% off TVs"}'
+    )
+    result = offers.parse_cli_output(reply)
+    assert result.error is None
+    assert result.offer.amount == 25
+
+
+def test_pathologically_nested_json_is_reported_not_raised():
+    """A code-review pass caught this: raw_decode can raise RecursionError on
+    pathologically deep nesting, which the JSONDecodeError-only except clause did
+    not catch. mailwatch.py's run() loop has no try/except around parse_cli_output's
+    call site, so an uncaught RecursionError there would abort the whole mailbox
+    scan - contradicting this module's own stated invariant that one bad email must
+    not stop the rest being read."""
+    depth = 10_000
+    reply = '{"a":' * depth + "1" + "}" * depth
+    result = offers.parse_cli_output(reply)
+    assert result.offer is None
+    assert result.error is not None
+
+
+def test_a_reply_with_a_brace_but_nothing_that_parses():
+    """Coverage gap a code-review pass caught: parse_cli_output is the only one of
+    three near-identical CLI-reply parsers actually wired into production (mailwatch
+    calls it on every retailer email), and its 'has a brace but nothing valid parses'
+    branch had zero test coverage even though tools/llm-helper.py got a dedicated
+    test for the equivalent branch."""
+    result = offers.parse_cli_output('not json {55, 65} either')
+    assert result.offer is None
+    assert "not valid JSON" in result.error
+
+
 def test_a_reply_that_is_not_json_is_an_error_not_a_crash():
     """The control: garbage in must produce a reported error, never a false offer."""
     result = offers.parse_cli_output("I could not read that email, sorry.")

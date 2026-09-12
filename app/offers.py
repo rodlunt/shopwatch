@@ -220,20 +220,54 @@ def is_weak(offer: ExtractedOffer | None) -> bool:
     return any(getattr(offer, field, None) in (None, "") for field in WEAK_FIELDS)
 
 
+def _last_json_object(raw: str, start: int) -> dict[str, Any]:
+    """Scan for every complete JSON object at or after `start`, keeping the LAST one
+    that parses. A reply with an earlier draft, worked example, or reference case
+    followed by the real answer states the real one last in every case seen in
+    practice; a stray brace in trailing prose (a parenthetical, a size list) is
+    usually not valid JSON on its own and gets skipped. This does not guarantee
+    semantic correctness when a reply genuinely contains two independently valid
+    JSON objects, but matches every reproduced real-world pattern, where the later
+    one was the intended answer. A code fence's backticks are not brace characters,
+    so this also handles fenced replies (including two separately fenced blocks)
+    without needing to strip fences first. RecursionError (pathological nesting) is
+    treated the same as a parse failure: skip that candidate and keep looking,
+    rather than propagating out of a caller that has no reason to expect it.
+    """
+    decoder = json.JSONDecoder()
+    best: dict[str, Any] | None = None
+    idx = start
+    while True:
+        brace = raw.find("{", idx)
+        if brace == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, brace)
+        except (json.JSONDecodeError, RecursionError):
+            idx = brace + 1
+            continue
+        best = obj
+        idx = end
+    if best is None:
+        raise ValueError(f"reply was not valid JSON: no candidate object parsed ({raw[:150]!r})")
+    return best
+
+
 def parse_cli_output(text: str) -> ExtractionResult:
     """Pull the JSON object out of a CLI reply and validate it against the schema.
 
     Kept separate from the subprocess call so it can be tested without running anything.
     """
     raw = (text or "").strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
-    if fence:
-        raw = fence.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
-        return ExtractionResult(None, "claude-cli", f"no JSON in reply: {raw[:120]}")
+    start = raw.find("{")
+    if start == -1:
+        return ExtractionResult(None, "claude-cli", f"no JSON in reply: {raw[:150]!r}")
     try:
-        return ExtractionResult(ExtractedOffer.model_validate_json(raw[start:end + 1]), "claude-cli")
+        data = _last_json_object(raw, start)
+    except ValueError as exc:
+        return ExtractionResult(None, "claude-cli", str(exc))
+    try:
+        return ExtractionResult(ExtractedOffer.model_validate(data), "claude-cli")
     except Exception as exc:
         return ExtractionResult(None, "claude-cli", f"reply did not match the schema: {exc}")
 
