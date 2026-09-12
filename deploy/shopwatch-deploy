@@ -130,8 +130,17 @@ if [ "$OLD" = "$NEW" ]; then
     exit 0
 fi
 
+# This list must name every path the Dockerfile COPYs, not just Dockerfile itself.
+# Bit for real: the Dockerfile gained `COPY tools ./tools` (for tools/llm-helper.py,
+# served for download at GET /tools/llm-helper.py) without this list gaining `tools/`
+# to match, so a real fix confined to that directory (PR #67, codex's
+# --skip-git-repo-check) diffed clean against every pattern here, this branch printed
+# "no image inputs changed", and the running container kept serving the stale file
+# while the Deploy workflow, the git log and this very message all said otherwise -
+# exactly the green-tick-over-a-dead-thing shape hardening.md exists to name. Add a
+# new COPY'd path here in the same commit that adds it to the Dockerfile, not later.
 if git -C "$REPO" diff --name-only "$OLD" "$NEW" \
-     | grep -qE '^(app/|Dockerfile|requirements.txt|deploy/docker-compose.opti.yml)'; then
+     | grep -qE '^(app/|tools/|Dockerfile|requirements.txt|deploy/docker-compose.opti.yml)'; then
     echo "shopwatch-deploy: image inputs changed, rebuilding ($OLD -> $NEW)"
     cd "$STACK"
     GIT_SHA="$NEW" docker compose up -d --build --quiet-pull
