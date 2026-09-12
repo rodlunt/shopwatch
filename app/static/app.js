@@ -950,6 +950,33 @@ wire('btn-give-up-product', async event => {
   } catch (err) { toast(`Could not archive: ${err.message}`, 'bad'); }
 });
 
+wire('btn-delete-product', () => {
+  document.getElementById('del-confirm-name').value = '';
+  document.getElementById('del-confirm-go').disabled = true;
+  document.getElementById('delete-dialog').showModal();
+});
+
+// Typing the product name back is the whole guard here - there is no second prompt,
+// so the button stays disabled until the text matches exactly.
+document.getElementById('del-confirm-name')?.addEventListener('input', event => {
+  document.getElementById('del-confirm-go').disabled = event.target.value !== event.target.dataset.expected;
+});
+
+wire('del-confirm-go', async event => {
+  const button = event.currentTarget;
+  if (button.disabled) return;  // belt and braces: the listener fires on any click, typed or not
+  const productId = Number(button.dataset.product);
+  button.disabled = true;
+  try {
+    await api(`/api/products/${productId}/permanently`, { method: 'DELETE' });
+    toast('Deleted permanently.', 'good');
+    location.href = '/';
+  } catch (err) {
+    toast(`Could not delete: ${err.message}`, 'bad');
+    button.disabled = false;
+  }
+});
+
 wire('btn-edit-product', () => document.getElementById('product-dialog').showModal());
 wire('ep-save', async () => {
   const productId = Number(location.pathname.split('/').pop());

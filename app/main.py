@@ -479,12 +479,29 @@ def api_update_product(product_id: int, payload: dict = Body(...)) -> Any:
 
 @app.delete("/api/products/{product_id}")
 def api_archive_product(product_id: int) -> Any:
-    """Archive, never delete: the price history is the point of the exercise."""
+    """Archive, never delete: the price history is the point of the exercise.
+
+    See api_delete_product_permanently below for the actual, irreversible delete -
+    a distinct endpoint on purpose, so this one stays exactly what its name and
+    every existing caller already assume it is."""
     with session() as conn:
         if store.get_product(conn, product_id) is None:
             raise HTTPException(404, "no such product")
         store.update_product(conn, product_id, {"archived": 1})
     return {"archived": product_id}
+
+
+@app.delete("/api/products/{product_id}/permanently")
+def api_delete_product_permanently(product_id: int) -> Any:
+    """The actual delete archiving was deliberately never wired to. Irreversible:
+    removes the product and every listing, price history row, purchase record and
+    job tied to it. The wizard/product page's own confirmation (typing the product
+    name back) is the only guard - nothing here asks twice."""
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        store.delete_product(conn, product_id)
+    return {"deleted": product_id}
 
 
 @app.post("/api/products/{product_id}/purchase", status_code=201)

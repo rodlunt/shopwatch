@@ -129,6 +129,17 @@ def update_product(conn: sqlite3.Connection, product_id: int, data: Mapping[str,
     )
 
 
+def delete_product(conn: sqlite3.Connection, product_id: int) -> None:
+    """Permanently remove a product and everything under it - listings, price
+    history, purchases, research/llm jobs, offer matches - via the schema's own
+    ON DELETE CASCADE (app/db.py turns PRAGMA foreign_keys on, so this is a real
+    cascade, not orphaned rows). Distinct from update_product({"archived": 1}),
+    which is what "Give up on this" uses and keeps every row: this one has no
+    undo, which is the whole reason it needs its own explicit call rather than
+    being a flag flip like archiving."""
+    conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+
+
 # --------------------------------------------------------------------------- listings
 
 
