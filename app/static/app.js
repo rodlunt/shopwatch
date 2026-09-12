@@ -1036,33 +1036,74 @@ for (const root of document.querySelectorAll('[data-axis]')) setupAxis(root);
 
 /* Hovering a candidate row highlights every axis point for that product, and vice
  * versa - only present on the group page, so every lookup is guarded rather than
- * assumed. */
+ * assumed. Several of a candidate's own listings routinely cluster into one dot (see
+ * .is-clustered): the callout is what makes hovering answer "which seller, at what
+ * price" without needing every one of them to have its own permanently visible dot. */
 (function wireGroupHoverLinks() {
   const rows = document.querySelectorAll('[data-candidate-product]');
   const points = document.querySelectorAll('[data-point][data-product-id]');
   if (!rows.length || !points.length) return;
 
+  const plot = document.querySelector('[data-axis-plot]');
+
   const pointsFor = id => [...points].filter(p => p.dataset.productId === id);
   const rowFor = id => document.querySelector(`[data-candidate-product="${id}"]`);
 
+  let callout = null;
+  function ensureCallout() {
+    if (!callout) {
+      callout = document.createElement('div');
+      callout.className = 'axis-callout';
+      document.body.appendChild(callout);
+    }
+    return callout;
+  }
+
+  function showCandidate(id) {
+    const pts = pointsFor(id);
+    if (!pts.length) return;
+    for (const p of pts) p.classList.add('is-linked-hover', 'is-hover-revealed');
+    rowFor(id)?.classList.add('is-linked-hover');
+
+    // Anchored to the cheapest listing, same convention the built-in clustering
+    // uses for which point leads a group.
+    const sorted = [...pts].sort((a, b) => Number(a.dataset.value) - Number(b.dataset.value));
+    const anchor = sorted[0];
+    const box = ensureCallout();
+    box.replaceChildren(...sorted.map(p => {
+      const line = document.createElement('span');
+      const price = document.createElement('b');
+      price.textContent = axisMoney(Number(p.dataset.value));
+      line.append(price, ' ' + (p.dataset.retailer || ''));
+      return line;
+    }));
+
+    const rect = anchor.getBoundingClientRect();
+    box.style.left = (rect.left + rect.width / 2) + 'px';
+    box.style.top = (rect.bottom + 10) + 'px';
+    box.classList.add('is-visible');
+  }
+
+  function hideCandidate(id) {
+    for (const p of pointsFor(id)) p.classList.remove('is-linked-hover', 'is-hover-revealed');
+    rowFor(id)?.classList.remove('is-linked-hover');
+    callout?.classList.remove('is-visible');
+  }
+
   for (const row of rows) {
     const id = row.dataset.candidateProduct;
-    row.addEventListener('mouseenter', () => {
-      for (const p of pointsFor(id)) p.classList.add('is-linked-hover');
-    });
-    row.addEventListener('mouseleave', () => {
-      for (const p of pointsFor(id)) p.classList.remove('is-linked-hover');
-    });
+    row.addEventListener('mouseenter', () => showCandidate(id));
+    row.addEventListener('mouseleave', () => hideCandidate(id));
   }
   for (const point of points) {
     const id = point.dataset.productId;
-    point.addEventListener('mouseenter', () => {
-      rowFor(id)?.classList.add('is-linked-hover');
-    });
-    point.addEventListener('mouseleave', () => {
-      rowFor(id)?.classList.remove('is-linked-hover');
-    });
+    point.addEventListener('mouseenter', () => showCandidate(id));
+    point.addEventListener('mouseleave', () => hideCandidate(id));
   }
+  // The callout is viewport-fixed, so panning/zooming the plot while it is open
+  // would leave it pointing at stale coordinates. Closing it on any redraw is
+  // simpler than re-tracking a moving anchor for a transient hover state.
+  if (plot) new ResizeObserver(() => callout?.classList.remove('is-visible')).observe(plot);
 })();
 
 wire('btn-join-group', async () => {

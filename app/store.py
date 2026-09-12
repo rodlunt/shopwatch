@@ -505,6 +505,11 @@ def group_view(
                 "product_id": member["id"],
                 "product_name": member["name"],
                 "retailer": f"{member['name']} - {listing['retailer_name']}",
+                # Plain retailer name, no product prefix - the hover callout sits next
+                # to a row that already names the candidate, so repeating it would be
+                # noise. "retailer" above stays as-is for the existing title/label text
+                # and the visually-hidden list, which need the candidate named.
+                "retailer_name": listing["retailer_name"],
                 "value": listing["delivered_price"],
                 "resolved": bool(listing["delivered_resolved"]),
                 "ruled_out": bool(listing.get("ruled_out")),

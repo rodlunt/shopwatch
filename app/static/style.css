@@ -394,6 +394,39 @@ footer.site .build { font-family: var(--mono); }
 .listing.is-linked-hover {
   background: color-mix(in srgb, var(--candidate-color, var(--close)) 15%, var(--surface));
 }
+/* A clustered point normally has display:none (see .is-clustered above) so several
+ * near-identical prices read as one tie rather than a smudge. Hovering its owning
+ * candidate needs the opposite for a moment: show exactly where THIS one actually
+ * sits, which the combined callout below names. Three classes beats .is-clustered's
+ * two regardless of source order, so this always wins once applied. */
+.axis-point.is-clustered.is-hover-revealed { display: block; }
+/* The callout box says price+seller for every one of the candidate's own listings in
+ * one place, so each point's own label would only repeat it right next to the box -
+ * hidden for as long as the reveal lasts, on every point it touches, clustered or not. */
+.axis-point.is-hover-revealed .axis-label { display: none; }
+
+/* Fixed positioning deliberately: .product has overflow:hidden for its rounded
+ * corners, and the axis-plot itself clips to fit its dot/label lanes. A callout has
+ * to be free to sit below either without being cut off, so it lives in the viewport,
+ * not in the card's own stacking context. JS positions it under the candidate's
+ * lowest-priced point each time it opens. */
+.axis-callout {
+  position: fixed; transform: translateX(-50%);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-control);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .16);
+  padding: 6px 10px; font-size: 12px; line-height: 1.5; white-space: nowrap;
+  pointer-events: none; z-index: 50;
+  opacity: 0; visibility: hidden; transition: opacity .1s ease;
+}
+.axis-callout.is-visible { opacity: 1; visibility: visible; }
+.axis-callout::before {
+  content: ""; position: absolute; left: 50%; top: -10px;
+  width: 1px; height: 10px; background: var(--rule); transform: translateX(-.5px);
+}
+.axis-callout span { display: block; }
+.axis-callout b {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-soft);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .axis-band em { transition: none; }
