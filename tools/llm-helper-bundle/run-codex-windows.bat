@@ -1,5 +1,6 @@
 @echo off
 cd /d "%~dp0"
-python llm-helper.py --url "__SHOPWATCH_URL__" --backend codex
+set /p URL=<shopwatch-url.txt
+python llm-helper.py --url "%URL%" --backend codex
 echo.
 pause

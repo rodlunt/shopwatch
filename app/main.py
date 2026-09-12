@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import zipfile
 from contextlib import asynccontextmanager
@@ -268,16 +269,34 @@ def download_llm_helper() -> Any:
     return FileResponse(path, media_type="text/x-python", filename="llm-helper.py")
 
 
-#: Every launcher gets this one placeholder replaced with the real shopwatch URL, so
-#: nobody downloading the bundle has to type or edit a command themselves - the whole
-#: point of the bundle over the plain script.
-LLM_HELPER_URL_PLACEHOLDER = "__SHOPWATCH_URL__"
+#: Deliberately an allow-list, not a deny-list of "dangerous" characters: the launcher
+#: templates read this value out of a plain data file rather than having it substituted
+#: into shell-parsed text, so injection is already structurally closed, but a strict
+#: allow-list here means a future change to that structure can't quietly reopen it. A
+#: real shopwatch URL is exactly scheme://host[:port] - nothing else has any reason to
+#: appear here, so nothing else is accepted.
+_SAFE_BASE_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
+
+
+def _validate_base_url(candidate: str) -> str:
+    if not _SAFE_BASE_URL_RE.match(candidate):
+        raise HTTPException(400, "url must look like https://host[:port], nothing else")
+    return candidate
 
 
 def build_llm_helper_zip(base_url: str) -> bytes:
     """Builds the "just double-click it" bundle in memory: the one canonical
-    llm-helper.py plus a README and a launcher per OS/backend combination, each with
-    LLM_HELPER_URL_PLACEHOLDER substituted for the real URL.
+    llm-helper.py, a README, a shopwatch-url.txt holding the real URL as plain data,
+    and a launcher per OS/backend combination that reads that file at runtime.
+
+    The URL is deliberately never substituted into the launcher scripts themselves -
+    a value spliced into a string a shell (or cmd.exe) later parses is a command
+    injection waiting for the one character that breaks out of the quoting, no matter
+    how carefully that quoting is done. Reading it out of a separate data file at
+    runtime means the shell only ever sees "the contents of this variable", never "text
+    to parse", so there is no quoting scheme to get subtly wrong. Caller must validate
+    with _validate_base_url first regardless - this is defence in depth, not the reason
+    injection is closed.
 
     Kept separate from the route so it can be tested without a request object.
     """
@@ -288,14 +307,14 @@ def build_llm_helper_zip(base_url: str) -> bytes:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("llm-helper.py", (tools_dir / "llm-helper.py").read_bytes())
         zf.writestr("README.txt", (bundle_dir / "README.txt").read_bytes())
+        zf.writestr("shopwatch-url.txt", base_url)
         for launcher in sorted(bundle_dir.glob("run-*")):
-            content = launcher.read_text().replace(LLM_HELPER_URL_PLACEHOLDER, base_url)
             info = zipfile.ZipInfo(launcher.name)
             # rwxr-xr-x: Windows ignores unix permission bits on extraction, but a
             # .command/.sh launcher that lands non-executable on Mac/Linux is just a
             # text file to double-click - the entire point of the bundle would be lost.
             info.external_attr = 0o100755 << 16
-            zf.writestr(info, content)
+            zf.writestr(info, launcher.read_bytes())
     return buf.getvalue()
 
 
@@ -307,9 +326,11 @@ def download_llm_helper_zip(request: Request, url: str | None = Query(None)) -> 
     already shows in the plain-script command) - a direct request with no `url` falls
     back to the request's own host, which will be wrong if this is genuinely proxied
     without forwarded-host handling, but is still a reasonable default rather than a
-    hard failure.
+    hard failure. Either way it goes through the same strict validation: this value
+    ends up in a file a downloaded script reads, so a malformed or hostile one must be
+    refused outright, never silently packaged.
     """
-    base_url = (url or str(request.base_url)).rstrip("/")
+    base_url = _validate_base_url((url or str(request.base_url)).rstrip("/"))
     zip_bytes = build_llm_helper_zip(base_url)
     return Response(
         content=zip_bytes, media_type="application/zip",

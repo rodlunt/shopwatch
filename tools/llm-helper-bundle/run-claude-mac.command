@@ -1,5 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-python3 llm-helper.py --url "__SHOPWATCH_URL__" --backend claude
+URL=$(cat shopwatch-url.txt)
+python3 llm-helper.py --url "$URL" --backend claude
 echo
 read -p "Press Enter to close this window..."
