@@ -268,6 +268,72 @@ def test_healthz_still_reports_the_semantic_version():
         assert client.get("/api/meta").json()["version"] == __version__
 
 
+# --------------------------------------------------------- the LLM helper bundle
+
+
+def test_llm_helper_zip_contains_the_canonical_script_unmodified():
+    """The bundle must never fork its own copy of llm-helper.py - one canonical file,
+    tested and documented in exactly one place."""
+    import zipfile
+    from io import BytesIO
+
+    from app import main
+
+    canonical = (main.BASE_DIR.parent / "tools" / "llm-helper.py").read_bytes()
+    with zipfile.ZipFile(BytesIO(main.build_llm_helper_zip("https://example.test"))) as zf:
+        assert zf.read("llm-helper.py") == canonical
+
+
+def test_llm_helper_zip_substitutes_the_url_in_every_launcher():
+    """The whole point of the bundle over the plain script: nobody has to type or
+    edit a command. Every launcher must carry the real URL, and the raw placeholder
+    must never leak into a downloaded file."""
+    import zipfile
+    from io import BytesIO
+
+    from app import main
+
+    zip_bytes = main.build_llm_helper_zip("https://shop.example.test")
+    with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+        launchers = [n for n in zf.namelist() if n.startswith("run-")]
+        assert len(launchers) == 6, "expected one launcher per OS x backend combination"
+        for name in launchers:
+            content = zf.read(name).decode()
+            assert "https://shop.example.test" in content
+            assert main.LLM_HELPER_URL_PLACEHOLDER not in content
+
+
+def test_llm_helper_zip_launchers_are_executable():
+    """A .command/.sh that lands non-executable after unzipping on Mac/Linux is just
+    a text file to double-click - the entire point of the bundle would be lost."""
+    import zipfile
+    from io import BytesIO
+
+    from app import main
+
+    with zipfile.ZipFile(BytesIO(main.build_llm_helper_zip("https://example.test"))) as zf:
+        for info in zf.infolist():
+            if info.filename.startswith("run-"):
+                mode = (info.external_attr >> 16) & 0o777
+                assert mode & 0o100, f"{info.filename} is not executable ({oct(mode)})"
+
+
+def test_llm_helper_zip_route_uses_the_provided_url_over_the_request_host():
+    """The modal's own JS supplies `url` (window.location.origin) precisely because a
+    server-side guess at the request's host can be wrong behind a reverse proxy - a
+    provided url must win."""
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    with TestClient(main.app) as client:
+        r = client.get("/tools/llm-helper.zip", params={"url": "https://shop.example.test"})
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/zip"
+        assert "shopwatch-llm-helper.zip" in r.headers["content-disposition"]
+        assert b"https://shop.example.test" in r.content
+
+
 # ------------------------------------------------- the axis is reachable as text
 
 

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -264,6 +266,55 @@ def download_llm_helper() -> Any:
     download instead of sending someone to clone the whole repo for one file."""
     path = BASE_DIR.parent / "tools" / "llm-helper.py"
     return FileResponse(path, media_type="text/x-python", filename="llm-helper.py")
+
+
+#: Every launcher gets this one placeholder replaced with the real shopwatch URL, so
+#: nobody downloading the bundle has to type or edit a command themselves - the whole
+#: point of the bundle over the plain script.
+LLM_HELPER_URL_PLACEHOLDER = "__SHOPWATCH_URL__"
+
+
+def build_llm_helper_zip(base_url: str) -> bytes:
+    """Builds the "just double-click it" bundle in memory: the one canonical
+    llm-helper.py plus a README and a launcher per OS/backend combination, each with
+    LLM_HELPER_URL_PLACEHOLDER substituted for the real URL.
+
+    Kept separate from the route so it can be tested without a request object.
+    """
+    tools_dir = BASE_DIR.parent / "tools"
+    bundle_dir = tools_dir / "llm-helper-bundle"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("llm-helper.py", (tools_dir / "llm-helper.py").read_bytes())
+        zf.writestr("README.txt", (bundle_dir / "README.txt").read_bytes())
+        for launcher in sorted(bundle_dir.glob("run-*")):
+            content = launcher.read_text().replace(LLM_HELPER_URL_PLACEHOLDER, base_url)
+            info = zipfile.ZipInfo(launcher.name)
+            # rwxr-xr-x: Windows ignores unix permission bits on extraction, but a
+            # .command/.sh launcher that lands non-executable on Mac/Linux is just a
+            # text file to double-click - the entire point of the bundle would be lost.
+            info.external_attr = 0o100755 << 16
+            zf.writestr(info, content)
+    return buf.getvalue()
+
+
+@app.get("/tools/llm-helper.zip")
+def download_llm_helper_zip(request: Request, url: str | None = Query(None)) -> Any:
+    """The friendlier download: a zip with double-click launchers per OS and backend,
+    so using this feature never requires typing a command. `url` is normally supplied
+    by the "Set up your LLM" modal's own JS (window.location.origin, the same value it
+    already shows in the plain-script command) - a direct request with no `url` falls
+    back to the request's own host, which will be wrong if this is genuinely proxied
+    without forwarded-host handling, but is still a reasonable default rather than a
+    hard failure.
+    """
+    base_url = (url or str(request.base_url)).rstrip("/")
+    zip_bytes = build_llm_helper_zip(base_url)
+    return Response(
+        content=zip_bytes, media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="shopwatch-llm-helper.zip"'},
+    )
 
 
 @app.get("/api/products")

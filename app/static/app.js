@@ -388,6 +388,12 @@ wire('btn-import', () => document.getElementById('import-dialog').showModal());
 wire('btn-llm-setup', () => {
   document.getElementById('llm-setup-command').textContent =
     `python3 llm-helper.py --url ${window.location.origin} --backend claude`;
+  // The zip route accepts the same origin the plain-script command already uses,
+  // so every launcher inside it needs no editing either - server-side request.base_url
+  // would be wrong behind a reverse proxy without forwarded-host handling; the
+  // browser always knows the real origin.
+  document.getElementById('llm-setup-zip-link').href =
+    `/tools/llm-helper.zip?url=${encodeURIComponent(window.location.origin)}`;
   document.getElementById('llm-setup-dialog').showModal();
 });
 
