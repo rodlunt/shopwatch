@@ -326,7 +326,13 @@ footer.site .build { font-family: var(--mono); }
   box-sizing: content-box;
 }
 .axis-point .axis-label {
-  display: block; margin-top: 5px; font-size: 11px; line-height: 1.35;
+  /* width:max-content is load-bearing, not decorative. .axis-point itself shrinks to
+   * fit its dot (a few px), so a normal-flow block child would inherit that same
+   * narrow width and only ever LOOK wide because nowrap text overflows past its own
+   * box - which is exactly what clusterAndLabel() measures via offsetWidth to decide
+   * whether two labels collide. A box half the size of its own text means that check
+   * passes when the real, overflowing text does not. */
+  display: block; width: max-content; margin-top: 5px; font-size: 11px; line-height: 1.35;
   color: var(--muted); white-space: nowrap; text-align: center;
   transform: translateX(-50%); margin-left: 50%;
 }
