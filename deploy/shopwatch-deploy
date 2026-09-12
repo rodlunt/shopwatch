@@ -134,7 +134,7 @@ if git -C "$REPO" diff --name-only "$OLD" "$NEW" \
      | grep -qE '^(app/|Dockerfile|requirements.txt|deploy/docker-compose.opti.yml)'; then
     echo "shopwatch-deploy: image inputs changed, rebuilding ($OLD -> $NEW)"
     cd "$STACK"
-    docker compose up -d --build --quiet-pull
+    GIT_SHA="$NEW" docker compose up -d --build --quiet-pull
     # Migrations run on boot and are forward-only; an existing database is never wiped.
     wait_healthy 30 "rebuild of $NEW"
 else

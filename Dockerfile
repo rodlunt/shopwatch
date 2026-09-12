@@ -4,10 +4,16 @@ FROM python:3.12-slim
 # opti answers "which repo is this?" without anyone having to remember.
 LABEL org.opencontainers.image.source="https://github.com/rodlunt/shopwatch"
 
+# Not set for a plain `docker build` (a downloader's own local build): the app
+# falls back to a "local build" label rather than printing a bare empty string.
+ARG GIT_SHA=
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     SHOPWATCH_DB=/data/shopwatch.db \
-    SHOPWATCH_PORT=8477
+    SHOPWATCH_PORT=8477 \
+    GIT_SHA=${GIT_SHA}
 
 WORKDIR /app
 

@@ -1,13 +1,14 @@
 # Security
 
-This is a private, single-user application. It runs on a home network behind
-`basic_auth` and is not reachable from the internet.
+Shopwatch is built as a private, single-user application: one deployment, one person,
+no accounts. The author's own deployment runs on a home network behind `basic_auth`
+and is not reachable from the internet - the same is recommended for anyone else
+running their own copy.
 
 ## Reporting
 
-Raise a GitHub issue on this repository, or email security@yourdomain.example if the issue
-should not sit in an issue title. There is no bug bounty and no coordinated disclosure
-process: this repo has one user, and that user is the person reading the report.
+Raise a GitHub issue on this repository. There is no bug bounty and no coordinated
+disclosure process.
 
 ## What this application holds
 
@@ -36,11 +37,12 @@ It holds no payment details, no card numbers and no retailer account credentials
   OAuth token. It stores no credential of its own, and the local Thunderbird path needs
   none at all.
 
-- **The product wizard's research runner** (`deploy/research-runner.py`, not yet wired
-  into opti) reuses the same `/srv/prod/career/runner.env` Claude Code OAuth token as
-  the mail watcher, for the same reason: nothing new to store or rotate. It runs as its
-  own host-level script, never inside the `shopwatch` container - the container this
-  API serves from never holds this credential and never gains new outbound egress.
+- **The product wizard's research runner** (`deploy/research-runner.py`) reuses the same
+  `/srv/prod/career/runner.env` Claude Code OAuth token as the mail watcher, for the
+  same reason: nothing new to store or rotate. It runs as its own host-level script,
+  polled by `shopwatch-research-runner.timer` every 2 minutes, never inside the
+  `shopwatch` container - the container this API serves from never holds this
+  credential and never gains new outbound egress.
 
 ## If this is an active incident
 

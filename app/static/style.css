@@ -83,6 +83,15 @@ header.top nav { display: flex; gap: 6px; align-items: center; }
 
 main { max-width: 1180px; margin: 0 auto; padding: var(--gap) 24px 80px; }
 
+footer.site {
+  display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap;
+  padding: 16px 24px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 12.5px;
+}
+footer.site a { color: var(--muted); text-decoration: none; }
+footer.site a:hover { color: var(--ink); }
+footer.site .gh-link { display: inline-flex; align-items: center; gap: 5px; }
+footer.site .build { font-family: var(--mono); }
+
 /* ------------------------------------------------------------------ filters */
 
 .filters {
