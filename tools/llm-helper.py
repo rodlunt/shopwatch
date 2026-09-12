@@ -39,7 +39,12 @@ from typing import Any
 #: Codex CLI's non-interactive invocation, correct as of this script's writing but a
 #: fast-moving target - if your installed version rejects this, run `codex exec --help`
 #: and adjust the one line in call_codex() below rather than anything else here.
-CODEX_EXEC_ARGS = ["exec"]
+#: --skip-git-repo-check is not optional: Codex refuses to run at all otherwise unless
+#: launched from inside a trusted/git directory, and this script is meant to be
+#: downloaded and run from wherever - a Downloads folder, not a git checkout. Confirmed
+#: live: identical prompt failed with "Not inside a trusted directory..." without this
+#: flag from a plain temp directory, and answered normally with it.
+CODEX_EXEC_ARGS = ["exec", "--skip-git-repo-check"]
 
 #: One text completion, not a multi-page research pass - if a CLI hasn't answered by
 #: this point something is wrong (auth prompt waiting on input, hung process), and the
