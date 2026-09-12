@@ -124,8 +124,23 @@ def _short_time(value: Any) -> str:
     return str(value)[:16].replace("T", " ")
 
 
+#: A listing's url is free text: typed by hand in "Add listing", pasted through
+#: /api/import, or written by the research runner from whatever the model returned.
+#: None of those paths constrain the scheme, so a template must not trust it as an
+#: href outright - a javascript: URI rendered straight into href="{{ l.url }}" runs
+#: in the page's own origin the moment someone clicks what looks like an ordinary
+#: retailer link. Checked here, once, rather than at every ingest path that could
+#: write a url, so already-stored data is covered too, not just what arrives next.
+def _safe_url(value: Any) -> str | None:
+    if not value or not isinstance(value, str):
+        return None
+    scheme = value.split(":", 1)[0].strip().lower() if ":" in value else ""
+    return value if scheme in ("http", "https") else None
+
+
 templates.env.filters["money"] = _money
 templates.env.filters["dt"] = _short_time
+templates.env.filters["safe_url"] = _safe_url
 
 
 
