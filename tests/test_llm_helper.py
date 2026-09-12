@@ -5,6 +5,7 @@ it runs (on the user's own machine, never inside the shopwatch container)."""
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,17 @@ def test_more_than_five_candidates_is_truncated():
 def test_reply_with_no_json_object_at_all():
     with pytest.raises(ValueError, match="no JSON"):
         llm_helper.parse_reply("I'm not sure what that product is.")
+
+
+def test_a_truncated_json_reply_reports_what_the_cli_actually_said():
+    """Regression: switching parse_reply to raw_decode (to fix the trailing-prose bug)
+    initially dropped the diagnostic snippet for the separate case of a reply that has
+    a `{` but is not valid JSON at all (e.g. cut off mid-object by a hung CLI or the
+    call timeout) - whoever is debugging a failed wizard request needs to see what the
+    CLI actually said, not a bare JSONDecodeError with no content."""
+    reply = '{"candidates": [{"model": "REAL-1", "label": "cut off mid-str'
+    with pytest.raises(ValueError, match=re.escape(reply)):
+        llm_helper.parse_reply(reply)
 
 
 def test_reply_missing_the_candidates_key():

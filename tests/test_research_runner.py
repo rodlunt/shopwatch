@@ -30,6 +30,16 @@ def test_a_fenced_reply_still_parses():
     assert result["price"] == 500
 
 
+def test_reply_survives_trailing_prose_with_its_own_brace():
+    """Same defect app/offers.py's parse_cli_output and tools/llm-helper.py's
+    parse_reply both had: a naive first-`{`/last-`}` slice breaks the moment the
+    reply's trailing text has its own brace pair."""
+    reply = ('{"found": true, "price": 1099, "stock": "In stock", "url": "https://x",'
+              ' "reason": "ok"}\n\n(Prices vary by size, e.g. {55, 65}.)')
+    result = research_runner.parse_research_reply(reply)
+    assert result["price"] == 1099
+
+
 def test_found_false_is_reported_as_needs_manual_check():
     reply = '{"found": false, "price": null, "reason": "page blocked the request"}'
     with pytest.raises(research_runner.RunnerError) as exc_info:

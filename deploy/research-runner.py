@@ -90,13 +90,18 @@ def parse_research_reply(raw: str) -> dict[str, Any]:
     fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
     if fence:
         raw = fence.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
+    start = raw.find("{")
+    if start == -1:
         raise RunnerError("NEEDS_MANUAL_CHECK", f"no JSON in reply: {raw[:150]}")
+    # raw_decode reads exactly one JSON value from `start` and ignores anything after
+    # it, unlike a first-`{`/last-`}` slice, which breaks if the reply contains more
+    # than one brace pair (trailing chatter, a second example, etc.).
     try:
-        data = json.loads(raw[start:end + 1])
+        data, _ = json.JSONDecoder().raw_decode(raw, start)
     except json.JSONDecodeError as exc:
-        raise RunnerError("NEEDS_MANUAL_CHECK", f"reply was not valid JSON: {exc}") from exc
+        raise RunnerError(
+            "NEEDS_MANUAL_CHECK", f"reply was not valid JSON: {exc} ({raw[:150]!r})"
+        ) from exc
 
     if not data.get("found") or data.get("price") is None:
         raise RunnerError("NEEDS_MANUAL_CHECK", str(data.get("reason") or "not found"))

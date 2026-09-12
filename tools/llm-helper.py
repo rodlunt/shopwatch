@@ -95,7 +95,10 @@ def parse_reply(raw: str) -> dict[str, Any]:
     # raw_decode reads exactly one JSON value from `start` and ignores anything after
     # it, unlike a naive first-`{`/last-`}` slice, which breaks if the reply contains
     # more than one brace pair (trailing chatter, a second example, etc.).
-    data, _ = json.JSONDecoder().raw_decode(raw, start)
+    try:
+        data, _ = json.JSONDecoder().raw_decode(raw, start)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"reply was not valid JSON: {exc} ({raw[:150]!r})") from exc
     candidates = data.get("candidates")
     if not isinstance(candidates, list):
         raise ValueError("reply had no 'candidates' list")

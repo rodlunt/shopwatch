@@ -229,11 +229,18 @@ def parse_cli_output(text: str) -> ExtractionResult:
     fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
     if fence:
         raw = fence.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
+    start = raw.find("{")
+    if start == -1:
         return ExtractionResult(None, "claude-cli", f"no JSON in reply: {raw[:120]}")
+    # raw_decode reads exactly one JSON value from `start` and ignores anything after
+    # it, unlike a first-`{`/last-`}` slice, which breaks if the reply contains more
+    # than one brace pair (trailing chatter, a second example, etc.).
     try:
-        return ExtractionResult(ExtractedOffer.model_validate_json(raw[start:end + 1]), "claude-cli")
+        data, _ = json.JSONDecoder().raw_decode(raw, start)
+    except json.JSONDecodeError as exc:
+        return ExtractionResult(None, "claude-cli", f"reply was not valid JSON: {exc} ({raw[:120]!r})")
+    try:
+        return ExtractionResult(ExtractedOffer.model_validate(data), "claude-cli")
     except Exception as exc:
         return ExtractionResult(None, "claude-cli", f"reply did not match the schema: {exc}")
 

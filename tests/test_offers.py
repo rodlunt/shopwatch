@@ -304,6 +304,21 @@ def test_cli_output_survives_a_code_fence_and_surrounding_prose():
     assert result.offer.is_offer is False
 
 
+def test_cli_output_survives_trailing_prose_with_its_own_brace():
+    """A real Claude reply hit this: a clean JSON object followed by a parenthetical
+    aside containing its own brace, which broke a naive first-`{`/last-`}` slice (it
+    grabbed everything up to the LAST `}` in the whole reply, not just the JSON
+    object's own closing brace)."""
+    reply = ('{"is_offer": true, "kind": "percent_off", "amount": 15,'
+             ' "spend_threshold": null, "applies_to": "TVs", "categories": ["tv"],'
+             ' "excludes": null, "code": null, "expires": null, "requires_signup": false,'
+             ' "confidence": "high", "summary": "15% off TVs"}\n\n'
+             '(Note: sizes vary by model, e.g. {55, 65}.)')
+    result = offers.parse_cli_output(reply)
+    assert result.error is None
+    assert result.offer.amount == 15
+
+
 def test_a_reply_that_is_not_json_is_an_error_not_a_crash():
     """The control: garbage in must produce a reported error, never a false offer."""
     result = offers.parse_cli_output("I could not read that email, sorry.")
