@@ -107,3 +107,29 @@ def test_reply_with_malformed_json():
 def test_empty_reply():
     with pytest.raises(research_runner.RunnerError):
         research_runner.parse_research_reply("")
+
+
+def test_the_claude_call_grants_web_search_and_fetch(monkeypatch):
+    """The prompt tells the model to search the web and read the retailer's own
+    site, but neither tool is available by default in a non-interactive `-p` call
+    with no TTY to approve a permission prompt - the CLI just declines in plain
+    text instead, which then fails the JSON check and reports every retailer as
+    NEEDS_MANUAL_CHECK regardless of whether the price actually exists. Same
+    discipline app/offers.py already uses for its own subprocess call
+    (--allowedTools Read)."""
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError):
+        research_runner.research_one_retailer(
+            "http://x", "claude", "Some Product", "SKU-1", "Some Retailer", None
+        )
+    args = captured["args"]
+    assert "--allowedTools" in args
+    tools = args[args.index("--allowedTools") + 1]
+    assert "WebSearch" in tools.split(",")
+    assert "WebFetch" in tools.split(",")
