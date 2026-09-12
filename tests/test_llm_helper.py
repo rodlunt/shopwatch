@@ -62,9 +62,16 @@ def test_a_truncated_json_reply_reports_what_the_cli_actually_said():
     initially dropped the diagnostic snippet for the separate case of a reply that has
     a `{` but is not valid JSON at all (e.g. cut off mid-object by a hung CLI or the
     call timeout) - whoever is debugging a failed wizard request needs to see what the
-    CLI actually said, not a bare JSONDecodeError with no content."""
-    reply = '{"candidates": [{"model": "REAL-1", "label": "cut off mid-str'
-    with pytest.raises(ValueError, match=re.escape(reply)):
+    CLI actually said, not a bare JSONDecodeError with no content.
+
+    Matches against `repr(reply[:150])`, built the same way the error message is,
+    rather than `re.escape(reply)` directly: a code-review pass caught that the two
+    diverge whenever the reply contains an apostrophe, because Python's repr() picks
+    its quote style (and what it escapes) based on the string's own content, not on
+    whatever quoting `re.escape` was given.
+    """
+    reply = "{\"candidates\": [{\"model\": \"REAL-1\", \"label\": \"Rodney's cut off mid-str"
+    with pytest.raises(ValueError, match=re.escape(repr(reply[:150]))):
         llm_helper.parse_reply(reply)
 
 
@@ -84,6 +91,29 @@ def test_a_reply_with_trailing_prose_after_the_json_still_parses():
     )
     result = llm_helper.parse_reply(reply)
     assert result["candidates"] == [{"model": "QA55S90DAWXXY", "label": 'Samsung 55" S90D OLED (AU)'}]
+
+
+def test_a_leading_draft_does_not_shadow_the_real_answer():
+    """A code-review pass caught the mirror-image defect the raw_decode fix
+    introduced: it took the FIRST complete JSON object, so a reply that states a
+    draft or a reference case before the real answer silently returned the wrong
+    one instead of erroring. Every reproduced example had the real answer LAST."""
+    reply = (
+        'For an unrecognised product I would say {"candidates": [], "note": "unrecognised"}. '
+        'For this one: {"candidates": [{"model": "DREAME-A2", "label": "Dreame A2"}], "note": null}'
+    )
+    result = llm_helper.parse_reply(reply)
+    assert result["candidates"] == [{"model": "DREAME-A2", "label": "Dreame A2"}]
+
+
+def test_a_non_dict_candidate_item_is_dropped_not_a_crash():
+    """A code-review pass caught this: candidates[:5] items were never type-checked
+    before .get() was called, so a model returning a bare string in the list raised
+    an unhandled AttributeError instead of being treated like any other malformed
+    candidate."""
+    reply = '{"candidates": ["oops-a-string", {"model": "REAL-1"}], "note": null}'
+    result = llm_helper.parse_reply(reply)
+    assert result["candidates"] == [{"model": "REAL-1", "label": "REAL-1"}]
 
 
 def test_build_prompt_includes_the_query():

@@ -40,6 +40,41 @@ def test_reply_survives_trailing_prose_with_its_own_brace():
     assert result["price"] == 1099
 
 
+def test_a_leading_reference_price_does_not_shadow_the_real_answer():
+    """A code-review pass caught the mirror-image defect the raw_decode fix
+    introduced: it took the FIRST complete JSON object, so a reply that states an
+    older/similar model's price before the exact model requested silently returned
+    the wrong price instead of erroring. Every reproduced example had the real
+    answer LAST."""
+    reply = (
+        'For a similar older model I found {"found": true, "price": 999, "reason": "similar model"} '
+        'but for the exact model requested: '
+        '{"found": true, "price": 1099, "stock": "In stock", "url": "https://x", "reason": "ok"}'
+    )
+    result = research_runner.parse_research_reply(reply)
+    assert result["price"] == 1099
+
+
+def test_found_as_a_string_is_not_treated_as_true():
+    """`"found": "false"` is a non-empty string, which is truthy in Python - a model
+    that returns the word instead of the JSON boolean must not bypass the
+    not-found guard."""
+    reply = '{"found": "false", "price": 199, "reason": "could not confirm"}'
+    with pytest.raises(research_runner.RunnerError) as exc_info:
+        research_runner.parse_research_reply(reply)
+    assert exc_info.value.status == "NEEDS_MANUAL_CHECK"
+
+
+def test_a_nan_price_is_not_treated_as_usable():
+    """Python's json parser accepts the non-standard NaN token by default; NaN is a
+    float and is not None, so it would otherwise pass the found-a-price guard and
+    get imported as a real price that silently fails every trigger comparison."""
+    reply = '{"found": true, "price": NaN, "reason": "estimate"}'
+    with pytest.raises(research_runner.RunnerError) as exc_info:
+        research_runner.parse_research_reply(reply)
+    assert exc_info.value.status == "NEEDS_MANUAL_CHECK"
+
+
 def test_found_false_is_reported_as_needs_manual_check():
     reply = '{"found": false, "price": null, "reason": "page blocked the request"}'
     with pytest.raises(research_runner.RunnerError) as exc_info:
