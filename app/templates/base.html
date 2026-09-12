@@ -5,19 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Shopwatch{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css?v={{ version }}">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#128722;</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg?v={{ version }}">
 </head>
 <body>
 <header class="top">
   <h1><a href="/">Shopwatch</a></h1>
   <span class="spacer"></span>
   <nav>
-    <button id="btn-watch" title="Check every retailer that has a scraper">Check prices</button>
-    <button id="btn-import">Paste in research</button>
+    <button id="btn-watch" class="has-icon" title="Check every retailer that has a scraper">
+      <span class="icon" aria-hidden="true">{% include "_icons/refresh.svg" %}</span>Check prices
+    </button>
+    <button id="btn-import" class="has-icon">
+      <span class="icon" aria-hidden="true">{% include "_icons/clipboard.svg" %}</span>Paste in research
+    </button>
     <details class="menu" style="position:relative">
-      <summary class="btn" style="list-style:none">Data</summary>
+      <summary class="btn has-icon" style="list-style:none">
+        <span class="icon" aria-hidden="true">{% include "_icons/database.svg" %}</span>Data
+      </summary>
       <div style="position:absolute;right:0;top:calc(100% + 6px);background:var(--surface);
-                  border:1px solid var(--rule);border-radius:8px;padding:6px;min-width:190px;
+                  border:1px solid var(--rule);border-radius:var(--radius-control);padding:6px;min-width:190px;
                   box-shadow:0 10px 30px rgba(0,0,0,.16);z-index:40;display:flex;
                   flex-direction:column;gap:2px">
         <a class="btn" style="border:0;text-align:left" href="/api/export" download>Download everything (JSON)</a>
