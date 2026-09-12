@@ -474,18 +474,37 @@ fewer than 2 real listings, and when it does, the response is deliberately label
 
 ## Suggesting a model number ("Set up your LLM")
 
+**TL;DR - 5 minutes, no coding:**
+
+1. Click **"Set up your LLM"** at the top of the page, then **"Download the helper"**.
+2. Unzip it.
+3. Double-click the one file matching your computer and AI tool (a plain-English
+   `README.txt` is in the zip too if you're not sure which):
+
+   |            | Claude Code               | Codex                     |
+   |------------|----------------------------|----------------------------|
+   | Windows    | `run-claude-windows.bat`   | `run-codex-windows.bat`   |
+   | Mac        | `run-claude-mac.command`   | `run-codex-mac.command`   |
+   | Linux      | `run-claude-linux.sh`      | `run-codex-linux.sh`      |
+
+4. A window opens and asks for your shopwatch username and password (the same ones
+   you already use to open this site). Enter them and leave that window open.
+
+That's it. Back in the wizard, type what you're watching and click "Suggest models" -
+candidates appear as clickable chips a few seconds later. You'll need Claude Code or
+Codex already installed and signed in on that computer, but nothing else: no API key,
+no `pip install`, nothing this server stores or bills for.
+
+<details>
+<summary>How it works, the command-line option, and why it's built this way</summary>
+
 The wizard's "Suggest models" button turns a rough description ("Dreame RoboMower")
 into a short list of real candidate model numbers, using **your own** Claude Code or
 Codex CLI login - no API key, nothing this server holds or bills for.
 
-**Setup, the easy way:** "Set up your LLM" in the header links to
-`GET /tools/llm-helper.zip` - a zip containing `llm-helper.py`, a plain-English
-`README.txt`, and a double-click launcher per OS x backend combination
-(`run-claude-mac.command`, `run-codex-windows.bat`, etc.), each with the real
-shopwatch URL already filled in - no command to type or edit. Unzip it on any
-machine that already has Claude Code or Codex CLI installed and signed in,
-double-click the file matching that computer and CLI, enter the shopwatch
-username and password when prompted, and leave it running.
+**The zip** (`GET /tools/llm-helper.zip`) contains `llm-helper.py`, a plain-English
+`README.txt`, and a double-click launcher per OS x backend combination, each already
+pointed at this shopwatch instance - no command to type or edit.
 
 **Setup, from the command line**, if you'd rather:
 
@@ -521,6 +540,16 @@ corrupt matching later. The prompt asks the model to return zero candidates rath
 guess when it isn't genuinely confident, and every response is shown with a caveat note
 about confidence or recency - clicking a chip only fills the text field, exactly as if
 you had typed it yourself.
+
+**The URL that goes into the zip is validated, not trusted.** `GET
+/tools/llm-helper.zip?url=...` writes that value as plain data into the zip
+(`shopwatch-url.txt`, which each launcher reads at runtime) rather than ever splicing
+it into a script's own text, and rejects anything that isn't exactly `https?://host
+[:port]` before it gets that far - a download link is something someone could be
+tricked into clicking, so the value behind `url` gets no more trust than any other
+request parameter.
+
+</details>
 
 ## Deployed on opti
 
