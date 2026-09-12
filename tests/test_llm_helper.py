@@ -61,6 +61,19 @@ def test_reply_missing_the_candidates_key():
         llm_helper.parse_reply('{"note": "hmm"}')
 
 
+def test_a_reply_with_trailing_prose_after_the_json_still_parses():
+    """A real Claude reply hit this: a clean JSON object followed by trailing text
+    containing its own brace, which broke the old first-`{`/last-`}` slice (it grabbed
+    everything up to the LAST `}` in the whole reply, not just the JSON object's own
+    closing brace)."""
+    reply = (
+        '{"candidates": [{"model": "QA55S90DAWXXY", "label": "Samsung 55\\" S90D OLED (AU)"}], '
+        '"note": null}\n\n(Let me know if you meant a different size, e.g. {55, 65}.)'
+    )
+    result = llm_helper.parse_reply(reply)
+    assert result["candidates"] == [{"model": "QA55S90DAWXXY", "label": 'Samsung 55" S90D OLED (AU)'}]
+
+
 def test_build_prompt_includes_the_query():
     prompt = llm_helper.build_prompt("Dreame RoboMower")
     assert "Dreame RoboMower" in prompt

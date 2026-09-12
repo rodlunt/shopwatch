@@ -89,10 +89,13 @@ def parse_reply(raw: str) -> dict[str, Any]:
     fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
     if fence:
         raw = fence.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
+    start = raw.find("{")
+    if start == -1:
         raise ValueError(f"no JSON object in reply: {raw[:150]!r}")
-    data = json.loads(raw[start:end + 1])
+    # raw_decode reads exactly one JSON value from `start` and ignores anything after
+    # it, unlike a naive first-`{`/last-`}` slice, which breaks if the reply contains
+    # more than one brace pair (trailing chatter, a second example, etc.).
+    data, _ = json.JSONDecoder().raw_decode(raw, start)
     candidates = data.get("candidates")
     if not isinstance(candidates, list):
         raise ValueError("reply had no 'candidates' list")
