@@ -27,13 +27,18 @@ app depends on.
 ```bash
 git log --oneline -10                               # what actually landed last
 .venv/bin/python -m pytest -q                        # test count, current
-.venv/bin/python -m ruff check .                     # lint
+.venv/bin/python -m ruff check .                     # lint (may differ from CI's exact
+                                                      # pin - see the lint-drift note below)
 gh pr list --state open                              # what's still open
 gh issue list --state open                            # what's still open
 ssh root@100.115.75.8 "docker exec shopwatch cat /app/git_sha 2>/dev/null || \
   docker inspect shopwatch --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}'"
                                                       # what's actually deployed
 ```
+
+All five above were run and confirmed to agree at session end: everything merged this
+session (PRs #71-#75, plus the earlier #66-#70 chain) is live in production, 0 open
+issues, 0 open PRs, full suite green.
 
 ## Decisions this session, with reasoning
 
@@ -48,33 +53,41 @@ ssh root@100.115.75.8 "docker exec shopwatch cat /app/git_sha 2>/dev/null || \
   context (in-container, host-only, user's-own-machine) this codebase keeps
   independent by design. Expect near-identical code in all three. A fix to the parsing
   logic in one almost certainly needs the identical fix in the other two: this happened
-  for real this session, a first fix landed in `llm-helper.py` alone, and a
-  `/code-review` pass caught the same bug still live in the other two.
+  for real this session, twice over (see below).
 - **The parsing fix takes the LAST complete JSON object in a reply, not the first.**
   Deliberate, not an oversight: every real reply reproduced this session that stated a
   draft or reference case before the real answer put the real answer last. This does
   not guarantee correctness if a reply ever states the real answer first and a
   counter-example after it; that trade-off was accepted rather than engineering for a
-  pattern nothing has actually produced.
+  pattern nothing has actually produced. Getting to this took two `/code-review` rounds:
+  round 1 found the original trailing-data bug fixed in one file only, still live in the
+  other two; round 2 found that the fix itself (take the FIRST complete object) could
+  silently return the WRONG answer, worse than the bug it replaced, and caught four more
+  real bugs alongside it (a `found`/NaN type-confusion bug, a non-dict-candidate crash,
+  an uncaught RecursionError, a fragile test). All fixed, all verified fail-then-pass.
 - **Dark-mode screenshots need a real capture, not just trusting the CSS.** Switching
   `emulate({colorScheme})` on an already-open `<dialog>` produces a stale-paint
   screenshot even though `getComputedStyle` and `matchMedia` both report the change
   correctly - reload or navigate fresh in the new scheme BEFORE opening any dialog,
   never mid-session with one already open.
+- **Local `.venv` lint can silently drift ahead of CI's exact pin.**
+  `requirements-dev.txt` floors `ruff` (`>=0.8.6`) rather than pinning it, deliberately,
+  so `pip-audit` can flag advisories against whatever's installed; CI separately pins
+  `ruff==0.8.6` exactly for reproducibility. A local `.venv` that's had
+  `pip install -r requirements-dev.txt` run against it over time can end up on a much
+  newer ruff whose rule set has changed, and lint can pass locally while failing in CI
+  (or the reverse). If that happens, don't assume either result is right: check the
+  version CI pins (`grep ruff.*== .github/workflows/*.yml`) and verify against a scratch
+  venv with that exact version before trusting either run.
 
 ## Open follow-ups
 
-```bash
-gh pr view 75   # the JSON-parsing fix PR - confirm merged; if not, why not
-```
-
-If PR #75 is still open: a `/code-review` pass was running against it when this session
-ended and its findings were already acted on in the branch itself (leading-JSON-object
-silent-wrong-answer bug, a `found`/NaN type-confusion bug in the research runner, a
-non-dict-candidate crash, a RecursionError left uncaught, and a fragile test) - read the
-PR body for the full list before assuming it still needs work.
+None. 0 open issues, 0 open PRs, full suite green, production confirmed live at the
+latest merge commit via direct SSH/`docker exec`, both by git SHA label and by grepping
+the actual deployed file content for the fix.
 
 ## Suggested starting point
 
-Run the verification commands above first. If PR #75 is merged and CI/deploy match,
-this session's work needs no further checking.
+Nothing outstanding from this session. Start from whatever the user brings next; the
+verification commands above are the fast way to confirm that's still true if it's been
+a while since this was written.
