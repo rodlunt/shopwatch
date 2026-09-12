@@ -132,7 +132,7 @@ def parse_research_reply(raw: str) -> dict[str, Any]:
     # `is None` check - both are real replies seen from a model that ignored the
     # requested shape, and both must not be treated as a usable price.
     price_is_usable = (
-        isinstance(price, (int, float)) and not isinstance(price, bool)
+        isinstance(price, int | float) and not isinstance(price, bool)
         and math.isfinite(price)
     )
     if data.get("found") is not True or not price_is_usable:
