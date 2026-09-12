@@ -516,3 +516,29 @@ def test_a_patch_response_carries_ruled_out_for_the_client(client):
     payload = body.get("listing", body)
     assert "ruled_out" in payload, "the client cannot style what it is not told"
     assert payload["ruled_out"], "and it must reflect the current state"
+
+
+def test_latest_research_job_is_null_with_no_history(client):
+    pid = q930h(client)["id"]
+    response = client.get(f"/api/products/{pid}/research-jobs/latest")
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+def test_latest_research_job_is_a_404_for_an_unknown_product(client):
+    response = client.get("/api/products/999999/research-jobs/latest")
+    assert response.status_code == 404
+
+
+def test_latest_research_job_reflects_the_one_just_created(client):
+    """The product page's retry entry point reads this to pre-fill retailers - it must
+    see the job the wizard (or a retry) just queued, not a stale or unrelated one."""
+    pid = q930h(client)["id"]
+    retailer_id = client.get(f"/api/products/{pid}/retailers").json()[0]["retailer_id"]
+
+    created = client.post("/api/research-jobs",
+                           json={"product_id": pid, "retailer_ids": [retailer_id]}).json()
+
+    latest = client.get(f"/api/products/{pid}/research-jobs/latest").json()
+    assert latest["id"] == created["id"]
+    assert {r["retailer_id"] for r in latest["results"]} == {retailer_id}

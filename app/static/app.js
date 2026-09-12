@@ -539,6 +539,32 @@ async function wizShowDone(job) {
     : `Found real prices at ${found} of ${job.results.length} retailers.`;
   document.getElementById('wiz-results').replaceChildren(...job.results.map(wizProgressRow));
 
+  // Not FOUND covers NEEDS_MANUAL_CHECK, BLOCKED, TIMED_OUT and any retailer still
+  // PENDING because the job itself failed outright - all of them are worth another
+  // attempt without the person having to re-tick the retailers step from scratch.
+  const retryBtn = document.getElementById('wiz-retry');
+  const stillToCheck = job.results.filter(r => r.status !== 'FOUND');
+  retryBtn.hidden = stillToCheck.length === 0;
+  retryBtn.textContent =
+    `Retry ${stillToCheck.length} failed retailer${stillToCheck.length === 1 ? '' : 's'}`;
+  retryBtn.onclick = async () => {
+    retryBtn.disabled = true;
+    try {
+      const retried = await api('/api/research-jobs', { method: 'POST', body: {
+        product_id: wiz.productId, retailer_ids: stillToCheck.map(r => r.retailer_id),
+      }});
+      wiz.jobId = retried.id;
+      wiz.index = WIZ_STEPS.indexOf('running');
+      wizRender();
+      document.getElementById('wiz-progress').replaceChildren(...retried.results.map(wizProgressRow));
+      wiz.pollTimer = setInterval(wizPoll, 2000);
+    } catch (err) {
+      toast(`Could not retry: ${err.message}`, 'bad');
+    } finally {
+      retryBtn.disabled = false;
+    }
+  };
+
   if (wiz.wantsSuggestion) {
     const box = document.getElementById('wiz-suggestion');
     try {
@@ -751,6 +777,100 @@ wire('al-save', async () => {
     toast('Listing added.', 'good');
     location.reload();
   } catch (err) { toast(`Could not add listing: ${err.message}`, 'bad'); }
+});
+
+/* ------------------------------------------------------ retry research (product page)
+ *
+ * The wizard's own research step only ever runs once, against a product just created -
+ * closing the wizard after a failed or partial run left no way back in at all. This is
+ * that way back in: same /api/research-jobs the wizard uses, but pre-ticking whichever
+ * retailers did not come back FOUND last time, so a retry never means reconstructing
+ * the retailer list from memory.
+ */
+
+let researchRetry = { productId: null, selected: new Set(), pollTimer: null };
+
+wire('btn-research-retailers', async event => {
+  if (researchRetry.pollTimer) clearInterval(researchRetry.pollTimer);
+  researchRetry = { productId: Number(event.currentTarget.dataset.product), selected: new Set(), pollTimer: null };
+  const list = document.getElementById('research-retailer-list');
+  const progress = document.getElementById('research-progress');
+  const goBtn = document.getElementById('research-go');
+  const intro = document.getElementById('research-dialog-intro');
+  progress.hidden = true;
+  progress.replaceChildren();
+  list.replaceChildren();
+  goBtn.hidden = false;
+  goBtn.disabled = false;
+  goBtn.textContent = 'Research selected';
+  intro.textContent = 'Loading retailers...';
+  document.getElementById('research-dialog').showModal();
+
+  let retailers, latestJob;
+  try {
+    [retailers, latestJob] = await Promise.all([
+      api('/api/retailers'),
+      api(`/api/products/${researchRetry.productId}/research-jobs/latest`),
+    ]);
+  } catch (err) {
+    intro.textContent = `Could not load retailers: ${err.message}`;
+    return;
+  }
+
+  const stillToCheck = new Set(
+    (latestJob?.results || []).filter(r => r.status !== 'FOUND').map(r => r.retailer_id)
+  );
+  intro.textContent = stillToCheck.size
+    ? `Pre-selected the ${stillToCheck.size} retailer${stillToCheck.size === 1 ? '' : 's'} `
+      + 'that did not turn up a price last time. Untick or add more as you like.'
+    : 'Pick which retailers to check.';
+
+  for (const r of retailers) {
+    const row = el('label', '', 'wizard-retailer-row');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = r.id;
+    box.checked = stillToCheck.has(r.id);
+    if (box.checked) researchRetry.selected.add(r.id);
+    box.addEventListener('change', () => {
+      if (box.checked) researchRetry.selected.add(r.id); else researchRetry.selected.delete(r.id);
+    });
+    row.append(box, el('span', r.name, 'name'));
+    list.appendChild(row);
+  }
+});
+
+wire('research-go', async () => {
+  if (researchRetry.selected.size === 0) { toast('Pick at least one retailer.', 'bad'); return; }
+  const goBtn = document.getElementById('research-go');
+  const progress = document.getElementById('research-progress');
+  goBtn.disabled = true;
+  try {
+    const job = await api('/api/research-jobs', { method: 'POST', body: {
+      product_id: researchRetry.productId, retailer_ids: [...researchRetry.selected],
+    }});
+    goBtn.hidden = true;
+    progress.hidden = false;
+    progress.replaceChildren(...job.results.map(wizProgressRow));
+    researchRetry.pollTimer = setInterval(async () => {
+      const updated = await api(`/api/research-jobs/${job.id}`);
+      progress.replaceChildren(...updated.results.map(wizProgressRow));
+      if (updated.status === 'DONE' || updated.status === 'FAILED') {
+        clearInterval(researchRetry.pollTimer);
+        const found = updated.results.filter(r => r.status === 'FOUND').length;
+        toast(`Research finished: found ${found} of ${updated.results.length}.`,
+              found ? 'good' : 'bad');
+        setTimeout(() => location.reload(), 1400);
+      }
+    }, 2000);
+  } catch (err) {
+    toast(`Could not start research: ${err.message}`, 'bad');
+    goBtn.disabled = false;
+  }
+});
+
+document.getElementById('research-dialog')?.addEventListener('close', () => {
+  if (researchRetry.pollTimer) clearInterval(researchRetry.pollTimer);
 });
 
 /* ----------------------------------------------------------------- purchases */

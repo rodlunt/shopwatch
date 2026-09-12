@@ -146,6 +146,18 @@ def get_job(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
     return job
 
 
+def get_latest_job_for_product(conn: sqlite3.Connection, product_id: int) -> dict[str, Any] | None:
+    """The most recent job for a product, terminal or not, so a caller can pre-fill a
+    retry with whichever retailers did not come back FOUND last time - the whole point
+    being that a retailer selection the wizard already made once is never something the
+    person has to reconstruct from memory."""
+    row = conn.execute(
+        "SELECT id FROM research_jobs WHERE product_id = ? ORDER BY id DESC LIMIT 1",
+        (product_id,),
+    ).fetchone()
+    return get_job(conn, row["id"]) if row else None
+
+
 def claim_next_queued(conn: sqlite3.Connection) -> dict[str, Any] | None:
     """Atomically claim the oldest QUEUED job for the host-level runner.
 
