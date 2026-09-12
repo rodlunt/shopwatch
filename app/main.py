@@ -866,6 +866,17 @@ def api_create_research_job(payload: dict = Body(...)) -> Any:
         return jsonable(research.get_job(conn, job_id))
 
 
+@app.get("/api/products/{product_id}/research-jobs/latest")
+def api_latest_research_job(product_id: int) -> Any:
+    """The product page's own retry entry point reads this to pre-fill which retailers
+    to check again - null just means no research has ever run for this product, not an
+    error."""
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        return jsonable(research.get_latest_job_for_product(conn, product_id))
+
+
 @app.get("/api/research-jobs/{job_id}")
 def api_get_research_job(job_id: int) -> Any:
     with session() as conn:
