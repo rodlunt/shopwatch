@@ -12,8 +12,29 @@
   {% else %}
     <button id="btn-mark-purchased" class="primary">I bought this</button>
   {% endif %}
+  {% if product.group_id %}
+    <a class="btn" href="/groups/{{ product.group_id }}">In a group</a>
+    <button id="btn-leave-group" data-product="{{ product.id }}">Leave group</button>
+  {% else %}
+    <button id="btn-join-group" data-product="{{ product.id }}">Group with another candidate</button>
+  {% endif %}
   <button id="btn-give-up-product" data-product="{{ product.id }}" class="danger">Give up on this</button>
 {% endcall %}
+
+<dialog id="join-group-dialog">
+  <header>Group with another candidate</header>
+  <div class="body">
+    <p class="muted" style="margin:0 0 10px">For products that satisfy the same want -
+      different brands or models you'd be equally happy with.</p>
+    <div class="form-grid">
+      <label class="wide">Existing group
+        <select id="jg-existing"><option value="">- none -</option></select>
+      </label>
+      <label class="wide">Or a new group's name <input id="jg-new-name" placeholder="Graphics cards"></label>
+    </div>
+  </div>
+  <footer><button data-close>Cancel</button><button class="primary" id="jg-save">Add</button></footer>
+</dialog>
 
 {% if product.purchase %}
 <div class="panel" style="padding:0;overflow:hidden">

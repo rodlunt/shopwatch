@@ -14,11 +14,29 @@
   <button id="btn-new-product" class="primary">Track something new</button>
 </div>
 
+{% for group in groups %}
+<section class="product">
+  <div class="product-head">
+    <div class="row">
+      <h2><a href="/groups/{{ group.id }}">{{ group.name }}</a></h2>
+      <span class="model">{{ group.members|length }} candidate{{ 's' if group.members|length != 1 else '' }}</span>
+      <span class="spacer"></span>
+      <a class="btn" href="/groups/{{ group.id }}">Open</a>
+    </div>
+  </div>
+  <p class="verdict {{ 'act' if group.best else 'quiet' }}">
+    {% if group.best %}Best so far: <b>{{ group.best.value|money }}</b> ({{ group.best.retailer }}).
+    {% else %}No prices recorded yet across {{ group.members|length }} candidate{{ 's' if group.members|length != 1 else '' }}.{% endif %}
+  </p>
+</section>
+{% endfor %}
+
 {% for product in products %}
   {% call c.card(product) %}
     <a class="btn" href="/products/{{ product.id }}">Open</a>
   {% endcall %}
 {% else %}
+{% if not groups %}
 <div class="panel">
   <h3>{% if status != 'ALL' %}Nothing here{% else %}Nothing tracked yet{% endif %}</h3>
   <p class="muted">
@@ -28,6 +46,7 @@
       when one crosses your price.{% endif %}
   </p>
 </div>
+{% endif %}
 {% endfor %}
 
 <dialog id="wizard-dialog">
@@ -56,6 +75,9 @@
           <select id="wiz-verdict"><option>MAYBE</option><option>BUY</option><option>IGNORE</option></select>
         </label>
         <label class="wide">Notes <textarea id="wiz-notes" rows="2"></textarea></label>
+        <label>Part of a group? <select id="wiz-group"><option value="">- none -</option></select>
+          <small>For candidates you'd be equally happy with - different brands or models</small></label>
+        <label>Or a new group's name <input id="wiz-new-group" placeholder="Graphics cards"></label>
       </div>
     </div>
 

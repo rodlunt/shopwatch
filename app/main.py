@@ -127,9 +127,15 @@ def jsonable(value: Any) -> Any:
 @app.get("/", response_class=HTMLResponse)
 def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> Any:
     with session() as conn:
-        products = store.list_products(conn, status=None if status == "ALL" else status)
+        products = store.list_products(
+            conn, status=None if status == "ALL" else status, exclude_grouped=True
+        )
         for product in products:
             product["listings"] = store.listings_for_product(conn, product, sort=sort)
+        # Groups aren't ACTIVE/PURCHASED/PARKED themselves - they're a comparison of
+        # products that mostly are. Shown on the ACTIVE and ALL tabs, where "still
+        # deciding between candidates" actually belongs; not on PURCHASED/PARKED.
+        groups = store.list_groups(conn) if status in ("ACTIVE", "ALL") else []
         counts = {
             row["status"]: row["n"]
             for row in conn.execute(
@@ -143,6 +149,7 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
         "board.html",
         {
             "products": products,
+            "groups": groups,
             "retailers": retailer_list,
             "sort": sort,
             "status": status,
@@ -184,6 +191,29 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
             "statuses": store.STATUSES,
             "aspects": provenance.VERIFICATION_ASPECTS,
             "tracked_fields": provenance.TRACKED_FIELDS,
+            "config": load_config(),
+            "version": ASSET_VERSION,
+            "app_version": __version__,
+            "git_sha": GIT_SHA,
+        },
+    )
+
+
+@app.get("/groups/{group_id}", response_class=HTMLResponse)
+def group_page(request: Request, group_id: int, sort: str = "delivered") -> Any:
+    with session() as conn:
+        group = store.group_view(conn, group_id, sort=sort)
+        if group is None:
+            raise HTTPException(404, "no such group")
+        retailer_list = store.list_retailers(conn)
+    return templates.TemplateResponse(
+        request,
+        "group.html",
+        {
+            "group": group,
+            "retailers": retailer_list,
+            "sort": sort,
+            "classes": pricing.CLASS_LABELS,
             "config": load_config(),
             "version": ASSET_VERSION,
             "app_version": __version__,
@@ -242,6 +272,75 @@ def api_price_suggestion(product_id: int) -> Any:
             raise HTTPException(404, "no such product")
         listings = store.listings_for_product(conn, dict(product))
     return pricing.suggest_price_target(listings)
+
+
+# ------------------------------------------------------------------------ watch groups
+
+
+@app.get("/api/groups")
+def api_groups(include_archived: bool = False) -> Any:
+    with session() as conn:
+        return jsonable(store.list_groups(conn, include_archived))
+
+
+@app.post("/api/groups", status_code=201)
+def api_create_group(payload: dict = Body(...)) -> Any:
+    with session() as conn:
+        try:
+            group_id = store.create_group(conn, payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(store.group_view(conn, group_id))
+
+
+@app.get("/api/groups/{group_id}")
+def api_group(group_id: int, sort: str = "delivered") -> Any:
+    with session() as conn:
+        group = store.group_view(conn, group_id, sort=sort)
+        if group is None:
+            raise HTTPException(404, "no such group")
+        return jsonable(group)
+
+
+@app.patch("/api/groups/{group_id}")
+def api_update_group(group_id: int, payload: dict = Body(...)) -> Any:
+    with session() as conn:
+        if store.get_group(conn, group_id) is None:
+            raise HTTPException(404, "no such group")
+        store.update_group(conn, group_id, payload)
+        return jsonable(store.group_view(conn, group_id))
+
+
+@app.post("/api/products/{product_id}/group")
+def api_set_product_group(product_id: int, payload: dict = Body(...)) -> Any:
+    """Attach a product to a group. `{"group_id": 1}` for an existing group, or
+    `{"name": "Graphics cards"}` to create a new one and attach in the same call."""
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        group_id = payload.get("group_id")
+        if not group_id and payload.get("name"):
+            try:
+                group_id = store.create_group(
+                    conn, {"name": payload["name"], "notes": payload.get("notes")}
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        if not group_id:
+            raise HTTPException(400, "group_id or name is required")
+        if store.get_group(conn, group_id) is None:
+            raise HTTPException(404, "no such group")
+        store.set_product_group(conn, product_id, group_id)
+        return jsonable(store.product_view(conn, product_id))
+
+
+@app.delete("/api/products/{product_id}/group")
+def api_remove_product_group(product_id: int) -> Any:
+    with session() as conn:
+        if store.get_product(conn, product_id) is None:
+            raise HTTPException(404, "no such product")
+        store.set_product_group(conn, product_id, None)
+        return jsonable(store.product_view(conn, product_id))
 
 
 @app.post("/api/products", status_code=201)

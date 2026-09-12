@@ -351,6 +351,7 @@ def record_purchase(
         "UPDATE products SET status = 'PURCHASED', updated_at = ? WHERE id = ?",
         (utcnow(), product_id),
     )
+    archive_other_group_members(conn, product_id)
     # The purchase is itself an observation, and the best one: it is a price someone
     # actually paid rather than one a page advertised.
     conn.execute(
@@ -372,6 +373,10 @@ def undo_purchase(conn: sqlite3.Connection, product_id: int) -> bool:
 
     The price_history row is deliberately left behind: it records a price that really was
     paid, and history is append-only even when the bookkeeping was wrong.
+
+    Deliberately does not revive any group sibling that this purchase archived. Which
+    candidates you would still want back in the hunt is not derivable from "the purchase
+    was undone" - reviving them is a decision for whoever undid it, done by hand.
     """
     purchase = latest_purchase(conn, product_id)
     if not purchase:
@@ -387,17 +392,155 @@ def undo_purchase(conn: sqlite3.Connection, product_id: int) -> bool:
 STATUS_ORDER = {"ACTIVE": 0, "PURCHASED": 1, "PARKED": 2}
 
 
+# ----------------------------------------------------------------------- watch groups
+#
+# Several genuinely different products that satisfy the same want, tracked together
+# because you will buy whichever wins, not all of them. A group carries no price
+# targets of its own - a $500 GPU and a $2,000 TV would never share a trigger - each
+# member keeps its own.
+
+GROUP_FIELDS = ["name", "notes"]
+
+
+def create_group(conn: sqlite3.Connection, data: Mapping[str, Any]) -> int:
+    payload = {k: v for k, v in data.items() if k in GROUP_FIELDS}
+    if not payload.get("name"):
+        raise ValueError("name is required")
+    payload["created_at"] = payload["updated_at"] = utcnow()
+    cols = ", ".join(payload)
+    marks = ", ".join("?" for _ in payload)
+    cur = conn.execute(
+        f"INSERT INTO watch_groups ({cols}) VALUES ({marks})", list(payload.values())
+    )
+    return int(cur.lastrowid)
+
+
+def get_group(conn: sqlite3.Connection, group_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM watch_groups WHERE id = ?", (group_id,)).fetchone()
+
+
+def update_group(conn: sqlite3.Connection, group_id: int, data: Mapping[str, Any]) -> None:
+    payload = {k: v for k, v in data.items() if k in GROUP_FIELDS}
+    if not payload:
+        return
+    payload["updated_at"] = utcnow()
+    assignments = ", ".join(f"{k} = ?" for k in payload)
+    conn.execute(
+        f"UPDATE watch_groups SET {assignments} WHERE id = ?", [*payload.values(), group_id]
+    )
+
+
+def set_product_group(
+    conn: sqlite3.Connection, product_id: int, group_id: int | None
+) -> None:
+    """Attach a product to a group, or detach it (group_id=None)."""
+    conn.execute(
+        "UPDATE products SET group_id = ?, updated_at = ? WHERE id = ?",
+        (group_id, utcnow(), product_id),
+    )
+
+
+def archive_other_group_members(conn: sqlite3.Connection, purchased_product_id: int) -> int:
+    """Buying one candidate settles the question for the rest of its group.
+
+    Archives every OTHER product in the same group (never the one just purchased -
+    its own status is already PURCHASED) and marks the group itself archived, so its
+    board card stops appearing and none of its members can start a new research job
+    (research.create_job refuses on an archived product). Returns how many were
+    archived, for the caller to report.
+    """
+    product = get_product(conn, purchased_product_id)
+    if product is None or product["group_id"] is None:
+        return 0
+    group_id = product["group_id"]
+    cur = conn.execute(
+        "UPDATE products SET archived = 1, updated_at = ?"
+        " WHERE group_id = ? AND id != ? AND archived = 0",
+        (utcnow(), group_id, purchased_product_id),
+    )
+    conn.execute(
+        "UPDATE watch_groups SET archived = 1, updated_at = ? WHERE id = ?",
+        (utcnow(), group_id),
+    )
+    return cur.rowcount
+
+
+def group_view(
+    conn: sqlite3.Connection, group_id: int, sort: str = "delivered"
+) -> dict[str, Any] | None:
+    """The full comparison view for one group: every member product plus a merged axis."""
+    row = get_group(conn, group_id)
+    if row is None:
+        return None
+    group = dict(row)
+    member_ids = [
+        r["id"] for r in conn.execute(
+            "SELECT id FROM products WHERE group_id = ? ORDER BY name", (group_id,)
+        )
+    ]
+    members = [p for p in (product_view(conn, pid, sort=sort) for pid in member_ids) if p]
+    group["members"] = members
+
+    points = []
+    for member in members:
+        for listing in member["listings"]:
+            if listing["delivered_price"] is None:
+                continue
+            points.append({
+                # Matches _product.html's ruler() macro field names (pt.id, pt.retailer,
+                # ...) so the group page can reuse that macro unmodified.
+                "id": listing["id"],
+                "product_id": member["id"],
+                "product_name": member["name"],
+                "retailer": f"{member['name']} - {listing['retailer_name']}",
+                "value": listing["delivered_price"],
+                "resolved": bool(listing["delivered_resolved"]),
+                "ruled_out": bool(listing.get("ruled_out")),
+            })
+    group["scale"] = pricing.merge_price_points(points)
+    # Same rule as a single product's best_listing: a ruled-out candidate never wins,
+    # however cheap.
+    contenders = [p for p in points if not p["ruled_out"]]
+    group["best"] = min(contenders, key=lambda p: p["value"]) if contenders else None
+    return group
+
+
+def list_groups(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict[str, Any]]:
+    where = "" if include_archived else "WHERE archived = 0"
+    ids = [r["id"] for r in conn.execute(f"SELECT id FROM watch_groups {where} ORDER BY name")]
+    return [g for g in (group_view(conn, gid) for gid in ids) if g]
+
+
 def list_products(
     conn: sqlite3.Connection,
     include_archived: bool = False,
     status: str | None = None,
+    exclude_grouped: bool = False,
 ) -> list[dict[str, Any]]:
-    """Products with their matrices assembled. ACTIVE first, so the hunt stays on top."""
+    """Products with their matrices assembled. ACTIVE first, so the hunt stays on top.
+
+    `exclude_grouped` is for the board's HTML view only: a grouped product's card is
+    the group's, not its own, so the board asks for the ungrouped set and renders
+    groups separately. The JSON API (GET /api/products) leaves this off by default, so
+    an API consumer still sees every product, grouped or not.
+
+    Only excludes membership in a STILL-ACTIVE group. Once a group resolves (a purchase
+    archived the rest and the group itself), the purchased product's own group_id is
+    left untouched as a historical fact - "which candidates it was chosen over" - but
+    that must never make the product itself invisible: its own group's card has
+    stopped rendering (list_groups excludes archived groups), so if this exclusion
+    still hid it too, a purchased, non-archived product would vanish from the board
+    entirely.
+    """
     clauses = [] if include_archived else ["archived = 0"]
     params: list[Any] = []
     if status and status.upper() != "ALL":
         clauses.append("status = ?")
         params.append(status.upper())
+    if exclude_grouped:
+        clauses.append(
+            "(group_id IS NULL OR group_id NOT IN (SELECT id FROM watch_groups WHERE archived = 0))"
+        )
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     ids = [r["id"] for r in conn.execute(f"SELECT id FROM products{where} ORDER BY name", params)]
     products = [p for p in (product_view(conn, pid) for pid in ids) if p]

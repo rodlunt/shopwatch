@@ -82,7 +82,15 @@ def create_job(
     table is silently dropped rather than passed through, so this can only ever ask
     about a retailer shopwatch already knows, never wherever a typo or a scraped page
     might lead the research pass.
+
+    Refuses outright for an archived product - "give up on this" (or a group purchase
+    that archived every other candidate) means stop watching, and a stray research job
+    against something nobody is hunting any more is exactly the wasted spend that
+    guarantee exists to prevent.
     """
+    row = conn.execute("SELECT archived FROM products WHERE id = ?", (product_id,)).fetchone()
+    if row is not None and row["archived"]:
+        raise ValueError("cannot start research on an archived product")
     if not retailer_ids:
         raise ValueError("at least one retailer is required")
     placeholders = ",".join("?" * len(retailer_ids))

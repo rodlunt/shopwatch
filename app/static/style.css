@@ -290,6 +290,9 @@ footer.site .build { font-family: var(--mono); }
  * marker saying how many, not a smudge of overlapping dots pretending to be distinct
  * readings. Zoom separates them; that is the honest relationship. */
 .axis-point.is-clustered { display: none; }
+/* Group page: hovering a candidate row highlights its axis point(s), and vice versa. */
+.axis-point.is-linked-hover i { box-shadow: 0 0 0 3px var(--close-bg), 0 0 0 4px var(--close); }
+.listing.is-linked-hover { background: var(--close-bg); }
 .axis-point.is-cluster i {
   width: 12px; height: 12px; margin-top: -5.5px;
   background: var(--surface);
