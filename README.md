@@ -1,3 +1,5 @@
+<img src="docs/brand/logo.svg" alt="" width="72" height="72">
+
 # Shopwatch
 
 [![CI](https://github.com/rodlunt/shopwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/rodlunt/shopwatch/actions/workflows/ci.yml)
