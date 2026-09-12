@@ -408,8 +408,15 @@ footer.site .build { font-family: var(--mono); }
 .axis-point.is-clustered.is-hover-revealed { display: block; }
 /* The callout box says price+seller for every one of the candidate's own listings in
  * one place, so each point's own label would only repeat it right next to the box -
- * hidden for as long as the reveal lasts, on every point it touches, clustered or not. */
-.axis-point.is-hover-revealed .axis-label { display: none; }
+ * hidden for as long as the reveal lasts, on every point it touches, clustered or not.
+ * visibility, not display: .axis-point is width:auto and shrink-to-fit, so display:none
+ * here collapsed its own hoverable box down to the bare dot (a few px) the instant the
+ * pointer entered it. A cursor resting anywhere over the label's much larger footprint -
+ * not exactly on the dot - fell outside that shrunken box, fired mouseleave, which
+ * restored the label and the box size, re-entering the (now large again) box and firing
+ * mouseenter straight back - an oscillation, not a one-off mis-hover. visibility:hidden
+ * hides the text without collapsing the space it reserves, so the box never moves. */
+.axis-point.is-hover-revealed .axis-label { visibility: hidden; }
 
 /* Fixed positioning deliberately: .product has overflow:hidden for its rounded
  * corners, and the axis-plot itself clips to fit its dot/label lanes. A callout has
