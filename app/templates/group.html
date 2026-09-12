@@ -23,7 +23,8 @@
   <div class="panel" id="group-candidate-list" style="padding:0;overflow:hidden">
     {% for member in group.members %}
       <div class="listing{{ ' is-act' if member.status == 'PURCHASED' else '' }}"
-           data-candidate-product="{{ member.id }}">
+           data-candidate-product="{{ member.id }}"
+           style="--candidate-color: {{ member.candidate_color }}">
         <a class="listing-row" href="/products/{{ member.id }}" style="text-decoration:none;color:inherit">
           <span class="caret">&#9654;</span>
           <span class="who">{{ member.name }}

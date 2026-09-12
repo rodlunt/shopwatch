@@ -401,6 +401,11 @@ STATUS_ORDER = {"ACTIVE": 0, "PURCHASED": 1, "PARKED": 2}
 
 GROUP_FIELDS = ["name", "notes"]
 
+#: Matches style.css's --candidate-1..8 custom properties exactly, in order. Only the
+#: count matters here (for the modulo cycle); the actual colour values live in CSS,
+#: including their dark-mode variants, so this list is never rendered directly.
+CANDIDATE_PALETTE = ["blue", "amber", "green", "violet", "orange", "teal", "pink", "taupe"]
+
 
 def create_group(conn: sqlite3.Connection, data: Mapping[str, Any]) -> int:
     payload = {k: v for k, v in data.items() if k in GROUP_FIELDS}
@@ -479,6 +484,13 @@ def group_view(
         )
     ]
     members = [p for p in (product_view(conn, pid, sort=sort) for pid in member_ids) if p]
+    # Assigned once here, by list position, so a candidate's row and its axis point(s)
+    # always agree on which colour is "theirs" without the template re-deriving it.
+    # Deliberately not the act/close/fault/manual palette: this answers "which model",
+    # not "should I act" - the two systems must never be confusable if they ever
+    # appear on the same page together.
+    for index, member in enumerate(members):
+        member["candidate_color"] = f"var(--candidate-{(index % len(CANDIDATE_PALETTE)) + 1})"
     group["members"] = members
 
     points = []
@@ -493,9 +505,15 @@ def group_view(
                 "product_id": member["id"],
                 "product_name": member["name"],
                 "retailer": f"{member['name']} - {listing['retailer_name']}",
+                # Plain retailer name, no product prefix - the hover callout sits next
+                # to a row that already names the candidate, so repeating it would be
+                # noise. "retailer" above stays as-is for the existing title/label text
+                # and the visually-hidden list, which need the candidate named.
+                "retailer_name": listing["retailer_name"],
                 "value": listing["delivered_price"],
                 "resolved": bool(listing["delivered_resolved"]),
                 "ruled_out": bool(listing.get("ruled_out")),
+                "candidate_color": member["candidate_color"],
             })
     group["scale"] = pricing.merge_price_points(points)
     # Same rule as a single product's best_listing: a ruled-out candidate never wins,
