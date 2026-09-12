@@ -135,6 +135,7 @@ app/
   templates/  static/
 tools/
   llm-helper.py      run on YOUR OWN machine - see "Suggesting a model number" below
+  llm-helper-bundle/ README.txt + double-click launchers zipped by GET /tools/llm-helper.zip
 deploy/
   research-runner.py opti-only host script - see "The product wizard's research step"
 tests/
@@ -477,13 +478,19 @@ The wizard's "Suggest models" button turns a rough description ("Dreame RoboMowe
 into a short list of real candidate model numbers, using **your own** Claude Code or
 Codex CLI login - no API key, nothing this server holds or bills for.
 
-**Setup, in full:**
+**Setup, the easy way:** "Set up your LLM" in the header links to
+`GET /tools/llm-helper.zip` - a zip containing `llm-helper.py`, a plain-English
+`README.txt`, and a double-click launcher per OS x backend combination
+(`run-claude-mac.command`, `run-codex-windows.bat`, etc.), each with the real
+shopwatch URL already filled in - no command to type or edit. Unzip it on any
+machine that already has Claude Code or Codex CLI installed and signed in,
+double-click the file matching that computer and CLI, enter the shopwatch
+username and password when prompted, and leave it running.
 
-1. On any machine on the same network that already has [Claude
-   Code](https://claude.com/claude-code) or [OpenAI's Codex
-   CLI](https://github.com/openai/codex) installed and signed in, download
-   `tools/llm-helper.py` - the running app serves it directly at `/tools/llm-helper.py`
-   ("Set up your LLM" in the header links straight to it), or grab it from this repo.
+**Setup, from the command line**, if you'd rather:
+
+1. Download `tools/llm-helper.py` (the running app serves it directly at
+   `/tools/llm-helper.py`, or grab it from this repo).
 2. Run it:
    ```
    python3 llm-helper.py --url https://your-shopwatch-url --backend claude

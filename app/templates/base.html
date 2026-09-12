@@ -88,25 +88,41 @@
       else's. It costs nothing beyond what you already pay for that CLI: no API key,
       nothing this server stores, holds, or bills for.
     </p>
-    <ol style="margin:0 0 12px;padding-left:20px;max-width:60ch">
-      <li style="margin-bottom:8px">
-        <a href="/tools/llm-helper.py" download>Download llm-helper.py</a>
-        onto that machine (it needs nothing else installed - no pip, no venv).
-      </li>
-      <li style="margin-bottom:8px">
-        Open a terminal there and run:
-        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
-          <code id="llm-setup-command" class="num"
-                style="flex:1;padding:8px 10px;background:var(--paper);border:1px solid var(--rule);
-                       border-radius:var(--radius-control);overflow-x:auto;white-space:nowrap"></code>
-          <button type="button" id="llm-setup-copy" class="btn">Copy</button>
-        </div>
-        <small class="muted">Using Codex instead? Add <code>--backend codex</code>.</small>
-      </li>
-      <li>Enter your shopwatch username and password when prompted - the same ones you
-        use to open this site. Leave it running in that terminal; it answers requests
-        as they arrive and does nothing the rest of the time.</li>
-    </ol>
+    <p style="margin:0 0 8px">
+      <a id="llm-setup-zip-link" href="/tools/llm-helper.zip" download class="btn primary">
+        Download the helper
+      </a>
+    </p>
+    <p class="small muted" style="margin:0 0 16px;max-width:60ch">
+      Unzip it, then double-click the file matching your computer and AI tool -
+      Windows, Mac or Linux, Claude Code or Codex. It'll ask for your shopwatch
+      username and password (the same ones you use to open this site), then leave
+      that window open while you use the wizard's "Suggest models" button. Full
+      instructions are in the README inside the zip.
+    </p>
+
+    <details>
+      <summary class="small muted" style="cursor:pointer">Prefer the command line?</summary>
+      <ol style="margin:10px 0 0;padding-left:20px;max-width:60ch">
+        <li style="margin-bottom:8px">
+          <a href="/tools/llm-helper.py" download>Download llm-helper.py</a>
+          onto that machine (it needs nothing else installed - no pip, no venv).
+        </li>
+        <li style="margin-bottom:8px">
+          Open a terminal there and run:
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+            <code id="llm-setup-command" class="num"
+                  style="flex:1;padding:8px 10px;background:var(--paper);border:1px solid var(--rule);
+                         border-radius:var(--radius-control);overflow-x:auto;white-space:nowrap"></code>
+            <button type="button" id="llm-setup-copy" class="btn">Copy</button>
+          </div>
+          <small class="muted">Using Codex instead? Add <code>--backend codex</code>.</small>
+        </li>
+        <li>Enter your shopwatch username and password when prompted. Leave it
+          running in that terminal; it answers requests as they arrive and does
+          nothing the rest of the time.</li>
+      </ol>
+    </details>
   </div>
   <footer>
     <button data-close>Close</button>
