@@ -37,15 +37,26 @@
   {% endcall %}
 {% else %}
 {% if not groups %}
-<div class="panel">
-  <h3>{% if status != 'ALL' %}Nothing here{% else %}Nothing tracked yet{% endif %}</h3>
-  <p class="muted">
-    {% if status != 'ALL' %}No products in this state.
-      <a href="/?status=ALL&amp;sort={{ sort }}">See everything</a>.
-    {% else %}Add a product and the retailers you are watching, and this page will tell you
-      when one crosses your price.{% endif %}
-  </p>
+{% if is_new_install %}
+<div class="panel empty-onboarding">
+  <h3>Add your first watch item!</h3>
+  <p class="muted">Tell it what you're watching and the retailers to check, and this
+    board will tell you the moment one crosses your price.</p>
+  <button id="btn-empty-cta" class="primary">Track something new</button>
 </div>
+{% elif status != 'ALL' %}
+<div class="panel">
+  <h3>Nothing here</h3>
+  <p class="muted">No products in this state.
+    <a href="/?status=ALL&amp;sort={{ sort }}">See everything</a>.</p>
+</div>
+{% else %}
+<div class="panel">
+  <h3>Nothing tracked yet</h3>
+  <p class="muted">Add a product and the retailers you are watching, and this page will
+    tell you when one crosses your price.</p>
+</div>
+{% endif %}
 {% endif %}
 {% endfor %}
 
@@ -64,6 +75,8 @@
           <small>Used to match imports, so get it exact</small></label>
       </div>
       <p id="wiz-model-warning" class="wizard-warning" hidden></p>
+      <button type="button" id="wiz-suggest-models" class="btn">Suggest models</button>
+      <div id="wiz-model-suggestions" class="wizard-suggest-list" hidden></div>
     </div>
 
     <div class="wizard-step" data-step="optional" hidden>

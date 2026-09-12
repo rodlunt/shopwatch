@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -19,6 +19,7 @@ from . import (
     __version__,
     alerts,
     ingest,
+    llm_jobs,
     mailwatch,
     offers,
     price_watch,
@@ -157,6 +158,13 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
         groups = store.list_groups(conn) if status in ("ACTIVE", "ALL") else []
         counts = store.status_counts(conn)
         retailer_list = store.list_retailers(conn)
+        # Whether the board is empty for THIS tab (nothing PARKED, say) is not the same
+        # question as whether this is a brand-new install with nothing in it at all -
+        # the onboarding panel belongs only to the second case, regardless of which tab
+        # happens to be selected when someone lands here with an empty database.
+        is_new_install = counts.get("ALL", 0) == 0 and not conn.execute(
+            "SELECT 1 FROM watch_groups LIMIT 1"
+        ).fetchone()
     return templates.TemplateResponse(
         request,
         "board.html",
@@ -167,6 +175,7 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
             "sort": sort,
             "status": status,
             "counts": counts,
+            "is_new_install": bool(is_new_install),
             "statuses": store.STATUSES,
             "config": load_config(),
             "classes": pricing.CLASS_LABELS,
@@ -246,6 +255,15 @@ def healthz() -> dict[str, Any]:
     with session() as conn:
         products = conn.execute("SELECT COUNT(*) c FROM products").fetchone()["c"]
     return {"status": "ok", "version": __version__, "products": products, "at": utcnow()}
+
+
+@app.get("/tools/llm-helper.py")
+def download_llm_helper() -> Any:
+    """Serves the one canonical copy of the LLM helper script (tools/llm-helper.py,
+    same file this repo tests and documents) so "Set up your LLM" can offer a direct
+    download instead of sending someone to clone the whole repo for one file."""
+    path = BASE_DIR.parent / "tools" / "llm-helper.py"
+    return FileResponse(path, media_type="text/x-python", filename="llm-helper.py")
 
 
 @app.get("/api/products")
@@ -830,6 +848,62 @@ def api_complete_research_job(job_id: int, payload: dict = Body(...)) -> Any:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return jsonable(research.get_job(conn, job_id))
+
+
+# ------------------------------------------------------------------- llm jobs (wizard)
+#
+# Same job-lifecycle shape as research jobs above, claimed by a completely different
+# kind of runner: not a fixed host script on opti, but tools/llm-helper.py running on
+# WHOEVER's own machine, using their own already-authenticated Claude Code or Codex CLI.
+# This server never holds that credential and never needs one of its own.
+
+
+@app.post("/api/llm-jobs", status_code=202)
+def api_create_llm_job(payload: dict = Body(...)) -> Any:
+    query = payload.get("query")
+    with session() as conn:
+        try:
+            job_id = llm_jobs.create_job(conn, query)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(llm_jobs.get_job(conn, job_id))
+
+
+@app.get("/api/llm-jobs/{job_id}")
+def api_get_llm_job(job_id: int) -> Any:
+    with session() as conn:
+        job = llm_jobs.get_job(conn, job_id)
+        if job is None:
+            raise HTTPException(404, "no such llm job")
+        return jsonable(job)
+
+
+@app.post("/api/llm-jobs/claim")
+def api_claim_llm_job() -> Any:
+    """Called only by a user's own tools/llm-helper.py, never by the wizard UI.
+
+    Atomically claims the oldest QUEUED job. Returns null when there is nothing to do -
+    the runner is expected to poll this on its own short interval while it is running.
+    """
+    with session() as conn:
+        return jsonable(llm_jobs.claim_next_queued(conn))
+
+
+@app.post("/api/llm-jobs/{job_id}/complete")
+def api_complete_llm_job(job_id: int, payload: dict = Body(...)) -> Any:
+    """Called only by tools/llm-helper.py, exactly once per job."""
+    status = payload.get("status")
+    with session() as conn:
+        if llm_jobs.get_job(conn, job_id) is None:
+            raise HTTPException(404, "no such llm job")
+        try:
+            llm_jobs.complete_job(
+                conn, job_id, status,
+                result=payload.get("result"), error=payload.get("error"),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(llm_jobs.get_job(conn, job_id))
 
 
 @app.post("/api/alerts/evaluate")
