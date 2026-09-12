@@ -18,6 +18,7 @@
     <button id="btn-import" class="has-icon">
       <span class="icon" aria-hidden="true">{% include "_icons/clipboard.svg" %}</span>Paste in research
     </button>
+    <button id="btn-llm-setup">Set up your LLM</button>
     <details class="menu" style="position:relative">
       <summary class="btn has-icon" style="list-style:none">
         <span class="icon" aria-hidden="true">{% include "_icons/database.svg" %}</span>Data
@@ -74,6 +75,41 @@
   <footer>
     <button data-close>Cancel</button>
     <button class="primary" id="import-go">Import</button>
+  </footer>
+</dialog>
+
+<dialog id="llm-setup-dialog">
+  <header>Set up your LLM</header>
+  <div class="body">
+    <p class="small muted" style="margin:0 0 12px;max-width:60ch">
+      The wizard's "Suggest models" button needs a small helper running somewhere on
+      this network that already has <strong>Claude Code</strong> or
+      <strong>OpenAI's Codex CLI</strong> installed and signed in - yours, or anyone
+      else's. It costs nothing beyond what you already pay for that CLI: no API key,
+      nothing this server stores, holds, or bills for.
+    </p>
+    <ol style="margin:0 0 12px;padding-left:20px;max-width:60ch">
+      <li style="margin-bottom:8px">
+        <a href="/tools/llm-helper.py" download>Download llm-helper.py</a>
+        onto that machine (it needs nothing else installed - no pip, no venv).
+      </li>
+      <li style="margin-bottom:8px">
+        Open a terminal there and run:
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          <code id="llm-setup-command" class="num"
+                style="flex:1;padding:8px 10px;background:var(--paper);border:1px solid var(--rule);
+                       border-radius:var(--radius-control);overflow-x:auto;white-space:nowrap"></code>
+          <button type="button" id="llm-setup-copy" class="btn">Copy</button>
+        </div>
+        <small class="muted">Using Codex instead? Add <code>--backend codex</code>.</small>
+      </li>
+      <li>Enter your shopwatch username and password when prompted - the same ones you
+        use to open this site. Leave it running in that terminal; it answers requests
+        as they arrive and does nothing the rest of the time.</li>
+    </ol>
+  </div>
+  <footer>
+    <button data-close>Close</button>
   </footer>
 </dialog>
 

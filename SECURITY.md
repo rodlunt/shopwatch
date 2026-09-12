@@ -44,6 +44,12 @@ It holds no payment details, no card numbers and no retailer account credentials
   `shopwatch` container - the container this API serves from never holds this
   credential and never gains new outbound egress.
 
+- **The wizard's model-suggestion helper** (`tools/llm-helper.py`) holds no credential
+  this deployment owns at all, on opti or anywhere else - not even the shared
+  `runner.env` token the two lanes above reuse. It runs on whoever's own machine has a
+  Claude Code or Codex CLI login, polling `POST /api/llm-jobs/claim` and answering with
+  that person's own subscription. See the README's "Suggesting a model number" section.
+
 ## If this is an active incident
 
 Rotate in this order: the `basic_auth` hash (`CADDY_HASH_SHOPWATCH` in the caddy SOPS

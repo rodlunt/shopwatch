@@ -21,6 +21,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY tools ./tools
 
 # Runs unprivileged. /data is the volume mount point and must be writable by this user.
 RUN useradd --system --uid 10001 --create-home shopwatch \

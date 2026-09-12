@@ -17,7 +17,9 @@ an empty board.
 
 ![The board: every tracked product, ranked by delivered price](docs/screenshots/board.jpg)
 ![A product's detail view: the price axis, listings and specs](docs/screenshots/product.jpg)
-![The guided product wizard](docs/screenshots/wizard.jpg)
+![A watch group: several candidates on one merged axis, hovering one highlights its price](docs/screenshots/group.jpg)
+![The guided product wizard, with an LLM-suggested model candidate](docs/screenshots/wizard.jpg)
+![Set up your LLM: connecting your own Claude Code or Codex CLI, no API key](docs/screenshots/llm-setup.jpg)
 
 
 ---
@@ -125,10 +127,16 @@ app/
   price_watch.py     the watcher (CLI / cron / API)
   alerts.py          rule evaluation, ntfy / webhook / console delivery
   seed.py            category profiles, retailers, HW-Q930H/XY board
+  research.py        the wizard's research-job lifecycle (deploy/research-runner.py claims)
+  llm_jobs.py         the wizard's model-suggestion job lifecycle (tools/llm-helper.py claims)
   retailers/
     base.py          adapter framework, JSON-LD reader, Observation
     crowdshop.py  harvey_norman.py  jb_hifi.py  the_good_guys.py  appliance_central.py
   templates/  static/
+tools/
+  llm-helper.py      run on YOUR OWN machine - see "Suggesting a model number" below
+deploy/
+  research-runner.py opti-only host script - see "The product wizard's research step"
 tests/
 ```
 
@@ -462,6 +470,50 @@ earns.** `GET /api/products/{id}/price-suggestion` refuses to return anything fr
 fewer than 2 real listings, and when it does, the response is deliberately labelled
 "estimate, from N listings" rather than reusing `HISTORICAL LOW TERRITORY` or
 `EXCELLENT` - those are earned through real tracking over time.
+
+## Suggesting a model number ("Set up your LLM")
+
+The wizard's "Suggest models" button turns a rough description ("Dreame RoboMower")
+into a short list of real candidate model numbers, using **your own** Claude Code or
+Codex CLI login - no API key, nothing this server holds or bills for.
+
+**Setup, in full:**
+
+1. On any machine on the same network that already has [Claude
+   Code](https://claude.com/claude-code) or [OpenAI's Codex
+   CLI](https://github.com/openai/codex) installed and signed in, download
+   `tools/llm-helper.py` - the running app serves it directly at `/tools/llm-helper.py`
+   ("Set up your LLM" in the header links straight to it), or grab it from this repo.
+2. Run it:
+   ```
+   python3 llm-helper.py --url https://your-shopwatch-url --backend claude
+   ```
+   (`--backend codex` for Codex.) No `pip install` needed - the script is pure standard
+   library. Enter your shopwatch username and password when prompted.
+3. Leave it running. Back in the wizard, type what you're watching and click "Suggest
+   models" - it queues a job, the helper picks it up within a couple of seconds, and
+   candidates appear as clickable chips that fill "Exact model" for you to verify.
+
+**Why this shape, not a container-side API key:** every other credentialed feature in
+this app (mailwatch, the research runner above) deliberately keeps the credential off
+the web container entirely - a compromised container has nothing worth stealing. This
+extends that same principle one step further: the credential does not even belong to
+*this* server. It belongs to whoever's machine is running the helper, using whatever CLI
+subscription they already pay for. Nothing to configure server-side, nothing to rotate.
+
+**Same job-queue shape as the research runner above** (`app/llm_jobs.py` mirrors
+`app/research.py` closely): `POST /api/llm-jobs` queues a job and returns immediately,
+`POST /api/llm-jobs/claim` is how a helper claims the next one, `POST
+/api/llm-jobs/{id}/complete` reports the answer back, and a job stuck `RUNNING` for
+longer than two minutes (`llm_jobs.JOB_CEILING_SECONDS`) is judged stale and failed
+automatically - a killed terminal must not leave the wizard waiting forever.
+
+**A candidate is a suggestion to verify, never applied automatically.** "Exact model" is
+used to match future price imports, so a wrong-but-plausible model number would silently
+corrupt matching later. The prompt asks the model to return zero candidates rather than
+guess when it isn't genuinely confident, and every response is shown with a caveat note
+about confidence or recency - clicking a chip only fills the text field, exactly as if
+you had typed it yourself.
 
 ## Deployed on opti
 

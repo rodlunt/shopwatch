@@ -384,6 +384,22 @@ wire('btn-backup', async () => {
 });
 
 wire('btn-import', () => document.getElementById('import-dialog').showModal());
+
+wire('btn-llm-setup', () => {
+  document.getElementById('llm-setup-command').textContent =
+    `python3 llm-helper.py --url ${window.location.origin} --backend claude`;
+  document.getElementById('llm-setup-dialog').showModal();
+});
+
+wire('llm-setup-copy', async () => {
+  const text = document.getElementById('llm-setup-command').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied.', 'good');
+  } catch {
+    toast('Could not copy - select the text manually.', 'bad');
+  }
+});
 wire('import-go', async () => {
   const out = document.getElementById('import-result');
   let payload;
@@ -551,11 +567,16 @@ wire('btn-new-product', async () => {
   }
   document.getElementById('wiz-category').value = 'general';
   document.getElementById('wiz-model-warning').hidden = true;
+  document.getElementById('wiz-model-suggestions').hidden = true;
+  document.getElementById('wiz-model-suggestions').replaceChildren();
   await wizLoadGroups();
   await wizLoadRetailers();
   wizRender();
   document.getElementById('wizard-dialog').showModal();
 });
+
+// The empty-board onboarding CTA opens the exact same wizard, not a second one.
+wire('btn-empty-cta', () => document.getElementById('btn-new-product').click());
 
 document.getElementById('wiz-model')?.addEventListener('blur', async event => {
   const model = event.target.value.trim();
@@ -571,6 +592,63 @@ document.getElementById('wiz-model')?.addEventListener('blur', async event => {
       warning.hidden = true;
     }
   } catch { /* the deterministic check is a courtesy, never a blocker */ }
+});
+
+/* Polls a queued llm_jobs row until it lands, same shape as wizPoll() for research
+ * jobs below - a much shorter timeout, since this is one text completion someone's
+ * own machine answers in a few seconds, not a multi-retailer research pass. */
+async function pollLlmJob(id, { intervalMs = 1000, timeoutMs = 30000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const job = await api(`/api/llm-jobs/${id}`);
+    if (job.status === 'DONE') return JSON.parse(job.result);
+    if (job.status === 'FAILED') throw new Error(job.error || 'the helper failed to answer');
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('no answer in time - is tools/llm-helper.py running? '
+    + 'See "Set up your LLM" at the top of the page.');
+}
+
+function renderModelSuggestions(result) {
+  const box = document.getElementById('wiz-model-suggestions');
+  box.replaceChildren();
+  if (!result.candidates.length) {
+    box.appendChild(el('p', result.note || 'No confident candidates - fill it in yourself.', 'muted'));
+    return;
+  }
+  for (const c of result.candidates) {
+    const chip = el('button', `${c.label} (${c.model})`, 'btn wizard-suggest-chip');
+    chip.type = 'button';
+    // A candidate is a suggestion to VERIFY, never applied silently: clicking one only
+    // fills the field a person still submits themselves, and re-runs the existing
+    // duplicate check exactly as if they had typed it.
+    chip.addEventListener('click', () => {
+      document.getElementById('wiz-model').value = c.model;
+      document.getElementById('wiz-model').dispatchEvent(new Event('blur'));
+    });
+    box.appendChild(chip);
+  }
+  if (result.note) box.appendChild(el('p', result.note, 'muted'));
+}
+
+wire('wiz-suggest-models', async () => {
+  const query = wizVal('wiz-name');
+  if (!query) { toast('Type what it is first.', 'bad'); return; }
+  const btn = document.getElementById('wiz-suggest-models');
+  const box = document.getElementById('wiz-model-suggestions');
+  btn.disabled = true;
+  btn.textContent = 'Asking...';
+  box.hidden = false;
+  box.replaceChildren(el('p', 'Waiting for your LLM helper to answer...', 'muted'));
+  try {
+    const job = await api('/api/llm-jobs', { method: 'POST', body: { query } });
+    renderModelSuggestions(await pollLlmJob(job.id));
+  } catch (err) {
+    box.replaceChildren(el('p', `Could not get suggestions: ${err.message}`, 'muted'));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Suggest models';
+  }
 });
 
 wire('wiz-back', () => { wiz.index = Math.max(0, wiz.index - 1); wizRender(); });

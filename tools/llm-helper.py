@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Answers shopwatch's "suggest a model number" wizard requests using YOUR OWN Claude
+Code or Codex CLI login - never an API key, never a credential shopwatch holds or pays
+for. Run this on whichever machine already has one of those CLIs installed and signed
+in; it can be the same machine you're browsing shopwatch from.
+
+Quick start:
+    python3 tools/llm-helper.py --url https://shop.home.lunt.au --backend claude
+
+No pip install needed - this script uses only the Python standard library. You will be
+prompted for your shopwatch username/password the first time (the same ones you use to
+open the site in a browser); pass --user/--password or $SHOPWATCH_USER/$SHOPWATCH_PASSWORD
+to skip the prompt.
+
+How it works: shopwatch's wizard queues a job ("suggest models for: Dreame RoboMower")
+and waits. This script polls shopwatch every couple of seconds asking "anything queued
+for me?", and when there is, asks your local `claude` or `codex` CLI the question and
+posts the answer straight back. Nothing about your CLI login ever leaves this machine -
+only the resulting suggestion text does.
+
+Leave this running in a terminal while you use the wizard; Ctrl+C to stop any time.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from typing import Any
+
+#: Codex CLI's non-interactive invocation, correct as of this script's writing but a
+#: fast-moving target - if your installed version rejects this, run `codex exec --help`
+#: and adjust the one line in call_codex() below rather than anything else here.
+CODEX_EXEC_ARGS = ["exec"]
+
+#: One text completion, not a multi-page research pass - if a CLI hasn't answered by
+#: this point something is wrong (auth prompt waiting on input, hung process), and the
+#: person watching the terminal deserves a clear timeout rather than an indefinite hang.
+CALL_TIMEOUT_SECONDS = 60
+
+PROMPT_TEMPLATE = """You are helping someone fill in the exact model number for a
+product on a personal price-watching tool. They have given a rough description. This
+field is later used to match future price imports against, so it must be an exact, real
+model number or SKU - never one that merely sounds plausible for the brand/category.
+
+Rough description: {query}
+
+Be short and honest:
+- Return 0 to 5 candidates. Fewer, or zero, is the correct answer when you are not
+  genuinely confident real models exist matching this description. A plausible-looking
+  invented model number is worse than no suggestion at all.
+- Only include a model you have specific, genuine knowledge of - not a guess at the
+  pattern a model number "would" follow for this brand.
+- If the product line is very new, or you are not confident your knowledge of it is
+  current, say so in "note" rather than guessing at specific models.
+
+Return ONLY a JSON object, no prose, no code fence, matching this shape:
+{{
+  "candidates": [
+    {{"model": "exact model number or SKU", "label": "short human name, e.g. 'Dreame A2 (2025)'"}}
+  ],
+  "note": "one short sentence, or null - a confidence/recency caveat, not a candidate repeat"
+}}
+"""
+
+
+def build_prompt(query: str) -> str:
+    return PROMPT_TEMPLATE.format(query=query)
+
+
+def parse_reply(raw: str) -> dict[str, Any]:
+    """Pull the JSON object out of a CLI reply. Same discipline as app/offers.py's
+    parse_cli_output: tolerate a code fence or chatter around the JSON, but never guess
+    at malformed content."""
+    raw = (raw or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.S)
+    if fence:
+        raw = fence.group(1).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError(f"no JSON object in reply: {raw[:150]!r}")
+    data = json.loads(raw[start:end + 1])
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list):
+        raise ValueError("reply had no 'candidates' list")
+    cleaned = []
+    for item in candidates[:5]:
+        model = str(item.get("model") or "").strip()
+        if not model:
+            continue
+        cleaned.append({"model": model, "label": str(item.get("label") or model).strip()})
+    return {"candidates": cleaned, "note": data.get("note")}
+
+
+def call_claude(claude_bin: str, prompt: str) -> str:
+    proc = subprocess.run(
+        [claude_bin, "-p"], input=prompt, capture_output=True, text=True,
+        timeout=CALL_TIMEOUT_SECONDS,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"{claude_bin} exited {proc.returncode}: {(proc.stderr or '')[:300]}")
+    return proc.stdout
+
+
+def call_codex(codex_bin: str, prompt: str) -> str:
+    proc = subprocess.run(
+        [codex_bin, *CODEX_EXEC_ARGS, prompt], capture_output=True, text=True,
+        timeout=CALL_TIMEOUT_SECONDS,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"{codex_bin} exited {proc.returncode}: {(proc.stderr or '')[:300]}")
+    return proc.stdout
+
+
+BACKENDS = {"claude": call_claude, "codex": call_codex}
+
+
+def _auth_header(user: str, password: str) -> str:
+    token = base64.b64encode(f"{user}:{password}".encode()).decode()
+    return f"Basic {token}"
+
+
+def api_call(url: str, auth_header: str, method: str = "GET",
+             body: dict[str, Any] | None = None, timeout: int = 30) -> Any:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", auth_header)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise RuntimeError(
+                "shopwatch rejected those credentials (401) - check --user/--password"
+            ) from exc
+        raise RuntimeError(f"shopwatch returned HTTP {exc.code}: {exc.read()[:300]}") from exc
+
+
+def poll_once(base_url: str, auth_header: str, backend: str, bin_name: str) -> bool:
+    """Claim and answer at most one job. Returns True if a job was found."""
+    job = api_call(f"{base_url}/api/llm-jobs/claim", auth_header, method="POST")
+    if job is None:
+        return False
+    print(f"[{time.strftime('%H:%M:%S')}] job {job['id']}: {job['query']!r} -> asking {backend}...")
+    try:
+        raw = BACKENDS[backend](bin_name, build_prompt(job["query"]))
+        result = parse_reply(raw)
+        api_call(
+            f"{base_url}/api/llm-jobs/{job['id']}/complete", auth_header, method="POST",
+            body={"status": "DONE", "result": json.dumps(result)},
+        )
+        print(f"           done: {len(result['candidates'])} candidate(s)")
+    except Exception as exc:  # a crash here must not orphan the job silently
+        print(f"           failed: {exc}", file=sys.stderr)
+        try:
+            api_call(
+                f"{base_url}/api/llm-jobs/{job['id']}/complete", auth_header, method="POST",
+                body={"status": "FAILED", "error": str(exc)[:300]},
+            )
+        except Exception as report_exc:
+            # shopwatch's own time-based staleness check (llm_jobs.reconcile_stale) is
+            # the backstop if even this report fails to land.
+            print(f"           could not even report the failure: {report_exc}", file=sys.stderr)
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="llm-helper")
+    parser.add_argument("--url", default=os.environ.get("SHOPWATCH_URL"),
+                         help="your shopwatch URL, e.g. https://shop.home.lunt.au "
+                              "(default: $SHOPWATCH_URL)")
+    parser.add_argument("--user", default=os.environ.get("SHOPWATCH_USER"))
+    parser.add_argument("--password", default=os.environ.get("SHOPWATCH_PASSWORD"))
+    parser.add_argument("--backend", choices=sorted(BACKENDS), default="claude")
+    parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
+    parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
+    parser.add_argument("--interval", type=float, default=2.0,
+                         help="seconds between polls when idle (default: 2)")
+    parser.add_argument("--once", action="store_true",
+                         help="answer at most one queued job, then exit")
+    args = parser.parse_args(argv)
+
+    if not args.url:
+        parser.error("--url or $SHOPWATCH_URL is required")
+    user = args.user or input("shopwatch username: ")
+    password = args.password or getpass.getpass("shopwatch password: ")
+    auth_header = _auth_header(user, password)
+    bin_name = args.claude_bin if args.backend == "claude" else args.codex_bin
+    base_url = args.url.rstrip("/")
+
+    # Fail fast and clearly rather than polling forever against a typo'd URL or bad
+    # credentials. /healthz is side-effect-free - unlike /api/llm-jobs/claim, hitting it
+    # here can never accidentally consume a real queued job before the poll loop starts.
+    api_call(f"{base_url}/healthz", auth_header)
+    print(f"connected to {base_url}, using {args.backend} ({bin_name})")
+
+    if args.once:
+        if not poll_once(base_url, auth_header, args.backend, bin_name):
+            print("nothing queued right now")
+        return 0
+
+    print(f"watching for wizard requests every {args.interval}s - Ctrl+C to stop")
+    try:
+        while True:
+            if not poll_once(base_url, auth_header, args.backend, bin_name):
+                time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\nstopped")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
