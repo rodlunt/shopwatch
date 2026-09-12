@@ -11,12 +11,6 @@
 
     <div class="axis-head">
       <p class="axis-window" data-axis-window>{{ s.lo|money }} to {{ s.hi|money }}</p>
-      <div class="axis-controls" data-axis-controls hidden>
-        <button type="button" data-axis-zoom="targets">Targets</button>
-        <button type="button" data-axis-zoom="out" aria-label="Zoom out">&minus;</button>
-        <button type="button" data-axis-zoom="in" aria-label="Zoom in">+</button>
-        <button type="button" data-axis-zoom="fit">Fit</button>
-      </div>
     </div>
 
     {# The plot is a picture of numbers that are listed right below it in text.
@@ -60,7 +54,7 @@
            the one best_listing chose) and both would have drawn as best. #}
         <span class="axis-point{{ ' is-best' if product.best_listing and pt.id == product.best_listing.id else '' }}{{ ' is-open' if not pt.resolved else '' }}{{ ' is-ruled-out' if pt.ruled_out else '' }}"
               aria-hidden="true"
-              data-point data-value="{{ pt.value }}" data-listing-id="{{ pt.id }}"{% if pt.product_id is defined %} data-product-id="{{ pt.product_id }}"{% endif %}{% if pt.ruled_out %} data-ruled-out="1"{% endif %} style="left: {{ pt.pos }}%"
+              data-point data-value="{{ pt.value }}" data-listing-id="{{ pt.id }}"{% if pt.product_id is defined %} data-product-id="{{ pt.product_id }}"{% endif %}{% if pt.ruled_out %} data-ruled-out="1"{% endif %} style="left: {{ pt.pos }}%;{% if pt.candidate_color is defined %} --candidate-color: {{ pt.candidate_color }};{% endif %}"
               title="{{ pt.retailer }} {{ pt.value|money }}{{ ' before freight' if not pt.resolved else '' }}{{ ' (ruled out)' if pt.ruled_out else '' }}">
           <i></i>
           <span class="axis-label">
@@ -70,6 +64,19 @@
         </span>
       {% endfor %}
 
+    </div>
+
+    {# Below the line and right-aligned, deliberately: these zoom/pan the chart above
+       them, they are not page-level actions like the header's "Track something new" or
+       "Check prices", and sitting under the thing they control says so without a label
+       having to. #}
+    <div class="axis-foot">
+      <div class="axis-controls" data-axis-controls hidden>
+        <button type="button" data-axis-zoom="targets">Targets</button>
+        <button type="button" data-axis-zoom="out" aria-label="Zoom out">&minus;</button>
+        <button type="button" data-axis-zoom="in" aria-label="Zoom in">+</button>
+        <button type="button" data-axis-zoom="fit">Fit</button>
+      </div>
     </div>
 
     {# The axis in words. Same numbers, same order, no pixels required. #}
