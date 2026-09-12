@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -75,9 +76,27 @@ def _asset_version() -> str:
 #: always gets a fresh token, and a restart that changes nothing keeps the old one.
 ASSET_VERSION = _asset_version()
 
-#: Set by the Dockerfile's GIT_SHA build arg on a real opti deploy. Absent on a plain
-#: `docker build` (a downloader's own copy), where "local build" is the honest label.
-GIT_SHA = os.environ.get("GIT_SHA") or None
+def _resolve_git_sha() -> tuple[str | None, bool]:
+    """(sha, is_deploy). A real opti deploy sets GIT_SHA via the Dockerfile build arg.
+    Otherwise, derive the checked-out commit for a local dev run - "local build" with
+    no SHA at all should only mean literally no git info was available (e.g. a source
+    tarball with no .git), not just "not built by the Deploy workflow"."""
+    env_sha = os.environ.get("GIT_SHA")
+    if env_sha:
+        return env_sha, True
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=BASE_DIR,
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip(), False
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None, False
+
+
+GIT_SHA, GIT_SHA_IS_DEPLOY = _resolve_git_sha()
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -160,6 +179,7 @@ def board(request: Request, sort: str = "delivered", status: str = "ACTIVE") -> 
             "version": ASSET_VERSION,
             "app_version": __version__,
             "git_sha": GIT_SHA,
+            "git_sha_is_deploy": GIT_SHA_IS_DEPLOY,
         },
     )
 
@@ -195,6 +215,7 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
             "version": ASSET_VERSION,
             "app_version": __version__,
             "git_sha": GIT_SHA,
+            "git_sha_is_deploy": GIT_SHA_IS_DEPLOY,
         },
     )
 
@@ -218,6 +239,7 @@ def group_page(request: Request, group_id: int, sort: str = "delivered") -> Any:
             "version": ASSET_VERSION,
             "app_version": __version__,
             "git_sha": GIT_SHA,
+            "git_sha_is_deploy": GIT_SHA_IS_DEPLOY,
         },
     )
 

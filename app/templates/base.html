@@ -55,7 +55,7 @@
   </a>
   <span class="build">
     v{{ app_version }} &middot;
-    <span title="{{ 'Deploy commit' if git_sha else 'Local build, no deploy commit' }}">
+    <span title="{{ 'Deploy commit' if git_sha_is_deploy else ('Local checkout, not a deploy' if git_sha else 'No git info available') }}">
       {{ git_sha[:7] if git_sha else 'local build' }}
     </span>
   </span>
