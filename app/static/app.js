@@ -445,6 +445,21 @@ function wizRender() {
   document.getElementById('wiz-cancel').textContent = step === 'done' ? 'Close' : 'Cancel';
 }
 
+async function wizLoadGroups() {
+  const select = document.getElementById('wiz-group');
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '- none -';
+  select.replaceChildren(none);
+  const groups = await api('/api/groups');
+  for (const g of groups) {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = `${g.name} (${g.members.length})`;
+    select.appendChild(opt);
+  }
+}
+
 async function wizLoadRetailers() {
   wiz.retailers = await api('/api/retailers');
   const list = document.getElementById('wiz-retailer-list');
@@ -531,11 +546,12 @@ async function wizShowDone(job) {
 wire('btn-new-product', async () => {
   wiz = { index: 0, productId: null, retailers: [], selected: new Set(), pollTimer: null };
   for (const id of ['wiz-name', 'wiz-model', 'wiz-brand', 'wiz-notes', 'wiz-trigger',
-    'wiz-excellent', 'wiz-histlow', 'wiz-new-retailer']) {
+    'wiz-excellent', 'wiz-histlow', 'wiz-new-retailer', 'wiz-new-group']) {
     document.getElementById(id).value = '';
   }
   document.getElementById('wiz-category').value = 'general';
   document.getElementById('wiz-model-warning').hidden = true;
+  await wizLoadGroups();
   await wizLoadRetailers();
   wizRender();
   document.getElementById('wizard-dialog').showModal();
@@ -574,6 +590,12 @@ wire('wiz-next', async () => {
         notes: wizVal('wiz-notes') || null,
       }});
       wiz.productId = product.id;
+      const existingGroup = wizVal('wiz-group');
+      const newGroupName = wizVal('wiz-new-group');
+      if (existingGroup || newGroupName) {
+        const body = existingGroup ? { group_id: Number(existingGroup) } : { name: newGroupName };
+        await api(`/api/products/${product.id}/group`, { method: 'POST', body });
+      }
     } else if (step === 'price') {
       const trigger = wizNum('wiz-trigger'), excellent = wizNum('wiz-excellent'),
         histLow = wizNum('wiz-histlow');
@@ -1009,3 +1031,118 @@ function setupAxis(root) {
 }
 
 for (const root of document.querySelectorAll('[data-axis]')) setupAxis(root);
+
+/* ------------------------------------------------------------------- watch groups */
+
+/* Hovering a candidate row highlights every axis point for that product, and vice
+ * versa - only present on the group page, so every lookup is guarded rather than
+ * assumed. */
+(function wireGroupHoverLinks() {
+  const rows = document.querySelectorAll('[data-candidate-product]');
+  const points = document.querySelectorAll('[data-point][data-product-id]');
+  if (!rows.length || !points.length) return;
+
+  const pointsFor = id => [...points].filter(p => p.dataset.productId === id);
+  const rowFor = id => document.querySelector(`[data-candidate-product="${id}"]`);
+
+  for (const row of rows) {
+    const id = row.dataset.candidateProduct;
+    row.addEventListener('mouseenter', () => {
+      for (const p of pointsFor(id)) p.classList.add('is-linked-hover');
+    });
+    row.addEventListener('mouseleave', () => {
+      for (const p of pointsFor(id)) p.classList.remove('is-linked-hover');
+    });
+  }
+  for (const point of points) {
+    const id = point.dataset.productId;
+    point.addEventListener('mouseenter', () => {
+      rowFor(id)?.classList.add('is-linked-hover');
+    });
+    point.addEventListener('mouseleave', () => {
+      rowFor(id)?.classList.remove('is-linked-hover');
+    });
+  }
+})();
+
+wire('btn-join-group', async () => {
+  const select = document.getElementById('jg-existing');
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '- none -';
+  select.replaceChildren(none);
+  try {
+    const groups = await api('/api/groups');
+    for (const g of groups) {
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = `${g.name} (${g.members.length})`;
+      select.appendChild(opt);
+    }
+  } catch (err) { toast(`Could not load groups: ${err.message}`, 'bad'); }
+  document.getElementById('join-group-dialog').showModal();
+});
+wire('jg-save', async () => {
+  const productId = Number(location.pathname.split('/').pop());
+  const existing = document.getElementById('jg-existing').value;
+  const newName = document.getElementById('jg-new-name').value.trim();
+  if (!existing && !newName) { toast('Pick a group or name a new one.', 'bad'); return; }
+  const body = existing ? { group_id: Number(existing) } : { name: newName };
+  try {
+    await api(`/api/products/${productId}/group`, { method: 'POST', body });
+    toast('Added to group.', 'good');
+    location.reload();
+  } catch (err) { toast(`Could not join group: ${err.message}`, 'bad'); }
+});
+wire('btn-leave-group', async event => {
+  if (!confirm('Leave this group? It stops being compared with the other candidates.')) return;
+  const productId = Number(event.currentTarget.dataset.product);
+  try {
+    await api(`/api/products/${productId}/group`, { method: 'DELETE' });
+    toast('Left the group.', 'good');
+    location.reload();
+  } catch (err) { toast(`Could not leave group: ${err.message}`, 'bad'); }
+});
+
+wire('btn-edit-group', () => {
+  document.getElementById('edit-group-dialog').showModal();
+});
+wire('eg-save', async () => {
+  const groupId = Number(location.pathname.split('/').pop());
+  try {
+    await api(`/api/groups/${groupId}`, { method: 'PATCH', body: {
+      name: document.getElementById('eg-name').value.trim(),
+      notes: document.getElementById('eg-notes').value.trim() || null,
+    }});
+    toast('Group saved.', 'good');
+    location.reload();
+  } catch (err) { toast(`Could not save group: ${err.message}`, 'bad'); }
+});
+
+wire('btn-add-candidate', async () => {
+  const select = document.getElementById('cd-existing');
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '- pick one -';
+  select.replaceChildren(none);
+  try {
+    const products = await api('/api/products?status=ALL');
+    for (const p of products.filter(p => !p.group_id)) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name} (${p.model})`;
+      select.appendChild(opt);
+    }
+  } catch (err) { toast(`Could not load products: ${err.message}`, 'bad'); }
+  document.getElementById('candidate-dialog').showModal();
+});
+wire('cd-save', async () => {
+  const groupId = Number(location.pathname.split('/').pop());
+  const productId = Number(document.getElementById('cd-existing').value);
+  if (!productId) { toast('Pick a product first.', 'bad'); return; }
+  try {
+    await api(`/api/products/${productId}/group`, { method: 'POST', body: { group_id: groupId } });
+    toast('Added to the group.', 'good');
+    location.reload();
+  } catch (err) { toast(`Could not add candidate: ${err.message}`, 'bad'); }
+});

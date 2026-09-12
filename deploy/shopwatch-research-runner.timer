@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll for a queued shopwatch research job every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

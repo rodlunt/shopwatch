@@ -1,0 +1,7 @@
+[Unit]
+Description=Claim and process one queued shopwatch research job, if any
+After=network-online.target docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/shopwatch-research-runner.sh
+TimeoutStartSec=1800

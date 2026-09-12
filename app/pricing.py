@@ -313,6 +313,31 @@ def _bands(
     return bands
 
 
+def merge_price_points(points: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Position a flat list of prices from DIFFERENT products onto one shared 0-100 scale.
+
+    Deliberately carries no marks or bands: unlike threshold_scale, these points come
+    from genuinely different products (a watch group's candidates), which do not share
+    a trigger/excellent/historical-low - each candidate keeps its own, shown per-row
+    instead. This is a comparison axis only, never a judged one.
+    """
+    if not points:
+        return None
+    values = [p["value"] for p in points]
+    lo, hi = min(values), max(values)
+    span = hi - lo
+    pad = span * 0.14 if span else max(hi * 0.06, 1.0)
+    lo, hi = lo - pad, hi + pad
+
+    def pos(value: float) -> float:
+        return round((value - lo) / (hi - lo) * 100, 2)
+
+    positioned = [{**p, "pos": pos(p["value"])} for p in points]
+    # Empty marks/bands rather than omitted keys: the axis template's ruler() macro
+    # expects both, and a group's candidates share no thresholds to draw either from.
+    return {"points": positioned, "marks": [], "bands": [], "lo": round(lo, 2), "hi": round(hi, 2)}
+
+
 def suggest_price_target(
     listings: Iterable[Mapping[str, Any]], floor: int = 2
 ) -> dict[str, Any] | None:

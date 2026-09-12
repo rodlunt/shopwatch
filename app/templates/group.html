@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% import "_product.html" as c with context %}
+{% block title %}{{ group.name }} | Shopwatch{% endblock %}
+
+{% block content %}
+<section class="product" id="group-{{ group.id }}">
+  <div class="product-head">
+    <div class="row">
+      <h2>{{ group.name }}</h2>
+      <span class="model">{{ group.members|length }} candidate{{ 's' if group.members|length != 1 else '' }}</span>
+      <span class="spacer"></span>
+      <button id="btn-edit-group" data-group="{{ group.id }}">Edit</button>
+      <button id="btn-add-candidate" data-group="{{ group.id }}">Add candidate</button>
+    </div>
+  </div>
+  {% if group.notes %}<p class="muted">{{ group.notes }}</p>{% endif %}
+  {% if group.archived %}
+    <p class="verdict bought">Resolved - a purchase in this group archived the rest.</p>
+  {% endif %}
+
+  {{ c.ruler({"scale": group.scale, "best_listing": none}) }}
+
+  <div class="panel" id="group-candidate-list" style="padding:0;overflow:hidden">
+    {% for member in group.members %}
+      <div class="listing{{ ' is-act' if member.status == 'PURCHASED' else '' }}"
+           data-candidate-product="{{ member.id }}">
+        <a class="listing-row" href="/products/{{ member.id }}" style="text-decoration:none;color:inherit">
+          <span class="caret">&#9654;</span>
+          <span class="who">{{ member.name }}
+            <small>{{ member.model }}{% if member.status != 'ACTIVE' %} &middot; {{ member.status|capitalize }}{% endif %}</small>
+          </span>
+          <span class="price" data-cell="delivered">
+            {%- if member.best_delivered is none %}<span class="unresolved">no price yet</span>
+            {%- else %}{{ member.best_delivered|money }}
+              <small>{% if member.best_resolved %}delivered{% else %}before freight{% endif %}, {{ member.best_retailer }}</small>
+            {%- endif %}
+          </span>
+          <span class="tag">{{ member.trigger_price|money if member.trigger_price else 'no trigger set' }}</span>
+        </a>
+      </div>
+    {% else %}
+      <p class="muted" style="padding:16px">No candidates yet. Add one to start comparing.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<dialog id="candidate-dialog">
+  <header>Add a candidate</header>
+  <div class="body">
+    <div class="form-grid">
+      <label class="wide">Existing product
+        <select id="cd-existing">
+          <option value="">- pick one -</option>
+        </select>
+        <small>Only ungrouped products are listed here</small>
+      </label>
+    </div>
+  </div>
+  <footer><button data-close>Cancel</button><button class="primary" id="cd-save">Add</button></footer>
+</dialog>
+
+<dialog id="edit-group-dialog">
+  <header>Edit group</header>
+  <div class="body">
+    <div class="form-grid">
+      <label class="wide">Name <input id="eg-name" value="{{ group.name }}"></label>
+      <label class="wide">Notes <textarea id="eg-notes" rows="2">{{ group.notes or '' }}</textarea></label>
+    </div>
+  </div>
+  <footer><button data-close>Cancel</button><button class="primary" id="eg-save">Save</button></footer>
+</dialog>
+{% endblock %}
