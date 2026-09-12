@@ -1,4 +1,7 @@
-<img src="docs/brand/logo.svg" alt="" width="72" height="72">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.svg">
+  <img src="docs/brand/logo.svg" alt="" width="72" height="72">
+</picture>
 
 # Shopwatch
 
@@ -17,11 +20,30 @@ Built to replace a single-file HTML comparison board. It is a research tool, not
 author's own instance stays live and keeps its own data; cloning this repo starts you with
 an empty board.
 
-![The board: every tracked product, ranked by delivered price](docs/screenshots/board.jpg)
-![A product's detail view: the price axis, listings and specs](docs/screenshots/product.jpg)
-![A watch group: several candidates on one merged axis, hovering one highlights its price](docs/screenshots/group.jpg)
-![The guided product wizard, with an LLM-suggested model candidate](docs/screenshots/wizard.jpg)
-![Set up your LLM: connecting your own Claude Code or Codex CLI, no API key](docs/screenshots/llm-setup.jpg)
+<a href="docs/screenshots/board-light.png"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/board-dark.png">
+  <img src="docs/screenshots/board-light.png" alt="The board: every tracked product, ranked by delivered price">
+</picture></a>
+
+<a href="docs/screenshots/product-light.png"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-dark.png">
+  <img src="docs/screenshots/product-light.png" alt="A product's detail view: the price axis, listings and specs">
+</picture></a>
+
+<a href="docs/screenshots/group-light.png"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/group-dark.png">
+  <img src="docs/screenshots/group-light.png" alt="A watch group: several candidates on one merged axis, hovering one highlights its price">
+</picture></a>
+
+<a href="docs/screenshots/wizard-light.png"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/wizard-dark.png">
+  <img src="docs/screenshots/wizard-light.png" alt="The guided product wizard, with an LLM-suggested model candidate">
+</picture></a>
+
+<a href="docs/screenshots/llm-setup-light.png"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/llm-setup-dark.png">
+  <img src="docs/screenshots/llm-setup-light.png" alt="Set up your LLM: connecting your own Claude Code or Codex CLI, no API key">
+</picture></a>
 
 
 ---
