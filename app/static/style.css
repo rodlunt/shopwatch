@@ -455,31 +455,34 @@ footer.site .build { font-family: var(--mono); }
 
 .contenders { border-top: 1px solid var(--rule-soft); }
 
-.listing { border-bottom: 1px solid var(--rule-soft); position: relative; }
+.listing { border-bottom: 1px solid var(--rule-soft); }
 .listing:last-child { border-bottom: 0; }
 
 .listing-row {
   display: grid;
   grid-template-columns: 18px minmax(150px, 1.4fr) 130px 1fr auto;
   gap: 14px; align-items: center;
-  padding: 12px 46px 12px 20px; width: 100%;
+  padding: 12px 20px; width: 100%;
   background: none; border: 0; text-align: left; cursor: pointer; color: inherit;
   font: inherit;
 }
 .listing-row:hover { background: var(--rule-soft); }
 .listing-row:focus-visible { outline: 2px solid var(--close); outline-offset: -2px; }
 
-/* Reaching a retailer's own page from the main card, not two levels of expand down.
-   Absolutely positioned against .listing (not a grid child of .listing-row) so it
-   sits outside the toggle button and survives the mobile column collapse below
-   untouched. */
+/* Inline right after the retailer's name (inside .who, a plain text-flow span, not a
+   flex container - .listing-open is just an inline-level element the name text wraps
+   around, same as any other inline link), not floating at the row's far edge where it
+   read as unrelated chrome. --close (the app's link/accent blue) rather than --muted:
+   a grey icon this close in value to the row background did not read as clickable at
+   all - "grey on grey", invisible unless you already knew to look for it. */
 .listing-open {
-  position: absolute; top: 50%; right: 16px; transform: translateY(-50%);
-  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
-  border-radius: 6px; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: -3px;
+  width: 20px; height: 20px; margin-left: 6px;
+  border-radius: 5px; color: var(--close);
 }
-.listing-open svg { width: 15px; height: 15px; }
-.listing-open:hover { background: var(--rule-soft); color: var(--ink); }
+.listing-open svg { width: 13px; height: 13px; }
+.listing-open:hover { background: var(--close-bg); }
 .listing-open:focus-visible { outline: 2px solid var(--close); outline-offset: 1px; }
 
 .caret { color: var(--muted); transition: transform .15s ease; font-size: 11px; }

@@ -479,7 +479,12 @@ mailwatch already reuses. Nothing new to store or rotate.
 
 **At most one active job per product.** A database constraint (not just application
 logic) rejects a second `QUEUED` or `RUNNING` job for a product with a 409, so a
-double-click or a retried request can't spend the shared research quota twice.
+double-click or a retried request can't spend the shared research quota twice. A
+finished job (`DONE` or `FAILED`) never blocks a new one, so a retailer that came back
+`NEEDS_MANUAL_CHECK`, `BLOCKED` or `TIMED_OUT` can always be tried again - either from
+the wizard's own "done" screen while it's still open, or from the product page's own
+"Research retailers again" action afterwards, which pre-selects whichever retailers
+didn't turn up a price last time via `GET /api/products/{id}/research-jobs/latest`.
 
 **A job that never reports back is judged purely by elapsed time**
 (`research.JOB_CEILING_SECONDS`, currently 10 minutes), never by anything at container
