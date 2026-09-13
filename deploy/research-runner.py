@@ -14,8 +14,8 @@ this credential and never gains new outbound egress - only this script does.
         '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'):8477"
     /srv/prod/shopwatch/research-venv/bin/python deploy/research-runner.py --interval 10
 
-NOT WIRED INTO opti YET. This file documents and implements the mechanism the plan
-describes; it is reviewed here, deployed separately, deliberately.
+Wired into opti as shopwatch-research-runner.timer, firing every 2 minutes via
+shopwatch-research-runner.sh (see deploy/).
 
 Default-deny is enforced server-side (research.create_job only ever queues retailer ids
 that already exist in shopwatch's own retailers table), so this script never has to
@@ -155,7 +155,7 @@ def research_one_retailer(
     )
     try:
         proc = subprocess.run(
-            [claude_bin, "-p"],
+            [claude_bin, "-p", "--allowedTools", "WebSearch,WebFetch"],
             input=prompt, capture_output=True, text=True, timeout=RETAILER_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:

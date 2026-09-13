@@ -76,6 +76,24 @@ def test_a_completed_job_does_not_block_a_new_one(conn, product_id, retailer_ids
     assert second_id != first_id
 
 
+def test_get_latest_job_for_product_returns_none_with_no_history(conn, product_id):
+    assert research.get_latest_job_for_product(conn, product_id) is None
+
+
+def test_get_latest_job_for_product_returns_the_most_recent_one(conn, product_id, retailer_ids):
+    first_id = research.create_job(conn, product_id, retailer_ids)
+    conn.commit()
+    research.complete_job(conn, first_id, "DONE")
+    conn.commit()
+    second_id = research.create_job(conn, product_id, retailer_ids)
+    conn.commit()
+
+    latest = research.get_latest_job_for_product(conn, product_id)
+
+    assert latest["id"] == second_id
+    assert latest["id"] != first_id
+
+
 def test_claim_next_queued_flips_status_and_sets_started_at(conn, product_id, retailer_ids):
     job_id = research.create_job(conn, product_id, retailer_ids)
     conn.commit()

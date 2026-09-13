@@ -7,6 +7,7 @@
   <button id="btn-edit-product">Edit</button>
   <button id="btn-add-listing">Add retailer</button>
   <button id="btn-watch-product" data-product="{{ product.id }}">Check prices now</button>
+  <button id="btn-research-retailers" data-product="{{ product.id }}">Research retailers again</button>
   {% if product.status == 'PURCHASED' %}
     <button id="btn-undo-purchase" data-product="{{ product.id }}">Undo purchase</button>
   {% else %}
@@ -19,6 +20,7 @@
     <button id="btn-join-group" data-product="{{ product.id }}">Group with another candidate</button>
   {% endif %}
   <button id="btn-give-up-product" data-product="{{ product.id }}" class="danger">Give up on this</button>
+  <button id="btn-delete-product" data-product="{{ product.id }}" class="danger">Delete forever</button>
 {% endcall %}
 
 <dialog id="join-group-dialog">
@@ -34,6 +36,22 @@
     </div>
   </div>
   <footer><button data-close>Cancel</button><button class="primary" id="jg-save">Add</button></footer>
+</dialog>
+
+<dialog id="delete-dialog">
+  <header>Delete "{{ product.name }}" forever</header>
+  <div class="body">
+    <p class="muted" style="margin:0 0 10px">This permanently removes the product, every
+      listing, all price history and any purchase record. There is no undo - "Give up on
+      this" above is the reversible option if you just want it off the board.</p>
+    <label>Type the product name to confirm
+      <input id="del-confirm-name" data-expected="{{ product.name }}" autocomplete="off">
+    </label>
+  </div>
+  <footer>
+    <button data-close>Cancel</button>
+    <button class="danger" id="del-confirm-go" data-product="{{ product.id }}" disabled>Delete forever</button>
+  </footer>
 </dialog>
 
 {% if product.purchase %}
@@ -193,6 +211,19 @@
   <footer><button data-close>Cancel</button><button class="primary" id="al-save">Add retailer</button></footer>
 </dialog>
 <datalist id="retailer-names">{% for r in retailers %}<option>{{ r.name }}</option>{% endfor %}</datalist>
+
+<dialog id="research-dialog">
+  <header>Research retailer prices</header>
+  <div class="body">
+    <p class="muted" id="research-dialog-intro" style="margin:0 0 10px"></p>
+    <div id="research-retailer-list" class="wizard-retailer-list"></div>
+    <ul id="research-progress" class="wizard-progress" hidden></ul>
+  </div>
+  <footer>
+    <button data-close>Cancel</button>
+    <button class="primary" id="research-go">Research selected</button>
+  </footer>
+</dialog>
 
 <dialog id="product-dialog">
   <header>Edit {{ product.name }}</header>
