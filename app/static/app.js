@@ -263,7 +263,28 @@ function toggleRegion(button, region) {
   return open;
 }
 
+/* The listing row is a <div role="button"> now, not a real <button> - it has to be,
+   since the retailer-open link lives inside it and an <a> nested in an actual <button>
+   is invalid HTML. A native button gets Enter/Space activation for free; this is that,
+   for just this one role. Delegated rather than bound per-row so it keeps working after
+   applyListing() or a reload replaces the row's markup, the same reason the click
+   handler below is delegated too. */
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  if (event.target.closest('.listing-open')) return;  // a focused link handles its own Enter
+  const toggle = event.target.closest('[data-toggle-detail]');
+  if (!toggle) return;
+  event.preventDefault();  // Space must not also scroll the page
+  toggle.click();
+});
+
 document.addEventListener('click', async event => {
+  // .listing-open now lives inside the listing row's own [data-toggle-detail] element
+  // (it has to, to sit right after the retailer's name rather than floating at the
+  // row's far edge), so a click on it would otherwise ALSO match the toggle-detail
+  // check below and expand/collapse the row on top of navigating. Let it navigate.
+  if (event.target.closest('.listing-open')) return;
+
   const ruleOutOpen = event.target.closest('[data-rule-out-open]');
   if (ruleOutOpen) {
     const id = ruleOutOpen.dataset.ruleOutOpen;
