@@ -678,6 +678,13 @@ dialog > footer { padding: 13px 20px; border-top: 1px solid var(--rule); display
 .wizard-retailer-row .cap { font-size: 11.5px; color: var(--muted); }
 .wizard-progress { list-style: none; padding: 0; margin: 12px 0 0; display: flex;
   flex-direction: column; gap: 6px; }
+/* Same bug as button[hidden] above, same fix: .wizard-retailer-list and .wizard-progress
+   each set their own `display`, which otherwise beats the UA [hidden] rule regardless of
+   specificity - so #wiz-retailer-discovered / #research-retailer-discovered (hidden until
+   a search actually returns something) and #wiz-progress / #research-progress rendered as
+   empty flex boxes, each still contributing their own margin as unexplained blank space
+   above the dialog's footer. */
+.wizard-retailer-list[hidden], .wizard-progress[hidden] { display: none; }
 .wizard-progress li { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
   border: 1px solid var(--rule-soft); border-radius: 8px; font-size: 13px; }
 .wizard-progress .icon { width: 1.1em; text-align: center; flex: none; }
