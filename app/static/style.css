@@ -672,6 +672,13 @@ dialog > footer { padding: 13px 20px; border-top: 1px solid var(--rule); display
 .wizard-warning { background: var(--fault-bg); color: var(--fault); border-radius: 8px;
   padding: 9px 12px; font-size: 13px; margin-top: 10px; }
 .wizard-retailer-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+/* The "Add another retailer" .form-grid has no margin-bottom, and a bare <button class="btn">
+   has no margin-top, so the action row directly below it had 0px of breathing room - the
+   buttons visually touched the input field's own bottom border. Explicit gap+margin here,
+   rather than relying on .form-grid to grow one (it's reused in 10+ other places this
+   session didn't touch), and an actual gap between the buttons themselves instead of
+   depending on incidental HTML whitespace collapsing to one space-width. */
+.wizard-retailer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
 .wizard-retailer-row { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
   border: 1px solid var(--rule-soft); border-radius: 8px; font-size: 13px; }
 .wizard-retailer-row .name { flex: 1; }
