@@ -29,6 +29,7 @@ from . import (
     pricing,
     provenance,
     research,
+    retailer_search,
     retailers,
     store,
 )
@@ -976,9 +977,10 @@ def api_complete_research_job(job_id: int, payload: dict = Body(...)) -> Any:
 @app.post("/api/llm-jobs", status_code=202)
 def api_create_llm_job(payload: dict = Body(...)) -> Any:
     query = payload.get("query")
+    kind = payload.get("kind", "model_suggestion")
     with session() as conn:
         try:
-            job_id = llm_jobs.create_job(conn, query)
+            job_id = llm_jobs.create_job(conn, query, kind=kind)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return jsonable(llm_jobs.get_job(conn, job_id))
@@ -1019,6 +1021,57 @@ def api_complete_llm_job(job_id: int, payload: dict = Body(...)) -> Any:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return jsonable(llm_jobs.get_job(conn, job_id))
+
+
+# --------------------------------------------------------- retailer search jobs (wizard)
+#
+# Same shape as the llm jobs block above, one queue down: a live web search rather than
+# an LLM's own knowledge, claimed by the host-level research runner on opti rather than
+# a user's own machine - see app/retailer_search.py's module docstring for why.
+
+
+@app.post("/api/retailer-search-jobs", status_code=202)
+def api_create_retailer_search_job(payload: dict = Body(...)) -> Any:
+    query = payload.get("query")
+    with session() as conn:
+        try:
+            job_id = retailer_search.create_job(conn, query)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(retailer_search.get_job(conn, job_id))
+
+
+@app.get("/api/retailer-search-jobs/{job_id}")
+def api_get_retailer_search_job(job_id: int) -> Any:
+    with session() as conn:
+        job = retailer_search.get_job(conn, job_id)
+        if job is None:
+            raise HTTPException(404, "no such retailer search job")
+        return jsonable(job)
+
+
+@app.post("/api/retailer-search-jobs/claim")
+def api_claim_retailer_search_job() -> Any:
+    """Called only by the host-level research runner, never by the wizard UI."""
+    with session() as conn:
+        return jsonable(retailer_search.claim_next_queued(conn))
+
+
+@app.post("/api/retailer-search-jobs/{job_id}/complete")
+def api_complete_retailer_search_job(job_id: int, payload: dict = Body(...)) -> Any:
+    """Called only by the host-level research runner, exactly once per job."""
+    status = payload.get("status")
+    with session() as conn:
+        if retailer_search.get_job(conn, job_id) is None:
+            raise HTTPException(404, "no such retailer search job")
+        try:
+            retailer_search.complete_job(
+                conn, job_id, status,
+                result=payload.get("result"), error=payload.get("error"),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(retailer_search.get_job(conn, job_id))
 
 
 @app.post("/api/alerts/evaluate")
@@ -1076,14 +1129,24 @@ def api_create_retailer(payload: dict = Body(...)) -> Any:
 
     For the wizard: a retailer chosen for research doesn't have a price yet, so there is
     nothing to hang a listing off. store.ensure_retailer already makes this idempotent -
-    naming an existing retailer just returns it.
+    naming an existing retailer just returns it. homepage is optional - the wizard sends
+    it when approving a retailer discovery's suggestion, so that guess is not silently
+    dropped on the way to the database.
     """
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name is required")
+    homepage = payload.get("homepage")
+    homepage = homepage.strip() if isinstance(homepage, str) else None
+    homepage = homepage or None
     with session() as conn:
-        row = dict(store.ensure_retailer(conn, name))
-    row["adapter_available"] = row["adapter"] in retailers.available_adapters()
+        row = dict(store.ensure_retailer(conn, name, homepage=homepage))
+    # Same fields api_retailers (GET) computes, so a row rendered straight from this
+    # response (the wizard does) doesn't miss a badge GET would have shown for it.
+    cls = retailers.available_adapters().get(row["adapter"] or "")
+    row["adapter_available"] = cls is not None
+    row["never_scrapable"] = list(cls.never_scrapable) if cls else []
+    row["mail_alerts_parsed"] = row["name"] in mailwatch.mail_alert_retailers()
     return row
 
 

@@ -29,6 +29,19 @@ def test_create_job_starts_queued(conn):
     assert job["status"] == "QUEUED"
     assert job["query"] == "Dreame RoboMower"
     assert job["result"] is None
+    assert job["kind"] == "model_suggestion"  # the default, unchanged for old callers
+
+
+def test_create_job_accepts_the_retailer_discovery_kind(conn):
+    job_id = llm_jobs.create_job(conn, "Dreame RoboMower, checking: Bunnings", kind="retailer_discovery")
+    conn.commit()
+
+    assert llm_jobs.get_job(conn, job_id)["kind"] == "retailer_discovery"
+
+
+def test_create_job_rejects_an_unknown_kind(conn):
+    with pytest.raises(ValueError, match="kind"):
+        llm_jobs.create_job(conn, "Dreame RoboMower", kind="not_a_real_kind")
 
 
 def test_claim_next_queued_flips_status_and_sets_started_at(conn):

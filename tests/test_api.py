@@ -577,3 +577,57 @@ def test_latest_research_job_reflects_the_one_just_created(client):
     latest = client.get(f"/api/products/{pid}/research-jobs/latest").json()
     assert latest["id"] == created["id"]
     assert {r["retailer_id"] for r in latest["results"]} == {retailer_id}
+
+
+def test_create_retailer_accepts_a_homepage(client):
+    row = client.post("/api/retailers", json={"name": "Officeworks", "homepage": "https://officeworks.com.au"}).json()
+    assert row["homepage"] == "https://officeworks.com.au"
+    assert row["never_scrapable"] == []  # parity with GET /api/retailers, not just adapter_available
+
+
+def test_create_retailer_rejects_a_non_string_homepage_instead_of_crashing(client):
+    """The control this test exists for: (payload.get('homepage') or '').strip() raised
+    an unhandled AttributeError on a non-string JSON value before this was fixed - a
+    malformed client request must get a 400, never a 500."""
+    response = client.post("/api/retailers", json={"name": "Officeworks", "homepage": 12345})
+    assert response.status_code in (200, 201)  # non-string homepage is ignored, not fatal
+    assert response.json()["homepage"] is None
+
+
+def test_create_llm_job_rejects_a_non_string_query_instead_of_crashing(client):
+    response = client.post("/api/llm-jobs", json={"query": 12345})
+    assert response.status_code == 400
+
+
+def test_create_retailer_search_job_rejects_a_non_string_query_instead_of_crashing(client):
+    response = client.post("/api/retailer-search-jobs", json={"query": 12345})
+    assert response.status_code == 400
+
+
+def test_retailer_search_job_lifecycle_through_the_api(client):
+    query = '{"product_name": "Test Product", "model": "TEST-1", "excluded_names": [], "excluded_homepages": []}'
+    created = client.post("/api/retailer-search-jobs", json={"query": query}).json()
+    assert created["status"] == "QUEUED"
+
+    claimed = client.post("/api/retailer-search-jobs/claim").json()
+    assert claimed["id"] == created["id"]
+    assert claimed["status"] == "RUNNING"
+
+    result = '{"retailers": [{"name": "Bunnings", "homepage": "https://www.bunnings.com.au"}], "note": null}'
+    completed = client.post(
+        f"/api/retailer-search-jobs/{created['id']}/complete",
+        json={"status": "DONE", "result": result},
+    ).json()
+    assert completed["status"] == "DONE"
+
+    fetched = client.get(f"/api/retailer-search-jobs/{created['id']}").json()
+    assert fetched["result"] == result
+
+
+def test_retailer_search_job_claim_is_empty_when_nothing_is_queued(client):
+    assert client.post("/api/retailer-search-jobs/claim").json() is None
+
+
+def test_get_retailer_search_job_is_a_404_for_an_unknown_id(client):
+    response = client.get("/api/retailer-search-jobs/999999")
+    assert response.status_code == 404
