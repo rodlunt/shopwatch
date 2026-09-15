@@ -7,7 +7,7 @@
   <button id="btn-edit-product">Edit</button>
   <button id="btn-add-listing">Add retailer</button>
   <button id="btn-watch-product" data-product="{{ product.id }}">Check prices now</button>
-  <button id="btn-research-retailers" data-product="{{ product.id }}">Research retailers again</button>
+  <button id="btn-research-retailers" data-product="{{ product.id }}" data-name="{{ product.name }}" data-model="{{ product.model }}">Research retailers again</button>
   {% if product.status == 'PURCHASED' %}
     <button id="btn-undo-purchase" data-product="{{ product.id }}">Undo purchase</button>
   {% else %}
@@ -217,6 +217,15 @@
   <div class="body">
     <p class="muted" id="research-dialog-intro" style="margin:0 0 10px"></p>
     <div id="research-retailer-list" class="wizard-retailer-list"></div>
+    <div class="form-grid">
+      <label class="wide">Add another retailer
+        <input id="research-new-retailer" placeholder="Retailer name, or several separated by commas">
+      </label>
+    </div>
+    <button type="button" id="research-add-retailer" class="btn">Add</button>
+    <button type="button" id="research-discover-retailers" class="btn">Find other retailers</button>
+    <button type="button" id="research-discover-retailers-web" class="btn">Search the web</button>
+    <div id="research-retailer-discovered" class="wizard-retailer-list" hidden></div>
     <ul id="research-progress" class="wizard-progress" hidden></ul>
   </div>
   <footer>

@@ -503,77 +503,129 @@ async function wizLoadGroups() {
   }
 }
 
-function wizRowScaffold(nameText, capText) {
-  const row = el('label', '', 'wizard-retailer-row');
-  const box = document.createElement('input');
-  box.type = 'checkbox';
-  row.append(box, el('span', nameText, 'name'), el('span', capText, 'cap'));
-  return row;
-}
+/* A reusable "pick retailers, with dedup-safe adding and discovery approval" component.
+ * Two screens need exactly this: the wizard's retailers step, and the product page's
+ * "Research retailers again" dialog - the first version of this only existed in the
+ * wizard, which is why "research retailers again" on an existing product silently had
+ * no discovery at all until this generalisation.
+ *
+ * `retailers` and `selected` are the CALLER's own array/Set, mutated in place (pushed
+ * to / added to), not copies - so the caller's existing state (wiz.retailers, or
+ * researchRetry.retailers) stays the single source of truth. */
+function makeRetailerPicker({ list, retailers, selected }) {
+  function rowScaffold(nameText, capText) {
+    const row = el('label', '', 'wizard-retailer-row');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    row.append(box, el('span', nameText, 'name'), el('span', capText, 'cap'));
+    return row;
+  }
 
-function wizRetailerRow(r, { checked = false } = {}) {
-  const caps = [];
-  if (r.adapter_available) caps.push('has an automated price check');
-  if (r.mail_alerts_parsed) caps.push('mailwatch reads its price alerts');
-  const row = wizRowScaffold(r.name, caps.join(' · '));
-  const box = row.querySelector('input');
-  box.value = r.id;
-  box.checked = checked;
-  if (checked) wiz.selected.add(r.id);
-  box.addEventListener('change', () => {
-    if (box.checked) wiz.selected.add(r.id); else wiz.selected.delete(r.id);
-  });
-  return row;
+  function retailerRow(r, { checked = false } = {}) {
+    const caps = [];
+    if (r.adapter_available) caps.push('has an automated price check');
+    if (r.mail_alerts_parsed) caps.push('mailwatch reads its price alerts');
+    const row = rowScaffold(r.name, caps.join(' · '));
+    const box = row.querySelector('input');
+    box.value = r.id;
+    box.checked = checked;
+    if (checked) selected.add(r.id);
+    box.addEventListener('change', () => {
+      if (box.checked) selected.add(r.id); else selected.delete(r.id);
+    });
+    return row;
+  }
+
+  /* The one place that turns a name (typed, or approved from a discovery search) into
+   * a real, checked retailer row. Always POSTs - ensure_retailer is idempotent by slug
+   * on the server, so this is the authoritative dedup, not a client-side name guess (a
+   * client-side check missed "JB HiFi" vs "JB Hi-Fi" resolving to the same slug, and
+   * separately skipped selecting an existing-but-unticked retailer entirely instead of
+   * ticking it). If a row for the returned id already exists, this ticks it rather
+   * than adding a second, unsynchronised checkbox for the same retailer. */
+  async function ensureRetailerRow(name, { homepage = null, checked = true } = {}) {
+    const body = homepage ? { name, homepage } : { name };
+    const retailer = await api('/api/retailers', { method: 'POST', body });
+    const existing = [...list.querySelectorAll('input[type=checkbox]')]
+      .find(b => Number(b.value) === retailer.id);
+    if (existing) {
+      if (checked && !existing.checked) {
+        existing.checked = true;
+        existing.dispatchEvent(new Event('change'));
+      }
+      return retailer;
+    }
+    retailers.push(retailer);
+    list.appendChild(retailerRow(retailer, { checked }));
+    return retailer;
+  }
+
+  /* Splits on commas so "JB Hi-Fi, Bing Lee, Officeworks" adds all three in one go,
+   * same as typing one, clicking Add, typing the next. Each name is isolated: one
+   * failing (a network blip, a transient 500) must not stop the rest, and must not be
+   * reported as if it succeeded - callers get back which names failed so the input can
+   * be left with just those, rather than clearing text only partly acted on. */
+  async function addRetailerNames(text) {
+    const names = text.split(',').map(n => n.trim()).filter(Boolean);
+    const failed = [];
+    for (const name of names) {
+      try {
+        await ensureRetailerRow(name, { checked: true });
+      } catch {
+        failed.push(name);
+      }
+    }
+    return failed;
+  }
+
+  /* Renders a discovered retailer as an unchecked row: naming it is not the same as
+   * wanting it researched, so ticking the box is the approval step. Approving promotes
+   * it into the real retailer list via ensureRetailerRow (same dedup as typed names)
+   * and removes this row - it is now represented by the permanent, checked row
+   * instead, so a later re-search can safely clear the discovered box without losing
+   * anything approved. */
+  function discoveredRow(candidate) {
+    const row = rowScaffold(candidate.name, candidate.homepage || 'homepage unknown');
+    const box = row.querySelector('input');
+    box.addEventListener('change', async () => {
+      if (!box.checked) return;
+      box.disabled = true;
+      try {
+        await ensureRetailerRow(candidate.name, { homepage: candidate.homepage, checked: true });
+        row.remove();
+      } catch (err) {
+        toast(`Could not add ${candidate.name}: ${err.message}`, 'bad');
+        box.checked = false;
+        box.disabled = false;
+      }
+    });
+    return row;
+  }
+
+  // Only the retailers actually selected here, not every retailer in the system - an
+  // unrelated product's retailer must never suppress a genuine suggestion.
+  function knownRetailers() {
+    return retailers.filter(r => selected.has(r.id));
+  }
+
+  function renderDiscovered(result, box) {
+    if (!result.retailers.length) {
+      box.appendChild(el('p', result.note || 'No confident finds beyond the ones already listed.', 'muted'));
+    } else {
+      for (const candidate of result.retailers) box.appendChild(discoveredRow(candidate));
+      if (result.note) box.appendChild(el('p', result.note, 'muted'));
+    }
+  }
+
+  return { retailerRow, ensureRetailerRow, addRetailerNames, discoveredRow, knownRetailers, renderDiscovered };
 }
 
 async function wizLoadRetailers() {
   wiz.retailers = await api('/api/retailers');
   const list = document.getElementById('wiz-retailer-list');
   list.replaceChildren();
-  for (const r of wiz.retailers) list.appendChild(wizRetailerRow(r));
-}
-
-/* The one place that turns a name (typed, or approved from a discovery search) into a
- * real, checked retailer row. Always POSTs - ensure_retailer is idempotent by slug on
- * the server, so this is the authoritative dedup, not a client-side name guess (a
- * client-side check missed "JB HiFi" vs "JB Hi-Fi" resolving to the same slug, and
- * separately skipped selecting an existing-but-unticked retailer entirely instead of
- * ticking it). If a row for the returned id already exists, this ticks it rather than
- * adding a second, unsynchronised checkbox for the same retailer. */
-async function wizEnsureRetailerRow(name, { homepage = null, checked = true } = {}) {
-  const body = homepage ? { name, homepage } : { name };
-  const retailer = await api('/api/retailers', { method: 'POST', body });
-  const list = document.getElementById('wiz-retailer-list');
-  const existing = [...list.querySelectorAll('input[type=checkbox]')]
-    .find(b => Number(b.value) === retailer.id);
-  if (existing) {
-    if (checked && !existing.checked) {
-      existing.checked = true;
-      existing.dispatchEvent(new Event('change'));
-    }
-    return retailer;
-  }
-  wiz.retailers.push(retailer);
-  list.appendChild(wizRetailerRow(retailer, { checked }));
-  return retailer;
-}
-
-/* Splits on commas so "JB Hi-Fi, Bing Lee, Officeworks" adds all three in one go, same
- * as typing one, clicking Add, typing the next. Each name is isolated: one failing
- * (a network blip, a transient 500) must not stop the rest, and must not be reported
- * as if it succeeded - callers get back which names failed so the input can be left
- * with just those, rather than clearing text that was only partly acted on. */
-async function wizAddRetailerNames(text) {
-  const names = text.split(',').map(n => n.trim()).filter(Boolean);
-  const failed = [];
-  for (const name of names) {
-    try {
-      await wizEnsureRetailerRow(name, { checked: true });
-    } catch {
-      failed.push(name);
-    }
-  }
-  return failed;
+  wiz.picker = makeRetailerPicker({ list, retailers: wiz.retailers, selected: wiz.selected });
+  for (const r of wiz.retailers) list.appendChild(wiz.picker.retailerRow(r));
 }
 
 function wizProgressRow(result) {
@@ -800,7 +852,7 @@ wire('wiz-add-retailer', async () => {
   input.disabled = true;
   btn.disabled = true;
   try {
-    const failed = await wizAddRetailerNames(text);
+    const failed = await wiz.picker.addRetailerNames(text);
     input.value = failed.join(', ');
     if (failed.length) toast(`Could not add: ${failed.join(', ')}`, 'bad');
   } finally {
@@ -809,99 +861,92 @@ wire('wiz-add-retailer', async () => {
   }
 });
 
-/* Renders a discovered retailer as an unchecked row: naming it is not the same as
- * wanting it researched, so ticking the box is the approval step. Approving promotes
- * it into the real retailer list via wizEnsureRetailerRow (same dedup as typed names)
- * and removes this row - it is now represented by the permanent, checked row instead,
- * so a later re-search can safely clear this box without losing anything approved. */
-function wizDiscoveredRow(candidate) {
-  const row = wizRowScaffold(candidate.name, candidate.homepage || 'homepage unknown');
-  const box = row.querySelector('input');
-  box.addEventListener('change', async () => {
-    if (!box.checked) return;
-    box.disabled = true;
-    try {
-      await wizEnsureRetailerRow(candidate.name, { homepage: candidate.homepage, checked: true });
-      row.remove();
-    } catch (err) {
-      toast(`Could not add ${candidate.name}: ${err.message}`, 'bad');
-      box.checked = false;
-      box.disabled = false;
-    }
+/* Wires up both discovery buttons (LLM-knowledge and Firecrawl-backed) for one picker.
+ * Used by both the wizard's retailers step AND the product page's "Research retailers
+ * again" dialog - the first version of this only existed in the wizard, which is why
+ * researching an existing product's retailers silently had no discovery at all until
+ * this generalisation. getPicker/getName/getModel are called at CLICK time, not wire
+ * time, because both screens create a fresh picker (and know the product's name/model)
+ * only once their dialog actually opens. */
+/* getGeneration is only set for a dialog that can be reopened for a DIFFERENT context
+ * (the product page's research-dialog is reused across products, unlike the wizard's
+ * dialog whose close handler force-reloads the page, wiping any pending state anyway).
+ * Reopening creates a brand new picker with its own retailers/selected Set - a
+ * discovery poll or add still in flight from a PREVIOUS opening closes over the OLD
+ * Set, so if it resolved after reopen and applied normally, ticking a candidate would
+ * visibly check a box in the shared list DOM while actually mutating a Set nothing
+ * reads any more. The generation check drops a stale result instead of applying it. */
+function wireDiscoveryButtons({ llmBtnId, webBtnId, boxId, getPicker, getName, getModel, getGeneration }) {
+  const isStale = generation => getGeneration && generation !== null && getGeneration() !== generation;
+
+  wire(llmBtnId, async () => {
+    const name = getName(), model = getModel();
+    if (!name) { toast('Type what it is first.', 'bad'); return; }
+    const picker = getPicker();
+    if (!picker) { toast('Still loading retailers - try again in a moment.', 'bad'); return; }
+    const generation = getGeneration ? getGeneration() : null;
+    await wizRunJob({
+      btn: document.getElementById(llmBtnId),
+      siblingBtn: document.getElementById(webBtnId),
+      box: document.getElementById(boxId),
+      busyText: 'Asking...', idleText: 'Find other retailers',
+      waitingText: 'Waiting for your LLM helper to answer...',
+      create: () => {
+        const known = picker.knownRetailers().map(r => r.name);
+        const query = `Product: ${name}${model ? ` (${model})` : ''}. Already checking these `
+          + `retailers, do not repeat them: ${known.length ? known.join(', ') : 'none yet'}.`;
+        return {
+          createUrl: '/api/llm-jobs', body: { query, kind: 'retailer_discovery' },
+          pollUrl: id => `/api/llm-jobs/${id}`,
+        };
+      },
+      pollOpts: { notRunningHint: 'is tools/llm-helper.py running? See "Set up your LLM" '
+        + 'at the top of the page.' },
+      onResult: (result, box) => { if (!isStale(generation)) picker.renderDiscovered(result, box); },
+      onError: err => `Could not ask the LLM for retailers: ${err.message}`,
+    });
   });
-  return row;
+
+  wire(webBtnId, async () => {
+    const name = getName(), model = getModel();
+    if (!name) { toast('Type what it is first.', 'bad'); return; }
+    const picker = getPicker();
+    if (!picker) { toast('Still loading retailers - try again in a moment.', 'bad'); return; }
+    const generation = getGeneration ? getGeneration() : null;
+    await wizRunJob({
+      btn: document.getElementById(webBtnId),
+      siblingBtn: document.getElementById(llmBtnId),
+      box: document.getElementById(boxId),
+      busyText: 'Searching...', idleText: 'Search the web',
+      waitingText: 'Searching the web via opti - this runs on a 2-minute poll cycle, '
+        + 'so it can take a minute or two...',
+      create: () => {
+        const known = picker.knownRetailers();
+        const query = JSON.stringify({
+          product_name: name, model,
+          excluded_names: known.map(r => r.name),
+          excluded_homepages: known.map(r => r.homepage).filter(Boolean),
+        });
+        return {
+          createUrl: '/api/retailer-search-jobs', body: { query },
+          pollUrl: id => `/api/retailer-search-jobs/${id}`,
+        };
+      },
+      // Long timeout: the opti runner that answers this only polls every 2 minutes
+      // (shopwatch-research-runner.timer), unlike llm-helper.py's own short interval.
+      pollOpts: { intervalMs: 3000, timeoutMs: 240000,
+        notRunningHint: 'is the opti research runner online? It only checks for a new '
+          + 'job every 2 minutes, so this can genuinely take a couple of minutes.' },
+      onResult: (result, box) => { if (!isStale(generation)) picker.renderDiscovered(result, box); },
+      onError: err => `Could not search the web for retailers: ${err.message}`,
+    });
+  });
 }
 
-function wizRenderDiscoveredRetailers(result, box) {
-  if (!result.retailers.length) {
-    box.appendChild(el('p', result.note || 'No confident finds beyond the ones already listed.', 'muted'));
-  } else {
-    for (const candidate of result.retailers) box.appendChild(wizDiscoveredRow(candidate));
-    if (result.note) box.appendChild(el('p', result.note, 'muted'));
-  }
-}
-
-// Only the retailers actually selected for THIS product, not every retailer in the
-// system - an unrelated product's retailer must never suppress a genuine suggestion.
-function wizKnownRetailers() {
-  return wiz.retailers.filter(r => wiz.selected.has(r.id));
-}
-
-wire('wiz-discover-retailers', async () => {
-  const name = wizVal('wiz-name'), model = wizVal('wiz-model');
-  if (!name) { toast('Type what it is first.', 'bad'); return; }
-  await wizRunJob({
-    btn: document.getElementById('wiz-discover-retailers'),
-    siblingBtn: document.getElementById('wiz-discover-retailers-web'),
-    box: document.getElementById('wiz-retailer-discovered'),
-    busyText: 'Asking...', idleText: 'Find other retailers',
-    waitingText: 'Waiting for your LLM helper to answer...',
-    create: () => {
-      const known = wizKnownRetailers().map(r => r.name);
-      const query = `Product: ${name}${model ? ` (${model})` : ''}. Already checking these `
-        + `retailers, do not repeat them: ${known.length ? known.join(', ') : 'none yet'}.`;
-      return {
-        createUrl: '/api/llm-jobs', body: { query, kind: 'retailer_discovery' },
-        pollUrl: id => `/api/llm-jobs/${id}`,
-      };
-    },
-    pollOpts: { notRunningHint: 'is tools/llm-helper.py running? See "Set up your LLM" '
-      + 'at the top of the page.' },
-    onResult: wizRenderDiscoveredRetailers,
-    onError: err => `Could not ask the LLM for retailers: ${err.message}`,
-  });
-});
-
-wire('wiz-discover-retailers-web', async () => {
-  const name = wizVal('wiz-name'), model = wizVal('wiz-model');
-  if (!name) { toast('Type what it is first.', 'bad'); return; }
-  await wizRunJob({
-    btn: document.getElementById('wiz-discover-retailers-web'),
-    siblingBtn: document.getElementById('wiz-discover-retailers'),
-    box: document.getElementById('wiz-retailer-discovered'),
-    busyText: 'Searching...', idleText: 'Search the web',
-    waitingText: 'Searching the web via opti - this runs on a 2-minute poll cycle, '
-      + 'so it can take a minute or two...',
-    create: () => {
-      const known = wizKnownRetailers();
-      const query = JSON.stringify({
-        product_name: name, model,
-        excluded_names: known.map(r => r.name),
-        excluded_homepages: known.map(r => r.homepage).filter(Boolean),
-      });
-      return {
-        createUrl: '/api/retailer-search-jobs', body: { query },
-        pollUrl: id => `/api/retailer-search-jobs/${id}`,
-      };
-    },
-    // Long timeout: the opti runner that answers this only polls every 2 minutes
-    // (shopwatch-research-runner.timer), unlike llm-helper.py's own short interval.
-    pollOpts: { intervalMs: 3000, timeoutMs: 240000,
-      notRunningHint: 'is the opti research runner online? It only checks for a new '
-        + 'job every 2 minutes, so this can genuinely take a couple of minutes.' },
-    onResult: wizRenderDiscoveredRetailers,
-    onError: err => `Could not search the web for retailers: ${err.message}`,
-  });
+wireDiscoveryButtons({
+  llmBtnId: 'wiz-discover-retailers', webBtnId: 'wiz-discover-retailers-web',
+  boxId: 'wiz-retailer-discovered', getPicker: () => wiz.picker,
+  getName: () => wizVal('wiz-name'), getModel: () => wizVal('wiz-model'),
 });
 
 wire('wiz-back', () => { wiz.index = Math.max(0, wiz.index - 1); wizRender(); });
@@ -941,7 +986,7 @@ wire('wiz-next', async () => {
       // straight away, without clicking Add first.
       const newName = wizVal('wiz-new-retailer');
       if (newName) {
-        const failed = await wizAddRetailerNames(newName);
+        const failed = await wiz.picker.addRetailerNames(newName);
         document.getElementById('wiz-new-retailer').value = failed.join(', ');
         if (failed.length) {
           toast(`Could not add: ${failed.join(', ')}`, 'bad');
@@ -1014,18 +1059,36 @@ wire('al-save', async () => {
  * the retailer list from memory.
  */
 
-let researchRetry = { productId: null, selected: new Set(), pollTimer: null };
+let researchRetry = { productId: null, name: '', model: '', retailers: [], selected: new Set(), picker: null, pollTimer: null, generation: 0 };
 
 wire('btn-research-retailers', async event => {
   if (researchRetry.pollTimer) clearInterval(researchRetry.pollTimer);
-  researchRetry = { productId: Number(event.currentTarget.dataset.product), selected: new Set(), pollTimer: null };
+  const { product, name, model } = event.currentTarget.dataset;
+  researchRetry = {
+    productId: Number(product), name, model,
+    retailers: [], selected: new Set(), picker: null, pollTimer: null,
+    // Bumped on every open (even reopening the SAME product) so a discovery poll or an
+    // in-flight "Add" from a previous opening can tell it has been superseded and drop
+    // its result instead of mutating a Set this session no longer reads.
+    generation: researchRetry.generation + 1,
+  };
   const list = document.getElementById('research-retailer-list');
   const progress = document.getElementById('research-progress');
   const goBtn = document.getElementById('research-go');
   const intro = document.getElementById('research-dialog-intro');
+  const discoverBox = document.getElementById('research-retailer-discovered');
   progress.hidden = true;
   progress.replaceChildren();
   list.replaceChildren();
+  discoverBox.hidden = true;
+  discoverBox.replaceChildren();
+  document.getElementById('research-new-retailer').value = '';
+  for (const id of ['research-discover-retailers', 'research-discover-retailers-web']) {
+    const btn = document.getElementById(id);
+    btn.disabled = false;
+  }
+  document.getElementById('research-discover-retailers').textContent = 'Find other retailers';
+  document.getElementById('research-discover-retailers-web').textContent = 'Search the web';
   goBtn.hidden = false;
   goBtn.disabled = false;
   goBtn.textContent = 'Research selected';
@@ -1043,6 +1106,11 @@ wire('btn-research-retailers', async event => {
     return;
   }
 
+  researchRetry.retailers = retailers;
+  researchRetry.picker = makeRetailerPicker({
+    list, retailers: researchRetry.retailers, selected: researchRetry.selected,
+  });
+
   const stillToCheck = new Set(
     (latestJob?.results || []).filter(r => r.status !== 'FOUND').map(r => r.retailer_id)
   );
@@ -1051,19 +1119,39 @@ wire('btn-research-retailers', async event => {
       + 'that did not turn up a price last time. Untick or add more as you like.'
     : 'Pick which retailers to check.';
 
-  for (const r of retailers) {
-    const row = el('label', '', 'wizard-retailer-row');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.value = r.id;
-    box.checked = stillToCheck.has(r.id);
-    if (box.checked) researchRetry.selected.add(r.id);
-    box.addEventListener('change', () => {
-      if (box.checked) researchRetry.selected.add(r.id); else researchRetry.selected.delete(r.id);
-    });
-    row.append(box, el('span', r.name, 'name'));
-    list.appendChild(row);
+  for (const r of retailers) list.appendChild(researchRetry.picker.retailerRow(r, { checked: stillToCheck.has(r.id) }));
+});
+
+wire('research-add-retailer', async () => {
+  const input = document.getElementById('research-new-retailer');
+  const btn = document.getElementById('research-add-retailer');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!researchRetry.picker) { toast('Still loading retailers - try again in a moment.', 'bad'); return; }
+  const picker = researchRetry.picker;
+  const generation = researchRetry.generation;
+  input.disabled = true;
+  btn.disabled = true;
+  try {
+    const failed = await picker.addRetailerNames(text);
+    // The dialog was closed and reopened (same or different product) while this add
+    // was in flight - the retailer it created still exists server-side (harmless,
+    // idempotent), but reporting success/failure here would be about a session that
+    // no longer exists, so leave the now-current dialog alone instead.
+    if (researchRetry.generation !== generation) return;
+    input.value = failed.join(', ');
+    if (failed.length) toast(`Could not add: ${failed.join(', ')}`, 'bad');
+  } finally {
+    input.disabled = false;
+    btn.disabled = false;
   }
+});
+
+wireDiscoveryButtons({
+  llmBtnId: 'research-discover-retailers', webBtnId: 'research-discover-retailers-web',
+  boxId: 'research-retailer-discovered', getPicker: () => researchRetry.picker,
+  getName: () => researchRetry.name, getModel: () => researchRetry.model,
+  getGeneration: () => researchRetry.generation,
 });
 
 wire('research-go', async () => {
