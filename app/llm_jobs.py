@@ -24,6 +24,13 @@ from .db import utcnow
 
 STATUSES = ("QUEUED", "RUNNING", "DONE", "FAILED")
 
+#: model_suggestion: rough description -> candidate model numbers, for the wizard's
+#: "basics" step. retailer_discovery: product name/model + retailers already checked ->
+#: other real AU retailers likely selling it, for the wizard's "retailers" step. Both
+#: are answered by the same tools/llm-helper.py; `kind` is how it picks the right
+#: prompt template and reply schema.
+KINDS = ("model_suggestion", "retailer_discovery")
+
 #: Much shorter than research_jobs' ceiling (600s): this is one small text completion,
 #: not a multi-retailer web research pass, so a runner that hasn't reported back inside
 #: two minutes is almost certainly gone (killed terminal, network drop), not merely slow.
@@ -60,11 +67,15 @@ def reconcile_stale(conn: sqlite3.Connection) -> list[int]:
     return reconciled
 
 
-def create_job(conn: sqlite3.Connection, query: str) -> int:
-    query = (query or "").strip()
+def create_job(conn: sqlite3.Connection, query: str, kind: str = "model_suggestion") -> int:
+    query = query.strip() if isinstance(query, str) else ""
     if not query:
         raise ValueError("query is required")
-    cur = conn.execute("INSERT INTO llm_jobs (query, status) VALUES (?, 'QUEUED')", (query,))
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}")
+    cur = conn.execute(
+        "INSERT INTO llm_jobs (query, status, kind) VALUES (?, 'QUEUED', ?)", (query, kind)
+    )
     return int(cur.lastrowid)
 
 

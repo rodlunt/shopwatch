@@ -7,6 +7,14 @@ own venv, sources the Claude Code OAuth token that already exists in
 shopwatch container over plain HTTP on the docker network. The container never holds
 this credential and never gains new outbound egress - only this script does.
 
+Also claims app/retailer_search.py's queue: same host-level shape, but calling the
+self-hosted Firecrawl instance on opti's own loopback (127.0.0.1:3002 by default,
+$FIRECRAWL_URL/--firecrawl-url override it) instead of the Claude CLI. Firecrawl sits
+on its own docker network, bound to 127.0.0.1 on the host, and is not reachable from the
+shopwatch container's own docker network - this script CAN reach it because it runs
+directly on the opti host, not inside a container. That is the whole reason this queue
+is claimed here rather than called directly from app/main.py.
+
     ssh root@YOUR-SERVER-IP
     set -a; . /srv/prod/career/runner.env; set +a
     cd /srv/prod/shopwatch/repo
@@ -28,13 +36,23 @@ import argparse
 import json
 import logging
 import math
+import re
 import subprocess
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 log = logging.getLogger("shopwatch.research_runner")
+
+#: A live search plus reading a handful of result snippets - not a multi-page research
+#: pass, so this stays well under retailer_search.JOB_CEILING_SECONDS (120s).
+FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30
+
+#: Firecrawl returns up to this many results; capped independently in case a future
+#: query style returns more than the wizard should ever render for one-shot approval.
+FIRECRAWL_MAX_CANDIDATES = 8
 
 #: Per-retailer sub-timeout: one slow or hung retailer must not sink the whole job.
 #: Matches the house convention already set by app/offers.py's own CLI timeouts.
@@ -247,22 +265,143 @@ def poll_once(base_url: str, claude_bin: str) -> bool:
     return True
 
 
+# ----------------------------------------------------------------- retailer search jobs
+#
+# Live web search for "who else sells this", via the self-hosted Firecrawl instance on
+# opti's own loopback. See app/retailer_search.py's module docstring for why this lives
+# here rather than as a direct HTTP call from the shopwatch container.
+
+
+def _bare_domain(url: str) -> str:
+    """Lowercased so set membership (dedup, excluded-domain checks) is case-insensitive -
+    a domain is not case-sensitive, but two Firecrawl results for the same store with
+    different URL casing (or a stored homepage typed in a different case) would
+    otherwise never match each other."""
+    netloc = urlparse(url if "://" in url else f"https://{url}").netloc.lower()
+    return netloc[4:] if netloc.startswith("www.") else netloc
+
+
+def _domain_display_name(domain: str) -> str:
+    """A readable fallback when the search result's own title doesn't yield a clean
+    short name - see _name_from_search_result. Approximate by construction (a bare
+    domain rarely spells a brand's actual styling, e.g. "jbhifi.com.au" vs "JB Hi-Fi"),
+    which is fine: the wizard shows the homepage alongside it and nothing is created
+    without a person ticking a box to approve it."""
+    base = re.sub(r"\.(com\.au|net\.au|org\.au|com|net|org|io|co)$", "", domain)
+    parts = re.split(r"[.\-_]+", base)
+    return " ".join(p.capitalize() for p in parts if p) or domain
+
+
+def _name_from_search_result(url: str, title: str) -> str:
+    domain = _bare_domain(url)
+    for sep in (" | ", " - ", " — "):
+        if sep in title:
+            candidate = title.rsplit(sep, 1)[-1].strip()
+            # A trailing "| $899" or "- SKU1234" is a price/SKU, not a store name - a
+            # short candidate with no digit is the only case worth trusting over the
+            # domain fallback.
+            if candidate and len(candidate) <= 40 and not any(c.isdigit() for c in candidate):
+                return candidate
+    return _domain_display_name(domain)
+
+
+def discover_retailers(
+    firecrawl_url: str, product_name: str, model: str,
+    excluded_names: list[str], excluded_homepages: list[str],
+) -> dict[str, Any]:
+    """Ask Firecrawl who else sells this, excluding retailers already known for this
+    product. Raises on any failure to search - a failed search must never look like a
+    successful search that simply found nothing (hardening.md rule 2)."""
+    query = f"{product_name} {model} buy Australia".strip()
+    try:
+        resp = requests.post(
+            f"{firecrawl_url}/v1/search",
+            json={"query": query, "limit": FIRECRAWL_MAX_CANDIDATES},
+            timeout=FIRECRAWL_SEARCH_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"firecrawl search failed: {exc}") from exc
+    if not data.get("success"):
+        raise RuntimeError(f"firecrawl search did not succeed: {data.get('error') or data}")
+
+    excluded_names_lower = {n.strip().lower() for n in excluded_names if n and n.strip()}
+    excluded_domains = {_bare_domain(h) for h in excluded_homepages if h}
+    excluded_domains.discard("")
+
+    seen_domains: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for item in data.get("data") or []:
+        url = item.get("url") or ""
+        domain = _bare_domain(url)
+        if not domain or domain in seen_domains or domain in excluded_domains:
+            continue
+        seen_domains.add(domain)
+        name = _name_from_search_result(url, item.get("title") or "")
+        if name.lower() in excluded_names_lower:
+            continue
+        candidates.append({"name": name, "homepage": f"https://{domain}"})
+        if len(candidates) >= FIRECRAWL_MAX_CANDIDATES:
+            break
+    return {"retailers": candidates, "note": None}
+
+
+def process_retailer_search_job(base_url: str, firecrawl_url: str, job: dict[str, Any]) -> None:
+    query = json.loads(job["query"])
+    result = discover_retailers(
+        firecrawl_url, query.get("product_name", ""), query.get("model", ""),
+        query.get("excluded_names") or [], query.get("excluded_homepages") or [],
+    )
+    requests.post(
+        f"{base_url}/api/retailer-search-jobs/{job['id']}/complete",
+        json={"status": "DONE", "result": json.dumps(result)}, timeout=30,
+    )
+
+
+def poll_retailer_search_once(base_url: str, firecrawl_url: str) -> bool:
+    """Claim and answer at most one retailer-search job. Returns True if one was found."""
+    job = requests.post(f"{base_url}/api/retailer-search-jobs/claim", timeout=30).json()
+    if job is None:
+        return False
+    log.info("claimed retailer-search job %s", job["id"])
+    try:
+        process_retailer_search_job(base_url, firecrawl_url, job)
+    except Exception as exc:  # a crash here must not orphan the job silently
+        log.exception("retailer-search job %s crashed", job["id"])
+        try:
+            requests.post(
+                f"{base_url}/api/retailer-search-jobs/{job['id']}/complete",
+                json={"status": "FAILED", "error": f"{type(exc).__name__}: {exc}"[:300]},
+                timeout=30,
+            )
+        except Exception:
+            log.exception("could not even report retailer-search job %s as FAILED", job["id"])
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research-runner")
     parser.add_argument("--base-url", default=None,
                          help="defaults to $SHOPWATCH_URL")
     parser.add_argument("--claude-bin", default=None,
                          help="defaults to $CLAUDE_BIN or 'claude'")
+    parser.add_argument("--firecrawl-url", default=None,
+                         help="defaults to $FIRECRAWL_URL or http://127.0.0.1:3002")
     parser.add_argument("--interval", type=int, default=10,
                          help="seconds between polls when idle")
     parser.add_argument("--once", action="store_true",
-                         help="process at most one job, then exit (for cron rather than a loop)")
+                         help="process at most one job of each kind, then exit "
+                              "(for cron rather than a loop)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
     import os
     base_url = args.base_url or os.environ.get("SHOPWATCH_URL")
     claude_bin = args.claude_bin or os.environ.get("CLAUDE_BIN", "claude")
+    firecrawl_url = (
+        args.firecrawl_url or os.environ.get("FIRECRAWL_URL", "http://127.0.0.1:3002")
+    ).rstrip("/")
     if not base_url:
         parser.error("--base-url or $SHOPWATCH_URL is required")
 
@@ -271,16 +410,30 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
+    def poll_both() -> None:
+        # Each queue's own try/except (inside poll_once/poll_retailer_search_once)
+        # only covers processing a job already claimed - the claim call itself can
+        # still raise (a non-JSON error body, a dropped connection), and that must
+        # not cost the OTHER queue its turn this cycle. retailer-search goes first:
+        # it is bounded to ~30s, while a research job can run for minutes, so this
+        # ordering means a slow research job delays the NEXT tick's retailer-search
+        # poll rather than the current one.
+        try:
+            poll_retailer_search_once(base_url, firecrawl_url)
+        except Exception:
+            log.exception("retailer-search poll failed")
+        try:
+            poll_once(base_url, claude_bin)
+        except Exception:
+            log.exception("research poll failed")
+
     if args.once:
-        poll_once(base_url, claude_bin)
+        poll_both()
         return 0
 
     log.info("polling %s every %ss", base_url, args.interval)
     while True:
-        try:
-            poll_once(base_url, claude_bin)
-        except requests.RequestException as exc:
-            log.warning("poll failed: %s", exc)
+        poll_both()
         time.sleep(args.interval)
 
 

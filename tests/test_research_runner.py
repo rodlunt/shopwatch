@@ -109,6 +109,136 @@ def test_empty_reply():
         research_runner.parse_research_reply("")
 
 
+
+# --------------------------------------------------- retailer search (Firecrawl-backed)
+
+def test_bare_domain_strips_www_and_scheme():
+    assert research_runner._bare_domain("https://www.jbhifi.com.au/products/x") == "jbhifi.com.au"
+    assert research_runner._bare_domain("bunnings.com.au") == "bunnings.com.au"
+
+
+def test_bare_domain_is_lowercased():
+    """The control this test exists for: without lowercasing, a Firecrawl result at
+    https://WWW.NewStore.example and a stored homepage at https://www.newstore.example
+    would never match each other in discover_retailers' exclusion/dedup sets."""
+    assert research_runner._bare_domain("https://WWW.NewStore.example/product") == "newstore.example"
+    assert research_runner._bare_domain("https://www.newstore.example") == "newstore.example"
+
+
+def test_domain_display_name_strips_tld_and_title_cases():
+    assert research_runner._domain_display_name("jb-hifi.com.au") == "Jb Hifi"
+    assert research_runner._domain_display_name("bunnings.com.au") == "Bunnings"
+
+
+def test_name_from_search_result_prefers_a_short_trailing_title_segment():
+    name = research_runner._name_from_search_result(
+        "https://www.example.com.au/x", "Samsung Soundbar HW-Q930H | Example Store"
+    )
+    assert name == "Example Store"
+
+
+def test_name_from_search_result_falls_back_to_domain_when_trailing_segment_has_a_digit():
+    """A trailing "| $899" or "- SKU1234" is a price or SKU, not a store name - trusting
+    it would show the user a nonsense "retailer" instead of an honest domain guess."""
+    name = research_runner._name_from_search_result(
+        "https://www.example.com.au/x", "Samsung Soundbar HW-Q930H | $899"
+    )
+    assert name == "Example"
+
+
+def test_name_from_search_result_falls_back_to_domain_with_no_separator():
+    name = research_runner._name_from_search_result(
+        "https://www.example.com.au/x", "Samsung Soundbar HW-Q930H"
+    )
+    assert name == "Example"
+
+
+def _fake_search_response(monkeypatch, data, success=True):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"success": success, "data": data}
+
+    monkeypatch.setattr(research_runner.requests, "post", lambda *a, **k: FakeResponse())
+
+
+def test_discover_retailers_returns_candidates_from_search_results(monkeypatch):
+    _fake_search_response(monkeypatch, [
+        {"url": "https://www.newstore.example/product", "title": "Soundbar | New Store"},
+    ])
+    result = research_runner.discover_retailers(
+        "http://firecrawl", "Samsung Soundbar", "HW-Q930H", [], [],
+    )
+    assert result["retailers"] == [{"name": "New Store", "homepage": "https://newstore.example"}]
+
+
+def test_discover_retailers_excludes_by_homepage_domain(monkeypatch):
+    """The control this test exists for: without domain-based exclusion, a retailer
+    already selected for this product would be suggested again as if it were new."""
+    _fake_search_response(monkeypatch, [
+        {"url": "https://www.knownstore.example/product", "title": "Soundbar | Known Store"},
+        {"url": "https://www.newstore.example/product", "title": "Soundbar | New Store"},
+    ])
+    result = research_runner.discover_retailers(
+        "http://firecrawl", "Samsung Soundbar", "HW-Q930H",
+        [], ["https://www.knownstore.example"],
+    )
+    names = [r["name"] for r in result["retailers"]]
+    assert "Known Store" not in names
+    assert "New Store" in names
+
+
+def test_discover_retailers_excludes_by_name(monkeypatch):
+    _fake_search_response(monkeypatch, [
+        {"url": "https://www.newstore.example/product", "title": "Soundbar | New Store"},
+    ])
+    result = research_runner.discover_retailers(
+        "http://firecrawl", "Samsung Soundbar", "HW-Q930H", ["New Store"], [],
+    )
+    assert result["retailers"] == []
+
+
+def test_discover_retailers_deduplicates_the_same_domain(monkeypatch):
+    _fake_search_response(monkeypatch, [
+        {"url": "https://www.newstore.example/a", "title": "Soundbar | New Store"},
+        {"url": "https://www.newstore.example/b", "title": "Soundbar A/V | New Store"},
+    ])
+    result = research_runner.discover_retailers(
+        "http://firecrawl", "Samsung Soundbar", "HW-Q930H", [], [],
+    )
+    assert len(result["retailers"]) == 1
+
+
+def test_discover_retailers_excludes_by_homepage_domain_regardless_of_case(monkeypatch):
+    _fake_search_response(monkeypatch, [
+        {"url": "https://WWW.KnownStore.example/product", "title": "Soundbar | Known Store"},
+    ])
+    result = research_runner.discover_retailers(
+        "http://firecrawl", "Samsung Soundbar", "HW-Q930H",
+        [], ["https://www.knownstore.example"],
+    )
+    assert result["retailers"] == []
+
+
+def test_discover_retailers_raises_when_firecrawl_reports_failure(monkeypatch):
+    """The control this test exists for: a failed search must not silently look like
+    a successful search that simply found nothing (hardening.md rule 2)."""
+    _fake_search_response(monkeypatch, [], success=False)
+    with pytest.raises(RuntimeError, match="did not succeed"):
+        research_runner.discover_retailers("http://firecrawl", "Product", "MODEL", [], [])
+
+
+def test_discover_retailers_raises_when_the_request_itself_fails(monkeypatch):
+    def fake_post(*a, **k):
+        raise research_runner.requests.RequestException("connection refused")
+
+    monkeypatch.setattr(research_runner.requests, "post", fake_post)
+    with pytest.raises(RuntimeError, match="firecrawl search failed"):
+        research_runner.discover_retailers("http://firecrawl", "Product", "MODEL", [], [])
+
+
 def test_the_claude_call_grants_web_search_and_fetch(monkeypatch):
     """The prompt tells the model to search the web and read the retailer's own
     site, but neither tool is available by default in a non-interactive `-p` call

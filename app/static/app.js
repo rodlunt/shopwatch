@@ -503,24 +503,77 @@ async function wizLoadGroups() {
   }
 }
 
+function wizRowScaffold(nameText, capText) {
+  const row = el('label', '', 'wizard-retailer-row');
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  row.append(box, el('span', nameText, 'name'), el('span', capText, 'cap'));
+  return row;
+}
+
+function wizRetailerRow(r, { checked = false } = {}) {
+  const caps = [];
+  if (r.adapter_available) caps.push('has an automated price check');
+  if (r.mail_alerts_parsed) caps.push('mailwatch reads its price alerts');
+  const row = wizRowScaffold(r.name, caps.join(' · '));
+  const box = row.querySelector('input');
+  box.value = r.id;
+  box.checked = checked;
+  if (checked) wiz.selected.add(r.id);
+  box.addEventListener('change', () => {
+    if (box.checked) wiz.selected.add(r.id); else wiz.selected.delete(r.id);
+  });
+  return row;
+}
+
 async function wizLoadRetailers() {
   wiz.retailers = await api('/api/retailers');
   const list = document.getElementById('wiz-retailer-list');
   list.replaceChildren();
-  for (const r of wiz.retailers) {
-    const row = el('label', '', 'wizard-retailer-row');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.value = r.id;
-    box.addEventListener('change', () => {
-      if (box.checked) wiz.selected.add(r.id); else wiz.selected.delete(r.id);
-    });
-    const caps = [];
-    if (r.adapter_available) caps.push('has an automated price check');
-    if (r.mail_alerts_parsed) caps.push('mailwatch reads its price alerts');
-    row.append(box, el('span', r.name, 'name'), el('span', caps.join(' · '), 'cap'));
-    list.appendChild(row);
+  for (const r of wiz.retailers) list.appendChild(wizRetailerRow(r));
+}
+
+/* The one place that turns a name (typed, or approved from a discovery search) into a
+ * real, checked retailer row. Always POSTs - ensure_retailer is idempotent by slug on
+ * the server, so this is the authoritative dedup, not a client-side name guess (a
+ * client-side check missed "JB HiFi" vs "JB Hi-Fi" resolving to the same slug, and
+ * separately skipped selecting an existing-but-unticked retailer entirely instead of
+ * ticking it). If a row for the returned id already exists, this ticks it rather than
+ * adding a second, unsynchronised checkbox for the same retailer. */
+async function wizEnsureRetailerRow(name, { homepage = null, checked = true } = {}) {
+  const body = homepage ? { name, homepage } : { name };
+  const retailer = await api('/api/retailers', { method: 'POST', body });
+  const list = document.getElementById('wiz-retailer-list');
+  const existing = [...list.querySelectorAll('input[type=checkbox]')]
+    .find(b => Number(b.value) === retailer.id);
+  if (existing) {
+    if (checked && !existing.checked) {
+      existing.checked = true;
+      existing.dispatchEvent(new Event('change'));
+    }
+    return retailer;
   }
+  wiz.retailers.push(retailer);
+  list.appendChild(wizRetailerRow(retailer, { checked }));
+  return retailer;
+}
+
+/* Splits on commas so "JB Hi-Fi, Bing Lee, Officeworks" adds all three in one go, same
+ * as typing one, clicking Add, typing the next. Each name is isolated: one failing
+ * (a network blip, a transient 500) must not stop the rest, and must not be reported
+ * as if it succeeded - callers get back which names failed so the input can be left
+ * with just those, rather than clearing text that was only partly acted on. */
+async function wizAddRetailerNames(text) {
+  const names = text.split(',').map(n => n.trim()).filter(Boolean);
+  const failed = [];
+  for (const name of names) {
+    try {
+      await wizEnsureRetailerRow(name, { checked: true });
+    } catch {
+      failed.push(name);
+    }
+  }
+  return failed;
 }
 
 function wizProgressRow(result) {
@@ -622,6 +675,14 @@ wire('btn-new-product', async () => {
   document.getElementById('wiz-model-warning').hidden = true;
   document.getElementById('wiz-model-suggestions').hidden = true;
   document.getElementById('wiz-model-suggestions').replaceChildren();
+  document.getElementById('wiz-retailer-discovered').hidden = true;
+  document.getElementById('wiz-retailer-discovered').replaceChildren();
+  const discoverBtn = document.getElementById('wiz-discover-retailers');
+  discoverBtn.disabled = false;
+  discoverBtn.textContent = 'Find other retailers';
+  const discoverWebBtn = document.getElementById('wiz-discover-retailers-web');
+  discoverWebBtn.disabled = false;
+  discoverWebBtn.textContent = 'Search the web';
   await wizLoadGroups();
   await wizLoadRetailers();
   wizRender();
@@ -647,19 +708,47 @@ document.getElementById('wiz-model')?.addEventListener('blur', async event => {
   } catch { /* the deterministic check is a courtesy, never a blocker */ }
 });
 
-/* Polls a queued llm_jobs row until it lands, same shape as wizPoll() for research
- * jobs below - a much shorter timeout, since this is one text completion someone's
- * own machine answers in a few seconds, not a multi-retailer research pass. */
-async function pollLlmJob(id, { intervalMs = 1000, timeoutMs = 30000 } = {}) {
+/* Polls a queued job row (llm_jobs or retailer_search_jobs - same {status, result,
+ * error} shape) until it lands, same idea as wizPoll() for research jobs below.
+ * notRunningHint is job-kind-specific: the two claimants (a user's own machine vs
+ * opti's runner) fail differently and need different troubleshooting advice. */
+async function pollJob(getUrl, { intervalMs = 1000, timeoutMs = 30000, notRunningHint } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const job = await api(`/api/llm-jobs/${id}`);
+    const job = await api(getUrl);
     if (job.status === 'DONE') return JSON.parse(job.result);
     if (job.status === 'FAILED') throw new Error(job.error || 'the helper failed to answer');
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
-  throw new Error('no answer in time - is tools/llm-helper.py running? '
-    + 'See "Set up your LLM" at the top of the page.');
+  throw new Error(`no answer in time - ${notRunningHint}`);
+}
+
+/* Shared busy/poll/error control flow for every "queue a job, wait, render the
+ * result" wizard action (model suggestions, and both retailer-discovery buttons) -
+ * three near-identical copies of this is exactly the kind of drift that caused a real
+ * bug (see the "already checking" list scoping) in an earlier pass of this feature. */
+async function wizRunJob({ btn, siblingBtn, box, busyText, idleText, waitingText, create, pollOpts, onResult, onError }) {
+  btn.disabled = true;
+  // Both retailer-discovery buttons render into the same #wiz-retailer-discovered box -
+  // disabling the sibling too means only one search can ever be in flight, so whichever
+  // finishes later can never silently wipe out the other's still-unapproved results.
+  if (siblingBtn) siblingBtn.disabled = true;
+  btn.textContent = busyText;
+  box.hidden = false;
+  box.replaceChildren(el('p', waitingText, 'muted'));
+  try {
+    const { createUrl, body, pollUrl } = await create();
+    const job = await api(createUrl, { method: 'POST', body });
+    const result = await pollJob(pollUrl(job.id), pollOpts);
+    box.replaceChildren();
+    onResult(result, box);
+  } catch (err) {
+    box.replaceChildren(el('p', onError(err), 'muted'));
+  } finally {
+    btn.disabled = false;
+    if (siblingBtn) siblingBtn.disabled = false;
+    btn.textContent = idleText;
+  }
 }
 
 function renderModelSuggestions(result) {
@@ -687,21 +776,132 @@ function renderModelSuggestions(result) {
 wire('wiz-suggest-models', async () => {
   const query = wizVal('wiz-name');
   if (!query) { toast('Type what it is first.', 'bad'); return; }
-  const btn = document.getElementById('wiz-suggest-models');
-  const box = document.getElementById('wiz-model-suggestions');
+  await wizRunJob({
+    btn: document.getElementById('wiz-suggest-models'),
+    box: document.getElementById('wiz-model-suggestions'),
+    busyText: 'Asking...', idleText: 'Suggest models',
+    waitingText: 'Waiting for your LLM helper to answer...',
+    create: () => ({
+      createUrl: '/api/llm-jobs', body: { query },
+      pollUrl: id => `/api/llm-jobs/${id}`,
+    }),
+    pollOpts: { notRunningHint: 'is tools/llm-helper.py running? See "Set up your LLM" '
+      + 'at the top of the page.' },
+    onResult: renderModelSuggestions,
+    onError: err => `Could not get suggestions: ${err.message}`,
+  });
+});
+
+wire('wiz-add-retailer', async () => {
+  const input = document.getElementById('wiz-new-retailer');
+  const btn = document.getElementById('wiz-add-retailer');
+  const text = input.value.trim();
+  if (!text) return;
+  input.disabled = true;
   btn.disabled = true;
-  btn.textContent = 'Asking...';
-  box.hidden = false;
-  box.replaceChildren(el('p', 'Waiting for your LLM helper to answer...', 'muted'));
   try {
-    const job = await api('/api/llm-jobs', { method: 'POST', body: { query } });
-    renderModelSuggestions(await pollLlmJob(job.id));
-  } catch (err) {
-    box.replaceChildren(el('p', `Could not get suggestions: ${err.message}`, 'muted'));
+    const failed = await wizAddRetailerNames(text);
+    input.value = failed.join(', ');
+    if (failed.length) toast(`Could not add: ${failed.join(', ')}`, 'bad');
   } finally {
+    input.disabled = false;
     btn.disabled = false;
-    btn.textContent = 'Suggest models';
   }
+});
+
+/* Renders a discovered retailer as an unchecked row: naming it is not the same as
+ * wanting it researched, so ticking the box is the approval step. Approving promotes
+ * it into the real retailer list via wizEnsureRetailerRow (same dedup as typed names)
+ * and removes this row - it is now represented by the permanent, checked row instead,
+ * so a later re-search can safely clear this box without losing anything approved. */
+function wizDiscoveredRow(candidate) {
+  const row = wizRowScaffold(candidate.name, candidate.homepage || 'homepage unknown');
+  const box = row.querySelector('input');
+  box.addEventListener('change', async () => {
+    if (!box.checked) return;
+    box.disabled = true;
+    try {
+      await wizEnsureRetailerRow(candidate.name, { homepage: candidate.homepage, checked: true });
+      row.remove();
+    } catch (err) {
+      toast(`Could not add ${candidate.name}: ${err.message}`, 'bad');
+      box.checked = false;
+      box.disabled = false;
+    }
+  });
+  return row;
+}
+
+function wizRenderDiscoveredRetailers(result, box) {
+  if (!result.retailers.length) {
+    box.appendChild(el('p', result.note || 'No confident finds beyond the ones already listed.', 'muted'));
+  } else {
+    for (const candidate of result.retailers) box.appendChild(wizDiscoveredRow(candidate));
+    if (result.note) box.appendChild(el('p', result.note, 'muted'));
+  }
+}
+
+// Only the retailers actually selected for THIS product, not every retailer in the
+// system - an unrelated product's retailer must never suppress a genuine suggestion.
+function wizKnownRetailers() {
+  return wiz.retailers.filter(r => wiz.selected.has(r.id));
+}
+
+wire('wiz-discover-retailers', async () => {
+  const name = wizVal('wiz-name'), model = wizVal('wiz-model');
+  if (!name) { toast('Type what it is first.', 'bad'); return; }
+  await wizRunJob({
+    btn: document.getElementById('wiz-discover-retailers'),
+    siblingBtn: document.getElementById('wiz-discover-retailers-web'),
+    box: document.getElementById('wiz-retailer-discovered'),
+    busyText: 'Asking...', idleText: 'Find other retailers',
+    waitingText: 'Waiting for your LLM helper to answer...',
+    create: () => {
+      const known = wizKnownRetailers().map(r => r.name);
+      const query = `Product: ${name}${model ? ` (${model})` : ''}. Already checking these `
+        + `retailers, do not repeat them: ${known.length ? known.join(', ') : 'none yet'}.`;
+      return {
+        createUrl: '/api/llm-jobs', body: { query, kind: 'retailer_discovery' },
+        pollUrl: id => `/api/llm-jobs/${id}`,
+      };
+    },
+    pollOpts: { notRunningHint: 'is tools/llm-helper.py running? See "Set up your LLM" '
+      + 'at the top of the page.' },
+    onResult: wizRenderDiscoveredRetailers,
+    onError: err => `Could not ask the LLM for retailers: ${err.message}`,
+  });
+});
+
+wire('wiz-discover-retailers-web', async () => {
+  const name = wizVal('wiz-name'), model = wizVal('wiz-model');
+  if (!name) { toast('Type what it is first.', 'bad'); return; }
+  await wizRunJob({
+    btn: document.getElementById('wiz-discover-retailers-web'),
+    siblingBtn: document.getElementById('wiz-discover-retailers'),
+    box: document.getElementById('wiz-retailer-discovered'),
+    busyText: 'Searching...', idleText: 'Search the web',
+    waitingText: 'Searching the web via opti - this runs on a 2-minute poll cycle, '
+      + 'so it can take a minute or two...',
+    create: () => {
+      const known = wizKnownRetailers();
+      const query = JSON.stringify({
+        product_name: name, model,
+        excluded_names: known.map(r => r.name),
+        excluded_homepages: known.map(r => r.homepage).filter(Boolean),
+      });
+      return {
+        createUrl: '/api/retailer-search-jobs', body: { query },
+        pollUrl: id => `/api/retailer-search-jobs/${id}`,
+      };
+    },
+    // Long timeout: the opti runner that answers this only polls every 2 minutes
+    // (shopwatch-research-runner.timer), unlike llm-helper.py's own short interval.
+    pollOpts: { intervalMs: 3000, timeoutMs: 240000,
+      notRunningHint: 'is the opti research runner online? It only checks for a new '
+        + 'job every 2 minutes, so this can genuinely take a couple of minutes.' },
+    onResult: wizRenderDiscoveredRetailers,
+    onError: err => `Could not search the web for retailers: ${err.message}`,
+  });
 });
 
 wire('wiz-back', () => { wiz.index = Math.max(0, wiz.index - 1); wizRender(); });
@@ -737,11 +937,16 @@ wire('wiz-next', async () => {
         }});
       }
     } else if (step === 'retailers') {
+      // Courtesy for typing a name (or several, comma-separated) and hitting Next
+      // straight away, without clicking Add first.
       const newName = wizVal('wiz-new-retailer');
       if (newName) {
-        const retailer = await api('/api/retailers', { method: 'POST', body: { name: newName } });
-        wiz.selected.add(retailer.id);
-        document.getElementById('wiz-new-retailer').value = '';
+        const failed = await wizAddRetailerNames(newName);
+        document.getElementById('wiz-new-retailer').value = failed.join(', ');
+        if (failed.length) {
+          toast(`Could not add: ${failed.join(', ')}`, 'bad');
+          return; // don't advance past a name that didn't actually get added
+        }
       }
       if (wiz.selected.size === 0) {
         toast('Pick at least one retailer, or add one.', 'bad');

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from app import llm_jobs
+
 _PATH = Path(__file__).resolve().parents[1] / "tools" / "llm-helper.py"
 _SPEC = importlib.util.spec_from_file_location("llm_helper", _PATH)
 llm_helper = importlib.util.module_from_spec(_SPEC)
@@ -119,3 +121,73 @@ def test_a_non_dict_candidate_item_is_dropped_not_a_crash():
 def test_build_prompt_includes_the_query():
     prompt = llm_helper.build_prompt("Dreame RoboMower")
     assert "Dreame RoboMower" in prompt
+
+
+# --------------------------------------------------------- retailer discovery (kind 2)
+
+def test_a_clean_retailer_reply_parses():
+    reply = '{"retailers": [{"name": "Bunnings", "homepage": "https://www.bunnings.com.au"}], "note": null}'
+    result = llm_helper.parse_retailer_reply(reply)
+    assert result["retailers"] == [{"name": "Bunnings", "homepage": "https://www.bunnings.com.au"}]
+
+
+def test_zero_retailers_is_valid_not_an_error():
+    reply = '{"retailers": [], "note": "nothing beyond what is already listed"}'
+    result = llm_helper.parse_retailer_reply(reply)
+    assert result["retailers"] == []
+
+
+def test_a_retailer_missing_a_name_is_dropped_not_kept_blank():
+    reply = '{"retailers": [{"name": "", "homepage": "https://example.com"}, {"name": "Bunnings"}]}'
+    result = llm_helper.parse_retailer_reply(reply)
+    assert result["retailers"] == [{"name": "Bunnings", "homepage": None}]
+
+
+def test_a_retailer_with_no_homepage_gets_null_not_a_crash():
+    reply = '{"retailers": [{"name": "Bunnings"}], "note": null}'
+    result = llm_helper.parse_retailer_reply(reply)
+    assert result["retailers"] == [{"name": "Bunnings", "homepage": None}]
+
+
+def test_more_than_eight_retailers_is_truncated():
+    many = [{"name": f"Retailer {i}"} for i in range(12)]
+    reply = f'{{"retailers": {many!r}, "note": null}}'.replace("'", '"')
+    result = llm_helper.parse_retailer_reply(reply)
+    assert len(result["retailers"]) == 8
+
+
+def test_retailer_reply_missing_the_retailers_key():
+    with pytest.raises(ValueError, match="retailers"):
+        llm_helper.parse_retailer_reply('{"note": "hmm"}')
+
+
+def test_build_retailer_prompt_includes_the_query():
+    prompt = llm_helper.build_retailer_prompt("Product: Dreame RoboMower. Already checking: Bunnings.")
+    assert "Dreame RoboMower" in prompt
+    assert "Bunnings" in prompt
+
+
+def test_job_kinds_map_covers_every_kind_the_server_knows_about():
+    """The control this test exists for: a kind the server will accept (llm_jobs.KINDS)
+    but this script's JOB_KINDS doesn't recognise is exactly the scenario
+    resolve_job_kind must raise on - checked against the real source of truth, not a
+    hardcoded literal that could drift from it unnoticed."""
+    assert set(llm_helper.JOB_KINDS) == set(llm_jobs.KINDS)
+    assert llm_helper.JOB_KINDS["retailer_discovery"] == (
+        llm_helper.build_retailer_prompt, llm_helper.parse_retailer_reply, "retailers",
+    )
+
+
+def test_resolve_job_kind_returns_the_matching_builder_and_parser():
+    build, parse, result_key = llm_helper.resolve_job_kind("retailer_discovery")
+    assert build is llm_helper.build_retailer_prompt
+    assert parse is llm_helper.parse_retailer_reply
+    assert result_key == "retailers"
+
+
+def test_resolve_job_kind_raises_loudly_for_an_unrecognised_kind():
+    """The control this test exists for: an out-of-date llm-helper.py copy claiming a
+    job of a kind it predates must fail that job, not silently answer it with the
+    wrong prompt and parser - see resolve_job_kind's own docstring."""
+    with pytest.raises(ValueError, match="unrecognised job kind"):
+        llm_helper.resolve_job_kind("a_future_kind_this_copy_predates")

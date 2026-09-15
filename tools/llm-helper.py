@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Answers shopwatch's "suggest a model number" wizard requests using YOUR OWN Claude
-Code or Codex CLI login - never an API key, never a credential shopwatch holds or pays
-for. Run this on whichever machine already has one of those CLIs installed and signed
-in; it can be the same machine you're browsing shopwatch from.
+"""Answers shopwatch's wizard requests - "suggest a model number" and "find other
+retailers selling this" - using YOUR OWN Claude Code or Codex CLI login - never an API
+key, never a credential shopwatch holds or pays for. Run this on whichever machine
+already has one of those CLIs installed and signed in; it can be the same machine
+you're browsing shopwatch from.
 
 Quick start:
     python3 tools/llm-helper.py --url https://shop.home.lunt.au --backend claude
@@ -80,6 +81,36 @@ def build_prompt(query: str) -> str:
     return PROMPT_TEMPLATE.format(query=query)
 
 
+RETAILER_PROMPT_TEMPLATE = """You are helping someone find other real Australian
+retailers that sell a specific product, for a personal price-watching tool. They
+already have some retailers covered and want to know who else genuinely stocks it.
+
+{query}
+
+Be short and honest:
+- Return 0 to 8 retailers. Fewer, or zero, is the correct answer when you are not
+  genuinely confident a retailer actually stocks this exact product - a plausible-
+  sounding guess is worse than no suggestion.
+- Only name a retailer you have specific, genuine reason to believe sells this exact
+  product (or this exact model line), not just "a retailer that sells this category".
+- Do not repeat any retailer already listed as one already being checked.
+- homepage should be the retailer's main site (e.g. "https://www.example.com.au"), or
+  null if you are not confident of the exact URL.
+
+Return ONLY a JSON object, no prose, no code fence, matching this shape:
+{{
+  "retailers": [
+    {{"name": "retailer name", "homepage": "https://example.com.au or null"}}
+  ],
+  "note": "one short sentence, or null - a confidence caveat, not a repeat of the list"
+}}
+"""
+
+
+def build_retailer_prompt(query: str) -> str:
+    return RETAILER_PROMPT_TEMPLATE.format(query=query)
+
+
 def _last_json_object(raw: str, start: int) -> dict[str, Any]:
     """Scan for every complete JSON object at or after `start`, keeping the LAST one
     that parses. A reply with an earlier draft, worked example, or reference case
@@ -135,6 +166,28 @@ def parse_reply(raw: str) -> dict[str, Any]:
     return {"candidates": cleaned, "note": data.get("note")}
 
 
+def parse_retailer_reply(raw: str) -> dict[str, Any]:
+    """Same discipline as parse_reply, for the retailer-discovery reply shape."""
+    raw = (raw or "").strip()
+    start = raw.find("{")
+    if start == -1:
+        raise ValueError(f"no JSON object in reply: {raw[:150]!r}")
+    data = _last_json_object(raw, start)
+    retailers = data.get("retailers")
+    if not isinstance(retailers, list):
+        raise ValueError("reply had no 'retailers' list")
+    cleaned = []
+    for item in retailers[:8]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        homepage = item.get("homepage")
+        cleaned.append({"name": name, "homepage": str(homepage).strip() if homepage else None})
+    return {"retailers": cleaned, "note": data.get("note")}
+
+
 def call_claude(claude_bin: str, prompt: str) -> str:
     proc = subprocess.run(
         [claude_bin, "-p"], input=prompt, capture_output=True, text=True,
@@ -182,20 +235,50 @@ def api_call(url: str, auth_header: str, method: str = "GET",
         raise RuntimeError(f"shopwatch returned HTTP {exc.code}: {exc.read()[:300]}") from exc
 
 
+#: Each kind's own prompt builder and reply parser, plus the result field whose length
+#: is worth printing after a successful answer. Keyed by llm_jobs.KINDS in the server.
+JOB_KINDS = {
+    "model_suggestion": (build_prompt, parse_reply, "candidates"),
+    "retailer_discovery": (build_retailer_prompt, parse_retailer_reply, "retailers"),
+}
+
+
+def resolve_job_kind(kind: str) -> tuple[Any, Any, str]:
+    """Look up a kind's prompt builder, reply parser and result field - or raise.
+
+    This script is designed to run as a long-lived standalone copy on a user's own
+    machine (see the module docstring), so it can be out of date relative to the
+    server. Falling back to model_suggestion's prompt/parser for a kind this copy
+    doesn't recognise would answer with the wrong shape and call it a success - a
+    skipped check disguised as a pass. Raising here means poll_once's own exception
+    handling reports the job FAILED with a clear reason instead.
+    """
+    try:
+        return JOB_KINDS[kind]
+    except KeyError:
+        raise ValueError(
+            f"unrecognised job kind {kind!r} - this copy of llm-helper.py may be out of "
+            "date; update it rather than guessing at the reply shape"
+        ) from None
+
+
 def poll_once(base_url: str, auth_header: str, backend: str, bin_name: str) -> bool:
     """Claim and answer at most one job. Returns True if a job was found."""
     job = api_call(f"{base_url}/api/llm-jobs/claim", auth_header, method="POST")
     if job is None:
         return False
-    print(f"[{time.strftime('%H:%M:%S')}] job {job['id']}: {job['query']!r} -> asking {backend}...")
+    kind = job.get("kind", "model_suggestion")
+    print(f"[{time.strftime('%H:%M:%S')}] job {job['id']} ({kind}): {job['query']!r} "
+          f"-> asking {backend}...")
     try:
-        raw = BACKENDS[backend](bin_name, build_prompt(job["query"]))
-        result = parse_reply(raw)
+        build, parse, result_key = resolve_job_kind(kind)
+        raw = BACKENDS[backend](bin_name, build(job["query"]))
+        result = parse(raw)
         api_call(
             f"{base_url}/api/llm-jobs/{job['id']}/complete", auth_header, method="POST",
             body={"status": "DONE", "result": json.dumps(result)},
         )
-        print(f"           done: {len(result['candidates'])} candidate(s)")
+        print(f"           done: {len(result[result_key])} result(s)")
     except Exception as exc:  # a crash here must not orphan the job silently
         print(f"           failed: {exc}", file=sys.stderr)
         try:
