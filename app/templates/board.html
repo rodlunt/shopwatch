@@ -115,9 +115,11 @@
           <input id="wiz-new-retailer" placeholder="Retailer name, or several separated by commas">
         </label>
       </div>
-      <button type="button" id="wiz-add-retailer" class="btn">Add</button>
-      <button type="button" id="wiz-discover-retailers" class="btn">Find other retailers</button>
-      <button type="button" id="wiz-discover-retailers-web" class="btn">Search the web</button>
+      <div class="wizard-retailer-actions">
+        <button type="button" id="wiz-add-retailer" class="btn">Add</button>
+        <button type="button" id="wiz-discover-retailers" class="btn">Find other retailers</button>
+        <button type="button" id="wiz-discover-retailers-web" class="btn">Search the web</button>
+      </div>
       <p class="muted">"Find other retailers" asks an LLM's own knowledge - fast, but no
         live browsing. "Search the web" runs a real search via opti's Firecrawl instance,
         so it finds retailers current as of right now, but only checks every 2 minutes.</p>
