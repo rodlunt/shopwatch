@@ -1651,6 +1651,47 @@ for (const root of document.querySelectorAll('[data-axis]')) setupAxis(root);
   if (plot) new ResizeObserver(() => callout?.classList.remove('is-visible')).observe(plot);
 })();
 
+/* Product page: hovering a retailer row highlights that row's own axis point, using
+ * the --close fallback colour .axis-point.is-linked-hover already carries for this
+ * exact case - one product's own points, not several models to tell apart, so none
+ * of the group page's candidate-color/callout machinery is needed here. Only present
+ * on the product page, so guarded the same way wireGroupHoverLinks guards itself.
+ * A clustered point's label only comes back into view when it was hidden by
+ * clustering in the first place - an already-visible point's own label is left
+ * alone rather than hidden with nothing to replace it. */
+(function wireListingHoverLinks() {
+  const rows = document.querySelectorAll('[data-listing-row]');
+  const points = document.querySelectorAll('[data-point][data-listing-id]');
+  if (!rows.length || !points.length) return;
+
+  const pointFor = id => document.querySelector(`[data-point][data-listing-id="${id}"]`);
+  const rowFor = id => document.querySelector(`[data-listing-row="${id}"]`);
+
+  function show(id) {
+    const point = pointFor(id);
+    if (!point) return;
+    point.classList.add('is-linked-hover');
+    if (point.classList.contains('is-clustered')) point.classList.add('is-hover-revealed');
+    rowFor(id)?.classList.add('is-linked-hover');
+  }
+
+  function hide(id) {
+    pointFor(id)?.classList.remove('is-linked-hover', 'is-hover-revealed');
+    rowFor(id)?.classList.remove('is-linked-hover');
+  }
+
+  for (const row of rows) {
+    const id = row.dataset.listingRow;
+    row.addEventListener('mouseenter', () => show(id));
+    row.addEventListener('mouseleave', () => hide(id));
+  }
+  for (const point of points) {
+    const id = point.dataset.listingId;
+    point.addEventListener('mouseenter', () => show(id));
+    point.addEventListener('mouseleave', () => hide(id));
+  }
+})();
+
 wire('btn-join-group', async () => {
   const select = document.getElementById('jg-existing');
   const none = document.createElement('option');
