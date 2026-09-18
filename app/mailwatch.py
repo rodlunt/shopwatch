@@ -24,6 +24,7 @@ import mailbox
 import os
 import re
 import sys
+import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -650,6 +651,82 @@ def run(paths: list[Path] | None = None, since: str | None = None,
     return summary
 
 
+#: Where a render fault is announced. EMPTY BY DEFAULT, so a dev run, a test, or
+#: anyone driving this by hand never publishes anything. Only the unattended
+#: runner sets it.
+FAULT_NTFY_URL = os.environ.get("SHOPWATCH_FAULT_NTFY_URL", "")
+FAULT_NTFY_TOKEN_FILE = os.environ.get(
+    "SHOPWATCH_FAULT_NTFY_TOKEN_FILE", "/root/.ntfy_pub_token"
+)
+
+
+def notify_render_failures(d: dict, url: str | None = None,
+                           token_file: str | None = None) -> str | None:
+    """Tell Rodney the renders are failing. Returns a PROBLEM string, or None on success.
+
+    Renders fail silently by their nature: the text pass still produces an answer,
+    the message is still recorded, and the run still exits 0. The only trace was
+    the gap between "rendered N" and "the artwork added something in M", written
+    to a journal nobody reads. On 2026-09-18 that hid a timeout which left a
+    headless Chrome running on opti with network access for ten minutes.
+
+    Returns rather than raises, and never throws, because this runs at the end of
+    a successful run and must not destroy the work that run just did. The caller
+    decides how loud to be, which is the one thing this must not get to choose:
+    an alarm that can quietly decide not to ring is the failure it exists to catch.
+    """
+    errors = d.get("render_errors") or []
+    if not errors:
+        return None
+
+    url = url if url is not None else FAULT_NTFY_URL
+    if not url:
+        # Not configured is not an error: interactive and test runs land here.
+        return None
+
+    path = token_file if token_file is not None else FAULT_NTFY_TOKEN_FILE
+    try:
+        token = Path(path).read_text().strip()
+    except OSError as exc:
+        # Unauthenticated publish is rejected 403, so a missing token means the
+        # alert WILL NOT arrive. Say which file, because the usual cause is the
+        # job no longer running as root.
+        return f"cannot read the ntfy token at {path}: {exc}"
+
+    body = "\n".join(f"- {e}" for e in errors[:5])
+    if len(errors) > 5:
+        body += f"\n- ... and {len(errors) - 5} more"
+    body += (
+        f"\n\n{len(errors)} of {d.get('rendered', 0)} render(s) failed, so those offers "
+        "were read from the email text only and anything drawn into the artwork was "
+        "missed. Check for a leftover container: docker ps --filter "
+        "ancestor=zenika/alpine-chrome:latest"
+    )
+
+    request = urllib.request.Request(
+        url,
+        data=body.encode("utf-8"),
+        headers={
+            "Title": f"shopwatch: {len(errors)} email render(s) failed",
+            "Priority": "default",
+            "Tags": "framed_picture",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            code = response.getcode()
+    except Exception as exc:  # noqa: BLE001 - any failure here means no alert arrived
+        return f"ntfy publish to {url} failed: {type(exc).__name__}: {exc}"
+
+    # A 200 means ntfy ACCEPTED it, not that a phone showed it. That distinction has
+    # bitten before, so this claims only what it actually checked.
+    if code != 200:
+        return f"ntfy publish to {url} returned HTTP {code}, so the alert was not accepted"
+    return None
+
+
 def render_failure_lines(d: dict) -> list[str]:
     """Lines naming the renders that FAILED, for stderr. Empty when none did.
 
@@ -773,7 +850,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if source is not None:
         source.close()
-    return 1 if summary.errors and not summary.recorded else 0
+
+    # Announce a failed render, and be loud if the announcement itself fails.
+    # Rule: the alarm's own failure must not be quieter than the thing it watches.
+    # A render fault otherwise leaves no trace a human ever sees: the run exits 0,
+    # the offer is still recorded, and the only evidence is a line in a journal
+    # nobody reads.
+    exit_code = 1 if summary.errors and not summary.recorded else 0
+    problem = notify_render_failures(summary.as_dict())
+    if problem is not None:
+        print(f"  COULD NOT ALERT: {problem}", file=sys.stderr)
+        print("  Render failures happened and nobody was told. Fix the notifier.",
+              file=sys.stderr)
+        # Non-zero so systemd sees it. STATED GAP: shopwatch-mailwatch.service
+        # carries no OnFailure=ntfy-fail@%n.service, unlike most units on opti, so
+        # today this exit code reaches the journal and stops there. Adding that
+        # line to the unit is what makes this reachable.
+        exit_code = exit_code or 1
+    return exit_code
 
 
 if __name__ == "__main__":
