@@ -1,0 +1,15 @@
+[Unit]
+Description=Read retailer email for offers, once a day
+
+[Timer]
+# 383 retailer emails over 163 days land overwhelmingly in the morning: 70% between
+# 07:00 and 09:59 Brisbane, with 202 of them at 08:00 exactly. Nothing at all arrives
+# between 21:00 and 06:00. Running at 10:00 puts the whole morning batch through
+# within three hours of arrival; the afternoon stragglers wait for tomorrow, which is
+# fine because the offers they carry run for days.
+OnCalendar=*-*-* 10:00:00
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

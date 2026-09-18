@@ -1,10 +1,10 @@
 [Unit]
-Description=Claim and process one queued shopwatch research job, if any
+Description=Read retailer email for offers worth acting on
 After=network-online.target docker.service
 # Without this a crashed runner tells nobody: there is no MAILTO on opti's
 # crontab and the journal is not read. Most units here already carry it.
 OnFailure=ntfy-fail@%n.service
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/shopwatch-research-runner.sh
+ExecStart=/usr/local/bin/shopwatch-mailwatch.sh
 TimeoutStartSec=1800
