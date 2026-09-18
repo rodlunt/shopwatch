@@ -650,6 +650,30 @@ def run(paths: list[Path] | None = None, since: str | None = None,
     return summary
 
 
+def render_failure_lines(d: dict) -> list[str]:
+    """Lines naming the renders that FAILED, for stderr. Empty when none did.
+
+    render_errors was collected into the summary and then never printed anywhere,
+    so a render that TIMED OUT read exactly like one where the artwork simply did
+    not help: both showed up only as the gap between "rendered N" and "the artwork
+    added something in M".
+
+    On 2026-09-18 that hid a 120s timeout which left a headless Chrome running on
+    opti with network access and its bind-mount already deleted. egress-watch
+    found it. This log said "errors 0".
+
+    Separate from the `errors` list on purpose, because a failed render genuinely
+    is not a failed extraction: the text pass still produced an answer and the
+    message is still recorded. It is not an error, and it is not nothing, so it
+    gets said out loud rather than being inferred from a subtraction.
+    """
+    errors = d.get("render_errors") or []
+    lines = [f"  RENDER FAILED {err}" for err in errors[:3]]
+    if len(errors) > 3:
+        lines.append(f"  ... and {len(errors) - 3} more render failure(s)")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.mailwatch")
     parser.add_argument("--dry-run", action="store_true",
@@ -738,6 +762,8 @@ def main(argv: list[str] | None = None) -> int:
         if d["rendered"]:
             print(f"  rendered {d['rendered']} email(s); the artwork added something in "
                   f"{d['render_helped']}")
+            for line in render_failure_lines(d):
+                print(line, file=sys.stderr)
         if d["cleanup"]:
             c = d["cleanup"]
             print(f"\n  moved {c['moved']} processed message(s) to Trash"

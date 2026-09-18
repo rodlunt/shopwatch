@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 log = logging.getLogger("shopwatch.render")
@@ -44,6 +45,40 @@ def available() -> bool:
     return shutil.which("docker") is not None
 
 
+def _force_remove(name: str) -> None:
+    """Kill and remove the render container, if it is still there.
+
+    THE TIMEOUT DOES NOT STOP THE CONTAINER. `subprocess.run(timeout=...)` kills
+    the `docker run` CLIENT, which is only talking to the daemon over a socket.
+    The container carries on, and `--rm` never fires because `--rm` runs when the
+    container EXITS. So a marketing email whose hero images hang left a headless
+    Chrome running with network access, permanently, with its bind-mount source
+    already deleted by the cleanup below.
+
+    Seen on opti 2026-09-18: the daily mailwatch run reported "errors 0" and left
+    `intelligent_grothendieck` running for ten minutes and counting, still holding
+    the outbound connection that tripped egress-watch. That alert is what surfaced
+    it; nothing in shopwatch noticed.
+
+    Normally there is nothing to remove, because the happy path exited and `--rm`
+    already cleaned up. "No such container" is therefore the EXPECTED answer here
+    and is not worth a line in the log, which is why the output is discarded
+    rather than swallowed blindly: the failure this could hide (a container that
+    will not die) shows up as a second render failing, and as a container Docker
+    refuses to start under a name already in use.
+    """
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", name],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        # Deliberately not fatal: we are already on a failure path and raising
+        # here would replace the render error with a cleanup error, losing the
+        # reason the render failed in the first place.
+        log.warning("could not remove render container %s: %s", name, exc)
+
+
 def render_html(html: str, timeout: int = 120) -> Path:
     """Render HTML to a PNG and return its path. The caller owns the file.
 
@@ -55,12 +90,16 @@ def render_html(html: str, timeout: int = 120) -> Path:
         raise RenderError("docker is not available on this machine")
 
     workdir = Path(tempfile.mkdtemp(prefix="shopwatch-render-"))
+    # Named, because the container has to be killable by something other than the
+    # `docker run` process. Without a name, Docker invents one and the only handle
+    # on a container we have lost track of is a guess.
+    name = f"shopwatch-render-{uuid.uuid4().hex[:12]}"
     try:
         os.chmod(workdir, 0o777)
         (workdir / "email.html").write_text(html, encoding="utf-8", errors="replace")
         result = subprocess.run(
             [
-                "docker", "run", "--rm",
+                "docker", "run", "--rm", "--name", name,
                 "-v", f"{workdir}:/data",
                 CHROME_IMAGE,
                 "--no-sandbox", "--headless", "--disable-gpu", "--hide-scrollbars",
@@ -71,9 +110,11 @@ def render_html(html: str, timeout: int = 120) -> Path:
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
+        _force_remove(name)
         shutil.rmtree(workdir, ignore_errors=True)
         raise RenderError(f"chrome timed out after {timeout}s") from exc
     except Exception as exc:
+        _force_remove(name)
         shutil.rmtree(workdir, ignore_errors=True)
         raise RenderError(f"{type(exc).__name__}: {exc}") from exc
 
