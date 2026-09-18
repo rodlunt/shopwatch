@@ -177,3 +177,109 @@ def test_many_failures_are_summarised_not_dumped():
     lines = render_failure_lines({"render_errors": [f"err {i}" for i in range(9)]})
     assert len(lines) == 4, f"expected 3 lines plus a tail, got {len(lines)}"
     assert "6 more render failure(s)" in lines[-1]
+
+
+# --- A failed render has to reach a human ----------------------------------
+#
+# Renders fail silently by nature: the text pass still answers, the offer is
+# still recorded, the run still exits 0. Before this, the only trace was a line
+# in a journal nobody reads, which is how a timeout that orphaned a container on
+# opti went unnoticed until egress-watch shouted.
+
+import urllib.error  # noqa: E402
+
+from app import mailwatch  # noqa: E402
+
+
+@pytest.fixture
+def token(tmp_path):
+    f = tmp_path / "ntfy_token"
+    f.write_text("tok-abc123\n")
+    return f
+
+
+class FakeUrlopen:
+    def __init__(self, code=200, raises=None):
+        self.code, self.raises, self.requests = code, raises, []
+
+    def __call__(self, request, timeout=None):
+        self.requests.append(request)
+        if self.raises:
+            raise self.raises
+        code = self.code
+
+        class R:
+            def getcode(self): return code
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return R()
+
+
+def test_render_failure_is_published(monkeypatch, token):
+    fake = FakeUrlopen()
+    monkeypatch.setattr(mailwatch.urllib.request, "urlopen", fake)
+    problem = mailwatch.notify_render_failures(
+        {"render_errors": ["chrome timed out after 120s"], "rendered": 2},
+        url="https://ntfy.example/server-alerts", token_file=str(token),
+    )
+    assert problem is None, f"reported a problem on a good publish: {problem}"
+    assert len(fake.requests) == 1, "nothing was published"
+    req = fake.requests[0]
+    assert req.headers["Authorization"] == "Bearer tok-abc123"
+    assert "shopwatch" in req.headers["Title"].lower()
+    body = req.data.decode()
+    assert "timed out" in body, "the alert does not say what went wrong"
+    assert "alpine-chrome" in body, "the alert does not say how to check for an orphan"
+
+
+def test_clean_run_publishes_nothing(monkeypatch, token):
+    """CONTROL. An alarm that fires on every run teaches you to ignore it, and
+    would make the test above pass against a function that always publishes."""
+    fake = FakeUrlopen()
+    monkeypatch.setattr(mailwatch.urllib.request, "urlopen", fake)
+    assert mailwatch.notify_render_failures(
+        {"render_errors": [], "rendered": 2},
+        url="https://ntfy.example/server-alerts", token_file=str(token)) is None
+    assert fake.requests == [], "published an alert for a run with no failures"
+
+
+def test_unconfigured_publishes_nothing(monkeypatch, token):
+    """Interactive and test runs must never publish."""
+    fake = FakeUrlopen()
+    monkeypatch.setattr(mailwatch.urllib.request, "urlopen", fake)
+    assert mailwatch.notify_render_failures(
+        {"render_errors": ["boom"], "rendered": 1}, url="", token_file=str(token)) is None
+    assert fake.requests == []
+
+
+def test_missing_token_is_reported_not_swallowed(monkeypatch, tmp_path):
+    """Unauthenticated publish is rejected 403, so a missing token means the alert
+    never arrives. That must not read as 'alerted'."""
+    fake = FakeUrlopen()
+    monkeypatch.setattr(mailwatch.urllib.request, "urlopen", fake)
+    problem = mailwatch.notify_render_failures(
+        {"render_errors": ["boom"], "rendered": 1},
+        url="https://ntfy.example/server-alerts",
+        token_file=str(tmp_path / "does-not-exist"),
+    )
+    assert problem and "token" in problem, f"a missing token was not reported: {problem!r}"
+    assert fake.requests == [], "tried to publish with no token"
+
+
+def test_transport_failure_is_reported(monkeypatch, token):
+    monkeypatch.setattr(mailwatch.urllib.request, "urlopen",
+                        FakeUrlopen(raises=urllib.error.URLError("no route to host")))
+    problem = mailwatch.notify_render_failures(
+        {"render_errors": ["boom"], "rendered": 1},
+        url="https://ntfy.example/server-alerts", token_file=str(token))
+    assert problem and "failed" in problem, f"a dead notifier reported success: {problem!r}"
+
+
+def test_non_200_is_not_treated_as_delivered(monkeypatch, token):
+    """A 200 means ntfy ACCEPTED it, not that a phone showed it. Anything else
+    means it was not even accepted, and must not read as success."""
+    monkeypatch.setattr(mailwatch.urllib.request, "urlopen", FakeUrlopen(code=403))
+    problem = mailwatch.notify_render_failures(
+        {"render_errors": ["boom"], "rendered": 1},
+        url="https://ntfy.example/server-alerts", token_file=str(token))
+    assert problem and "403" in problem, f"HTTP 403 read as delivered: {problem!r}"
