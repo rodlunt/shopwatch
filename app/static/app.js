@@ -2090,6 +2090,16 @@ wire('eg-save', async () => {
   } catch (err) { toast(`Could not save group: ${err.message}`, 'bad'); }
 });
 
+wire('btn-delete-group', async event => {
+  if (!confirm('Delete this group? Its candidates are not deleted - they just stop being compared together and return to the board on their own.')) return;
+  const groupId = Number(event.currentTarget.dataset.group);
+  try {
+    await api(`/api/groups/${groupId}`, { method: 'DELETE' });
+    toast('Group deleted.', 'good');
+    location.href = '/';
+  } catch (err) { toast(`Could not delete group: ${err.message}`, 'bad'); }
+});
+
 wire('btn-add-candidate', async () => {
   const select = document.getElementById('cd-existing');
   const none = document.createElement('option');
