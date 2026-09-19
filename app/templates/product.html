@@ -80,8 +80,8 @@
 {% if product.notes or product.fit_notes %}
 <div class="panel">
   <h3>Why this one</h3>
-  {% if product.fit_notes %}<p style="margin:0 0 8px;max-width:70ch">{{ product.fit_notes }}</p>{% endif %}
-  {% if product.notes %}<p class="muted small" style="margin:0;max-width:70ch">{{ product.notes }}</p>{% endif %}
+  {% if product.fit_notes %}<p style="margin:0 0 8px">{{ product.fit_notes }}</p>{% endif %}
+  {% if product.notes %}<p class="muted small" style="margin:0">{{ product.notes }}</p>{% endif %}
 </div>
 {% endif %}
 
