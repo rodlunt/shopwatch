@@ -275,7 +275,14 @@ footer.site .build { font-family: var(--mono); }
 
 /* --- what each stretch of the axis means --------------------------------- */
 
-.axis-bands { position: absolute; inset: 0 0 auto; top: 34px; height: 34px; }
+/* --band-shift (default 0px): pushed down by JS (layoutThresholdLabels in app.js)
+ * only when two or more threshold labels above need a second lane to avoid
+ * colliding - there is no spare room between a threshold label's own default
+ * top:2px and this band strip's top:34px for a stacked label to fit without it.
+ * Shared with .axis-line and .axis-point below so everything under the bands
+ * moves down together; .axis-plot's own height grows by the same amount so the
+ * contenders below the line keep their usual room rather than being squeezed. */
+.axis-bands { position: absolute; inset: 0 0 auto; top: calc(34px + var(--band-shift, 0px)); height: 34px; }
 .axis-band {
   position: absolute; top: 0; height: 100%;
   border-left: 1px solid var(--rule);
@@ -312,13 +319,13 @@ footer.site .build { font-family: var(--mono); }
 /* --- the line itself ------------------------------------------------------ */
 
 .axis-line {
-  position: absolute; left: 0; right: 0; top: 68px;
+  position: absolute; left: 0; right: 0; top: calc(68px + var(--band-shift, 0px));
   height: 2px; background: var(--rule); border-radius: 2px;
 }
 
 /* --- contenders, below the line ------------------------------------------ */
 
-.axis-point { position: absolute; top: 68px; transform: translateX(-50%); }
+.axis-point { position: absolute; top: calc(68px + var(--band-shift, 0px)); transform: translateX(-50%); }
 /* --retailer-color (issue #100): a stable per-retailer hue, set inline by
  * store.retailer_color() and shared with .retailer-swatch below so a dot here and
  * its row in the listing list read as the same retailer without hovering or reading

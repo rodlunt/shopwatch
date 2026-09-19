@@ -1654,6 +1654,11 @@ function setupAxis(root) {
   const controls = root.querySelector('[data-axis-controls]');
   if (!plot) return;
 
+  // Captured before layoutThresholdLabels() ever grows the plot's own inline height
+  // to make room for a stacked threshold lane, so growing it is always relative to
+  // the real base rather than compounding on a previous draw()'s already-grown value.
+  const basePlotHeight = plot.clientHeight;
+
   const full = { lo: Number(root.dataset.lo), hi: Number(root.dataset.hi) };
   if (!isFinite(full.lo) || !isFinite(full.hi) || full.hi <= full.lo) return;
 
@@ -1708,6 +1713,16 @@ function setupAxis(root) {
       laneEnds[lane] = item.centre + half;
       item.el.style.top = (2 + lane * LANE_HEIGHT) + 'px';
     }
+
+    // Only lane 0 (top:2px) fits above the bands strip's default top:34px - a second
+    // lane needs the bands/line/contenders pushed down by the same amount (see
+    // --band-shift in style.css) or it would either overlap the bands strip or get
+    // clipped by .axis-plot's own overflow:hidden. Always set both explicitly (not
+    // only when non-zero) so a product that stops colliding after a zoom/pan
+    // shrinks back to its normal size rather than staying grown from an earlier draw().
+    const extraLanes = Math.max(0, laneEnds.length - 1);
+    plot.style.setProperty('--band-shift', (extraLanes * LANE_HEIGHT) + 'px');
+    plot.style.height = (basePlotHeight + extraLanes * LANE_HEIGHT) + 'px';
   }
 
   function clusterAndLabel() {
