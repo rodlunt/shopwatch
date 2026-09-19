@@ -18,6 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 
 from . import (
     __version__,
@@ -163,8 +164,46 @@ def _safe_url(value: Any) -> str | None:
     return value if scheme in ("http", "https") else None
 
 
+#: deploy/research-runner.py's _format_reason writes "- " prefixed lines when the
+#: model returned reason_points (issue: "the notes should be split into dot points").
+#: Rendered here as a real <ul>, in original line order (a non-bullet line - e.g. the
+#: "AI-estimated..." meta line app.js's "Use this" handler prepends - can sit before or
+#: after a run of bullets, so grouping by type rather than walking in order would
+#: silently reorder content). Old single-paragraph notes (pre-bullet-points prompt, or
+#: typed by hand in Edit) have no "- " lines at all and render exactly as before: one
+#: plain paragraph. The source text can be LLM-relayed web content, i.e. untrusted, so
+#: every line is escaped explicitly - autoescape alone does not apply once a filter
+#: returns Markup, the same reason _safe_url exists for url/homepage fields above.
+def _notes_html(value: Any) -> Markup:
+    if not value or not isinstance(value, str):
+        return Markup("")
+    lines = [line.strip() for line in value.split("\n") if line.strip()]
+    if not lines:
+        return Markup("")
+    if sum(1 for line in lines if line.startswith("- ")) < 2:
+        return Markup(f'<p style="margin:0">{escape(" ".join(lines))}</p>')
+
+    parts: list[str] = []
+    open_list = False
+    for line in lines:
+        if line.startswith("- "):
+            if not open_list:
+                parts.append('<ul style="margin:0 0 6px;padding-left:20px">')
+                open_list = True
+            parts.append(f"<li>{escape(line[2:].strip())}</li>")
+        else:
+            if open_list:
+                parts.append("</ul>")
+                open_list = False
+            parts.append(f'<p style="margin:0 0 6px">{escape(line)}</p>')
+    if open_list:
+        parts.append("</ul>")
+    return Markup("".join(parts))
+
+
 templates.env.filters["money"] = _money
 templates.env.filters["dt"] = _short_time
+templates.env.filters["notes_html"] = _notes_html
 templates.env.filters["shortdate"] = _short_date
 templates.env.filters["safe_url"] = _safe_url
 

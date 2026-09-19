@@ -54,6 +54,23 @@ def test_historical_low_date_and_retailer_show_on_the_product_page(client):
     assert "OzBargain deal history shows a one-off low via eBay." in body
 
 
+def test_bullet_formatted_historical_low_notes_render_as_a_real_list(client):
+    """End-to-end: the product page actually renders "- " prefixed notes (the shape
+    deploy/research-runner.py's _format_reason now writes) as a <ul>, not raw dashes."""
+    product = q930h(client)
+    client.patch(
+        f"/api/products/{product['id']}",
+        json={
+            "lowest_known_price": 69.30,
+            "lowest_known_notes": "- First point, from OzBargain\n- Second point, checked through Aug 2026",
+        },
+    )
+
+    body = client.get(f"/products/{product['id']}").text
+    assert "<li>First point, from OzBargain</li>" in body
+    assert "<li>Second point, checked through Aug 2026</li>" in body
+
+
 def test_no_historical_low_caption_without_a_lowest_known_price(client):
     """The seeded soundbar has a manually-curated historical_low_price ($800, a
     classification threshold) but no lowest_known_price (the actual tracked-lowest
@@ -1061,3 +1078,69 @@ def test_a_groups_notes_are_indented_like_the_rest_of_the_card(client):
     body = client.get(f"/groups/{group['group_id']}").text
     assert 'style="margin:0 20px 12px"' in body
     assert "Whichever hits $700 first." in body
+
+
+# -------------------------------------------------------------------------- notes_html
+
+
+def test_notes_html_renders_two_or_more_bullet_lines_as_a_real_list():
+    """deploy/research-runner.py's _format_reason writes "- " prefixed lines when the
+    model returned reason_points - rendered here as a genuine <ul>, not the literal
+    dashes (issue: "the notes should be split into dot points")."""
+    from app.main import _notes_html
+
+    text = "- First fact, from OzBargain\n- Second fact, checked through Aug 2026"
+    html = str(_notes_html(text))
+    assert html == (
+        '<ul style="margin:0 0 6px;padding-left:20px">'
+        "<li>First fact, from OzBargain</li>"
+        "<li>Second fact, checked through Aug 2026</li>"
+        "</ul>"
+    )
+
+
+def test_notes_html_preserves_order_of_mixed_bullet_and_plain_lines():
+    """A non-bullet line (e.g. app.js's "Use this" meta line) can sit before or after
+    a run of bullets - order must survive, not get regrouped by type."""
+    from app.main import _notes_html
+
+    text = "AI-estimated historical low, unconfirmed (medium confidence).\n- Point one\n- Point two"
+    html = str(_notes_html(text))
+    assert html.startswith('<p style="margin:0 0 6px">AI-estimated')
+    assert html.index("<p") < html.index("<ul")
+    assert html.index("Point one") < html.index("Point two")
+
+
+def test_notes_html_renders_a_single_bullet_line_as_plain_text_not_a_one_item_list():
+    """Fewer than 2 bullet lines is not really "bulleted content" - could be a stray
+    hand-typed note starting with a dash. Falls back to a plain paragraph."""
+    from app.main import _notes_html
+
+    html = str(_notes_html("- just one line"))
+    assert "<ul" not in html
+    assert "- just one line" in html
+
+
+def test_notes_html_renders_old_single_paragraph_notes_exactly_as_before():
+    from app.main import _notes_html
+
+    html = str(_notes_html("AI-estimated historical low, unconfirmed. Check before saving."))
+    assert html == '<p style="margin:0">AI-estimated historical low, unconfirmed. Check before saving.</p>'
+
+
+def test_notes_html_escapes_untrusted_content():
+    """The source text can be LLM-relayed web content - never trust it as markup,
+    the same discipline _safe_url already applies to url/homepage fields."""
+    from app.main import _notes_html
+
+    html = str(_notes_html("- <script>alert(1)</script>\n- second point"))
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_notes_html_handles_empty_input():
+    from app.main import _notes_html
+
+    assert str(_notes_html(None)) == ""
+    assert str(_notes_html("")) == ""
+    assert str(_notes_html("   \n  ")) == ""
