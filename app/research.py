@@ -27,6 +27,7 @@ import sqlite3
 from typing import Any
 from urllib.parse import urlparse
 
+from . import store
 from .db import utcnow
 
 #: Best-effort cap on how many "other retailers noticed" candidates a historical-low
@@ -266,7 +267,20 @@ def _safe_http_url(url: str | None) -> str | None:
     return url if scheme in ("http", "https") else None
 
 
-def _clean_other_retailers(other_retailers: list[Any] | None) -> str | None:
+def _is_excluded_retailer_name(conn: sqlite3.Connection, name: str) -> bool:
+    """Same case-insensitive name/slug matching store.ensure_retailer already uses,
+    without creating anything - a research candidate is not yet a real retailer, and
+    checking exclusion must not be the thing that first brings it into existence."""
+    row = conn.execute(
+        "SELECT excluded FROM retailers WHERE lower(name) = lower(?) OR slug = ?",
+        (name, store.slugify(name)),
+    ).fetchone()
+    return bool(row and row["excluded"])
+
+
+def _clean_other_retailers(
+    conn: sqlite3.Connection, other_retailers: list[Any] | None
+) -> str | None:
     """Best-effort coercion of "other retailers noticed along the way" (issue #98)
     into a JSON string, same storage convention retailer_search_jobs.result and
     llm_jobs.result already use. An item with no usable name is dropped rather than
@@ -274,6 +288,13 @@ def _clean_other_retailers(other_retailers: list[Any] | None) -> str | None:
     information, not something worth failing the whole report over. Capped at
     MAX_OTHER_RETAILERS in case a future prompt/model version returns more than the
     product page should ever render as a one-shot checkbox list.
+
+    Issue #112: a candidate matching an excluded retailer's name is dropped here too,
+    right next to the existing http(s)-only URL allowlist below - this is the actual
+    enforcement boundary (the one that writes to the database and re-exposes the
+    value through the API), so it re-checks rather than trusting the runner's own
+    prompt-level instruction (deploy/research-runner.py) to have kept the model from
+    finding it in the first place.
     """
     if not other_retailers:
         return None
@@ -283,7 +304,7 @@ def _clean_other_retailers(other_retailers: list[Any] | None) -> str | None:
             continue
         name = item.get("name")
         name = name.strip() if isinstance(name, str) else ""
-        if not name:
+        if not name or _is_excluded_retailer_name(conn, name):
             continue
         url = item.get("url")
         url = url.strip() if isinstance(url, str) and url.strip() else None
@@ -326,7 +347,7 @@ def report_historical_low(
         " historical_low_retailer = ?, historical_low_notes = ?,"
         " historical_low_confidence = ?, historical_low_other_retailers = ? WHERE id = ?",
         (price, date, retailer, notes, confidence,
-         _clean_other_retailers(other_retailers), job_id),
+         _clean_other_retailers(conn, other_retailers), job_id),
     )
 
 

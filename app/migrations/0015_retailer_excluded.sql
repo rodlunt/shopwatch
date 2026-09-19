@@ -1,0 +1,19 @@
+-- 0015: let a retailer be excluded everywhere (issue #112).
+--
+-- Real case: a research pass surfaced a retailer that is not relevant to this
+-- user's actual buying options, with no way to say "never suggest this retailer
+-- to me again" anywhere it could enter the system: the wizard's retailer picker,
+-- the historical-low research's "other retailers found" candidates, or the LLM's
+-- own web search.
+--
+-- A single retailer-level flag, defaulting to 0 (not excluded) so every existing
+-- retailer is unaffected until someone deliberately excludes one. Enforced in
+-- app/main.py (a new PATCH endpoint to set it, and a refusal on both listing-add
+-- paths when the resolved retailer is already excluded), app/store.py (cascading
+-- deactivation of that retailer's listings when it is newly excluded - see
+-- store.set_retailer_excluded), app/research.py (dropped from historical-low
+-- "other retailers" candidates before they are ever stored), and
+-- deploy/research-runner.py (named directly in the historical-low search prompt,
+-- so the model is told not to bother rather than only having its find discarded
+-- after the fact).
+ALTER TABLE retailers ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0;

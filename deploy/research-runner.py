@@ -120,7 +120,7 @@ category - only report a price you can point to a source for.
 
 Product: {product_name}
 Exact model: {model}
-
+{excluded_section}
 Find the lowest confirmed price you can for this exact model, at any legitimate
 Australian retailer, at any point in time (including now, if today's price happens to
 be the lowest ever seen). If you cannot find a specific historical price you are
@@ -399,14 +399,36 @@ def research_one_retailer(
     return parse_research_reply(proc.stdout)
 
 
+def _excluded_retailers_section(excluded_names: list[str] | None) -> str:
+    """The optional block HISTORICAL_LOW_PROMPT gets when the caller passes on the
+    current excluded-retailer list (issue #112, item 8). Telling the model directly
+    not to bother with these matters more than only filtering them out afterwards
+    (research.py's _clean_other_retailers, which still runs too, as the backstop for
+    whatever this instruction fails to catch) - the whole point is the model should
+    not spend search effort finding them in the first place."""
+    names = [n.strip() for n in (excluded_names or []) if n and n.strip()]
+    if not names:
+        return ""
+    joined = ", ".join(names)
+    return (
+        "\nThese retailers are excluded from this search - do not report a price from "
+        "any of them as the historical low, and do not list them in other_retailers, "
+        f"even if you notice them selling this product: {joined}\n"
+    )
+
+
 def research_historical_low(
     base_url: str, claude_bin: str, product_name: str, model: str,
+    excluded_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """Ask the headless CLI for the product's historical low. One call, whole product -
     see HISTORICAL_LOW_PROMPT. Returns a parsed finding (which may honestly be "not
     found") or raises RunnerError for a subprocess-level failure (crash, timeout,
     missing binary, non-zero exit)."""
-    prompt = HISTORICAL_LOW_PROMPT.format(product_name=product_name, model=model)
+    prompt = HISTORICAL_LOW_PROMPT.format(
+        product_name=product_name, model=model,
+        excluded_section=_excluded_retailers_section(excluded_names),
+    )
     try:
         proc = subprocess.run(
             [claude_bin, "-p", "--allowedTools", "WebSearch,WebFetch"],
@@ -432,10 +454,30 @@ def research_historical_low(
 def process_historical_low_job(base_url: str, claude_bin: str, job: dict[str, Any]) -> None:
     """issue #93: a single whole-product pass, not a loop over retailers. The finding
     (or the honest lack of one) is recorded via /historical-low - never /import, and
-    never anything that could move products.lowest_known_price on its own."""
+    never anything that could move products.lowest_known_price on its own.
+
+    issue #112 (item 8): fetches the current excluded-retailer list via the same
+    GET /api/retailers the wizard's own picker reads, and passes the excluded names
+    straight into the prompt, so the model is told not to bother rather than only
+    having its find discarded after the fact. A failure to fetch the list here must
+    not silently mean "nothing is excluded" - it is treated the same as a genuine
+    RunnerError (FAILED, not a quiet un-excluded search) rather than let through.
+    """
     product = requests.get(f"{base_url}/api/products/{job['product_id']}", timeout=30).json()
     try:
-        found = research_historical_low(base_url, claude_bin, product["name"], product["model"])
+        all_retailers = requests.get(f"{base_url}/api/retailers", timeout=30).json()
+    except requests.RequestException as exc:
+        log.info("job %s historical-low: could not load excluded retailers: %s", job["id"], exc)
+        requests.post(f"{base_url}/api/research-jobs/{job['id']}/complete",
+                      json={"status": "FAILED", "error": f"could not load retailers: {exc}"[:300]},
+                      timeout=30)
+        return
+    excluded_names = [r["name"] for r in all_retailers if r.get("excluded")]
+
+    try:
+        found = research_historical_low(
+            base_url, claude_bin, product["name"], product["model"], excluded_names,
+        )
     except RunnerError as exc:
         log.info("job %s historical-low: %s (%s)", job["id"], exc.status, exc.note)
         requests.post(f"{base_url}/api/research-jobs/{job['id']}/complete",
