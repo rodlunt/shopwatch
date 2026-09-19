@@ -83,6 +83,21 @@ Thresholds are inclusive, evaluated best first, and expressed as delivered price
 An unresolved listing that is *above* target still reads `ABOVE TARGET`, because freight
 can only make it worse.
 
+**`trigger_price`/`excellent_price` auto-fill from `lowest_known_price` when unset**
+(`store.maybe_derive_price_targets`, issue #101). A product can carry a confirmed
+`lowest_known_price` - via `maybe_lower_known_low` finding a genuinely cheaper delivered
+price, or a human confirming a "Research historical low" finding - for a long time before
+anyone types in a trigger or an excellent price, and until they do it sits un-actionable:
+no listing can ever rate above `ABOVE TARGET`. Whenever `lowest_known_price` changes,
+either target still NULL gets filled from it: `excellent_price = lowest_known_price`
+(matching the record IS what "excellent" means here) and `trigger_price = lowest_known_price
+× 1.10` (loose enough to catch a genuine improving trend before the record itself breaks).
+This only ever writes into a NULL field - a value already there, typed by hand or from an
+earlier auto-fill the user has not cleared, is never touched - and a filled-in value is
+marked `*_price_auto` so the edit dialog can label it "auto" rather than showing it as a
+deliberately chosen target. Changing it by hand locks it; clearing it back to blank hands
+it back to auto-fill.
+
 ### The three states a listing can be in
 
 | State | On the board | On the axis | Can it be the answer |
