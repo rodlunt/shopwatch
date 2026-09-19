@@ -189,6 +189,35 @@ def test_csv_export_has_one_row_per_listing(seeded):
     lines = [line for line in csv_text.splitlines() if line.strip()]
     assert len(lines) == 6, "header plus the five seeded listings"
     assert "HW-Q930H/XY" in csv_text
+    assert "promo_ends" in lines[0]
+
+
+def test_csv_export_includes_a_set_promo_end_date(seeded):
+    with connect(seeded) as conn:
+        product = store.product_by_model(conn, "HW-Q930H/XY")
+        listing = store.find_listing(
+            conn, product["id"], store.ensure_retailer(conn, "Crowdshop")["id"]
+        )
+        provenance.set_field(
+            conn, listing["id"], "price_valid_until", "2026-09-21", state=provenance.MANUAL
+        )
+        conn.commit()
+        csv_text = ingest.csv_export(conn)
+    assert "2026-09-21" in csv_text
+
+
+def test_import_finding_ignores_a_promo_end_date_deliberately(seeded):
+    """Issue #97 keeps the promo end-date manual-entry only: the research-job pipeline
+    (which lands here, through import_finding/FINDING_FIELD_MAP) must not be able to
+    set it just because a finding happens to carry that key."""
+    with connect(seeded) as conn:
+        report = ingest.import_finding(
+            conn,
+            {"model": "HW-Q930H/XY", "retailer": "Crowdshop", "price": 700,
+             "price_valid_until": "2026-09-21"},
+        )
+        assert "price_valid_until" not in report["updated"]
+        assert get(conn, report["listing_id"], "price_valid_until") is None
 
 
 def test_import_stores_hostile_text_verbatim_so_the_view_layer_must_escape(seeded):

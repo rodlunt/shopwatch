@@ -331,7 +331,8 @@ def csv_export(conn: sqlite3.Connection) -> str:
     writer.writerow([
         "product", "model", "verdict", "retailer", "advertised", "freight", "freight_resolved",
         "cashback", "rebate", "coupon", "delivered", "classification", "condition", "stock",
-        "pickup", "warranty", "included_components", "manual_fields", "last_checked", "url",
+        "pickup", "warranty", "included_components", "promo_ends", "manual_fields",
+        "last_checked", "url",
     ])
     for product in store.list_products(conn):
         for listing in product["listings"]:
@@ -342,6 +343,7 @@ def csv_export(conn: sqlite3.Connection) -> str:
                 listing["coupon_discount"], listing["delivered_price"],
                 listing["classification"], listing["condition"], listing["stock_status"],
                 listing["pickup_status"], listing["warranty"], listing["included_components"],
+                listing["price_valid_until"],
                 "|".join(listing["manual_fields"]), listing["last_checked_at"], listing["url"],
             ])
     return buf.getvalue()

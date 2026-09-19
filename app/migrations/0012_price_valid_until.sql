@@ -1,0 +1,20 @@
+-- 0012: an optional, retailer-stated promo end-date on a listing (issue #97).
+--
+-- Motivating case: Centre Com's SmartTag2 4-pack listing states "This Deal ends at
+-- 10AM on Monday 21/09" directly on the page, above the price. Nothing in the schema
+-- could capture that a price is time-boxed rather than an ordinary price that just
+-- happens to be low right now - once the promo lapses, shopwatch had no way to know
+-- the recorded price was ever conditional.
+--
+-- Stored as a plain ISO date (YYYY-MM-DD), never a full timestamp: every retailer
+-- statement of this kind seen so far ("ends Monday 21/09", "ends this weekend") gives
+-- a day, not a time, and a false minute of precision is worse than none. Validated at
+-- the provenance layer (app/provenance.coerce), same as every other tracked field.
+--
+-- Added to provenance.TRACKED_FIELDS rather than given its own write path, so it gets
+-- the ordinary MANUAL/LIVE state and lock treatment for free through the existing Add
+-- retailer / Edit / PATCH endpoints. Manual-entry only for now: wiring the research-job
+-- pipeline to propose a value is a separate piece of work, deliberately out of scope
+-- here, and so is letting a lapsed date influence classification - both are still open
+-- questions the issue itself leaves for later.
+ALTER TABLE listings ADD COLUMN price_valid_until TEXT;

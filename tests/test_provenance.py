@@ -86,6 +86,29 @@ def test_untracked_field_is_rejected(conn, listing):
         provenance.set_field(conn, listing, "id", 7, state=provenance.MANUAL)
 
 
+def test_promo_end_date_is_accepted_and_locks_like_any_other_manual_field(conn, listing):
+    provenance.set_field(
+        conn, listing, "price_valid_until", "2026-09-21", state=provenance.MANUAL, source="ui"
+    )
+    prov = provenance.provenance_map(conn, listing)["price_valid_until"]
+    assert prov["state"] == provenance.MANUAL
+    assert prov["manual_locked"] == 1
+    assert value(conn, listing, "price_valid_until") == "2026-09-21"
+
+
+def test_promo_end_date_rejects_a_non_date(conn, listing):
+    with pytest.raises(provenance.FieldError):
+        provenance.set_field(
+            conn, listing, "price_valid_until", "Monday 21/09", state=provenance.MANUAL
+        )
+
+
+def test_promo_end_date_empty_string_clears_it(conn, listing):
+    provenance.set_field(conn, listing, "price_valid_until", "2026-09-21", state=provenance.MANUAL)
+    provenance.set_field(conn, listing, "price_valid_until", "", state=provenance.MANUAL)
+    assert value(conn, listing, "price_valid_until") is None
+
+
 def test_stale_marking_skips_manual_fields(conn, listing):
     provenance.set_field(conn, listing, "advertised_price", 869, state=provenance.LIVE)
     provenance.set_field(conn, listing, "freight", 55, state=provenance.MANUAL)

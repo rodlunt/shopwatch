@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from .db import utcnow
@@ -39,9 +39,14 @@ TRACKED_FIELDS = [
     "price_guide",
     "seller_notes",
     "url",
+    "price_valid_until",
 ]
 
 NUMERIC_FIELDS = {"advertised_price", "freight", "cashback", "rebate", "coupon_discount"}
+
+#: Fields holding a bare calendar date (YYYY-MM-DD), validated but not reformatted -
+#: the retailer statement they come from ("ends Monday 21/09") is a day, not a time.
+DATE_FIELDS = {"price_valid_until"}
 
 VERIFICATION_ASPECTS = [
     "model",
@@ -94,6 +99,13 @@ def coerce(field: str, value: Any) -> Any:
             return None
         if field == "condition":
             value = value.upper().replace(" ", "_").replace("-", "_")
+        if field in DATE_FIELDS:
+            try:
+                value = date.fromisoformat(value).isoformat()
+            except ValueError as exc:
+                raise FieldError(
+                    f"{field} must be a date in YYYY-MM-DD form, got {value!r}"
+                ) from exc
     return value
 
 

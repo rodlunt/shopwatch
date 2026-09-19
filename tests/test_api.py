@@ -157,6 +157,65 @@ def test_adding_a_listing_through_the_api(client):
     assert listing["provenance"]["advertised_price"]["manual_locked"] == 1
 
 
+def test_adding_a_listing_with_a_promo_end_date(client):
+    """Issue #97: an optional, manually-entered promo end-date on a listing."""
+    product = q930h(client)
+    response = client.post(
+        f"/api/products/{product['id']}/retailers",
+        json={"retailer": "Centre Com", "advertised_price": 99, "condition": "NEW",
+              "price_valid_until": "2026-09-21"},
+    )
+    assert response.status_code == 201
+    listing = response.json()
+    assert listing["price_valid_until"] == "2026-09-21"
+    assert listing["provenance"]["price_valid_until"]["manual_locked"] == 1
+    assert listing["promo_lapsed"] is False
+
+    body = client.get(f"/products/{product['id']}").text
+    assert "ends 21 Sep" in body
+
+
+def test_a_lapsed_promo_end_date_is_flagged_but_not_rejected(client):
+    product = q930h(client)
+    response = client.post(
+        f"/api/products/{product['id']}/retailers",
+        json={"retailer": "Centre Com", "advertised_price": 99, "price_valid_until": "2020-01-01"},
+    )
+    listing = response.json()
+    assert listing["promo_lapsed"] is True
+
+    body = client.get(f"/products/{product['id']}").text
+    assert "ended 1 Jan 2020" in body
+
+
+def test_a_malformed_promo_end_date_is_rejected(client):
+    product = q930h(client)
+    response = client.post(
+        f"/api/products/{product['id']}/retailers",
+        json={"retailer": "Centre Com", "price_valid_until": "next Monday"},
+    )
+    assert response.status_code == 400
+
+
+def test_promo_end_date_can_be_edited_inline_and_cleared(client):
+    product = q930h(client)
+    listing = next(listing for listing in product["listings"]
+                   if listing["retailer_name"] == "Crowdshop")
+
+    response = client.patch(
+        f"/api/retailers/{listing['id']}", json={"price_valid_until": "2026-12-25"}
+    )
+    assert response.status_code == 200
+    updated = response.json()["listing"]
+    assert updated["price_valid_until"] == "2026-12-25"
+
+    cleared = client.patch(
+        f"/api/retailers/{listing['id']}", json={"price_valid_until": ""}
+    ).json()["listing"]
+    assert cleared["price_valid_until"] is None
+    assert cleared["promo_lapsed"] is False
+
+
 def test_creating_a_product_in_another_category(client):
     response = client.post(
         "/api/products",
