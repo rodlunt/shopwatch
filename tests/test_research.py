@@ -7,6 +7,7 @@ this suite never touches (see app/research.py's module docstring).
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -335,3 +336,72 @@ def test_reporting_a_historical_low_never_touches_the_product(conn, product_id):
 
     product = store.get_product(conn, product_id)
     assert product["lowest_known_price"] is None
+
+
+# ----------------------------------------- other retailers noticed along the way (#98)
+
+
+def test_report_historical_low_stores_other_retailers_as_json(conn, product_id):
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0,
+        other_retailers=[
+            {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+            {"name": "Mwave", "url": None},
+        ],
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert json.loads(job["historical_low_other_retailers"]) == [
+        {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+        {"name": "Mwave", "url": None},
+    ]
+
+
+def test_report_historical_low_with_no_other_retailers_stores_null(conn, product_id):
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(conn, job_id, price=899.0)
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["historical_low_other_retailers"] is None
+
+
+def test_report_historical_low_drops_an_other_retailer_with_no_name(conn, product_id):
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0,
+        other_retailers=[{"name": "  ", "url": "https://x.com.au"}, "not a dict"],
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["historical_low_other_retailers"] is None
+
+
+def test_report_historical_low_neutralises_a_javascript_url_in_other_retailers(conn, product_id):
+    """Same discipline as the runner's own _clean_other_retailers: candidate.url
+    ultimately came out of an LLM's reply to a "search the web" prompt, and this
+    server-side boundary must not trust the runner to have already filtered it -
+    a non-http(s) scheme must never reach storage, since the product page renders
+    this value straight into an anchor's href."""
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0,
+        other_retailers=[{"name": "Evil Co", "url": "javascript:alert(1)"}],
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert json.loads(job["historical_low_other_retailers"]) == [
+        {"name": "Evil Co", "url": None},
+    ]

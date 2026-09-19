@@ -1,0 +1,23 @@
+-- 0013: capture retailers noticed in passing during a historical-low research pass
+-- (issue #98).
+--
+-- HISTORICAL_LOW_PROMPT (deploy/research-runner.py) already asks the model to search
+-- broadly across "any legitimate Australian retailer" for the lowest price ever seen -
+-- in the course of that search it will often notice retailers currently selling the
+-- item that shopwatch does not yet track. Previously that was thrown away entirely;
+-- only the single historical-low price/date/retailer survived onto the job row.
+--
+-- Stored as a raw JSON string, same convention as retailer_search_jobs.result and
+-- llm_jobs.result: a list of {"name": ..., "url": ...} objects, best-effort and
+-- parsed by the frontend rather than the server (app/static/app.js JSON.parses it, the
+-- same way it already does for a retailer-discovery job's result). NULL means no
+-- research has reported yet, or none were noticed - both render as "nothing to show",
+-- same as the existing historical_low_* columns' NULL meaning "no finding".
+--
+-- Never creates a retailer or a listing on its own - see app/research.py's
+-- report_historical_low and the product page's checkbox-per-candidate confirm step,
+-- which calls the existing POST /api/products/{id}/retailers and
+-- POST /api/products/{id}/retailers/from-url endpoints directly, exactly the same
+-- "Add retailer" / "paste a listing URL" (#94) paths a person would use by hand. Same
+-- "a human ticks a box" discipline the historical-low price itself already requires.
+ALTER TABLE research_jobs ADD COLUMN historical_low_other_retailers TEXT;

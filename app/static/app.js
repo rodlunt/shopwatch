@@ -1247,17 +1247,132 @@ function histLowStatusText(job) {
   return '';
 }
 
+/* http(s)-only allowlist before a candidate's URL ever goes into a real href.
+ * candidate.url ultimately came out of an LLM's reply to a "search the web" prompt -
+ * untrusted content relayed through the model, not something safe to assign straight
+ * into an anchor's href. The server (app/research.py, deploy/research-runner.py) already
+ * filters to http(s) before storing it, but that must not be the only place this is
+ * checked: the value is exposed as-is through the API, so a link is only ever built
+ * from a URL this function itself has approved. Returns null (never linkable) for
+ * anything that isn't a parseable http/https URL, including a bare `new URL()` throw. */
+function safeHttpUrl(url) {
+  try {
+    // No base argument: a relative or protocol-relative string is not a real listing
+    // URL either, so it is rejected the same as a bad scheme rather than silently
+    // resolved against this page's own origin.
+    const parsed = new URL(url);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/* issue #98: the historical-low search inevitably notices other retailers currently
+ * selling the product along the way - genuinely incidental, since HISTORICAL_LOW_PROMPT
+ * already asks it to search broadly. Parsed client-side from a raw JSON string, same
+ * convention job.result already uses elsewhere (retailer-discovery jobs). */
+function otherRetailersFound(job) {
+  if (!job || !job.historical_low_other_retailers) return [];
+  try {
+    const list = JSON.parse(job.historical_low_other_retailers);
+    return Array.isArray(list) ? list.filter(c => c && c.name) : [];
+  } catch {
+    return [];
+  }
+}
+
+/* Ticking a box only selects it - nothing is added until "Add ticked as listings" is
+ * pressed, same "human confirms" discipline as the historical-low price's own "Use
+ * this" step. Reuses the exact endpoints "Add retailer" and "paste a listing URL"
+ * (#94) already use, rather than inventing a third listing-creation path: a candidate
+ * with a URL goes through .../retailers/from-url (which also tries to scrape a price
+ * straight away), a name-only candidate through the plain .../retailers endpoint. */
+function renderOtherRetailers(job, container) {
+  const candidates = otherRetailersFound(job);
+  if (!candidates.length) return;
+
+  container.appendChild(el(
+    'p',
+    'Also noticed selling this while researching the historical low - tick any to add as a tracked listing:',
+    'meta',
+  ));
+  const list = el('div', '', 'wizard-retailer-list');
+  const ticked = [];
+  for (const candidate of candidates) {
+    const row = el('label', '', 'wizard-retailer-row');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    row.appendChild(box);
+    row.appendChild(el('span', candidate.name, 'name'));
+    const safeUrl = safeHttpUrl(candidate.url);
+    if (safeUrl) {
+      const link = document.createElement('a');
+      link.href = safeUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = 'cap';
+      link.textContent = 'listing found';
+      link.addEventListener('click', event => event.stopPropagation());
+      row.appendChild(link);
+    } else {
+      row.appendChild(el('span', candidate.url ? 'unusable URL, not linked' : 'no URL given', 'cap'));
+    }
+    list.appendChild(row);
+    ticked.push({ box, candidate });
+  }
+  container.appendChild(list);
+
+  const actions = el('div', '', 'wizard-retailer-actions');
+  const addBtn = el('button', 'Add ticked as listings', 'btn');
+  addBtn.type = 'button';
+  addBtn.addEventListener('click', async () => {
+    const chosen = ticked.filter(t => t.box.checked);
+    if (!chosen.length) { toast('Tick at least one retailer first.', 'bad'); return; }
+    addBtn.disabled = true;
+    let added = 0;
+    const failed = [];
+    for (const { candidate } of chosen) {
+      try {
+        // Same http(s)-only allowlist as the link rendering above, not just the raw
+        // value the API returned: a candidate whose URL doesn't pass falls back to
+        // the name-only path rather than forwarding an unvalidated URL onward.
+        const safeUrl = safeHttpUrl(candidate.url);
+        if (safeUrl) {
+          await api(`/api/products/${histLow.productId}/retailers/from-url`, {
+            method: 'POST', body: { url: safeUrl },
+          });
+        } else {
+          await api(`/api/products/${histLow.productId}/retailers`, {
+            method: 'POST', body: { retailer: candidate.name },
+          });
+        }
+        added += 1;
+      } catch (err) {
+        failed.push(`${candidate.name}: ${err.message}`);
+      }
+    }
+    if (added) {
+      toast(`Added ${added} retailer${added === 1 ? '' : 's'} as new listing${added === 1 ? '' : 's'}.`, 'good');
+    }
+    if (failed.length) toast(`Could not add: ${failed.join('; ')}`, 'bad');
+    if (added) location.reload(); else addBtn.disabled = false;
+  });
+  actions.appendChild(addBtn);
+  container.appendChild(actions);
+}
+
 function renderHistLowResult(job) {
   const box = document.getElementById('historical-low-result');
   box.replaceChildren();
   if (!job || job.status !== 'DONE') { box.hidden = true; return; }
+  box.hidden = false;
 
   if (job.historical_low_price === null || job.historical_low_price === undefined) {
-    box.hidden = false;
     box.append(
       el('span', 'No confident historical low found.', 'meta'),
       el('div', job.historical_low_notes || 'The research pass could not find a source it trusted.', 'reason'),
     );
+    renderOtherRetailers(job, box);
     return;
   }
 
@@ -1285,7 +1400,6 @@ function renderHistLowResult(job) {
   });
   discardBtn.addEventListener('click', () => document.getElementById('historical-low-dialog').close());
 
-  box.hidden = false;
   box.append(
     el('span', 'UNCONFIRMED ESTIMATE - not a real listing', 'tag'),
     el('div', money(job.historical_low_price), 'num'),
@@ -1293,6 +1407,7 @@ function renderHistLowResult(job) {
     el('div', job.historical_low_notes || '', 'reason'),
     (() => { const actions = el('div', '', 'actions'); actions.append(useBtn, discardBtn); return actions; })(),
   );
+  renderOtherRetailers(job, box);
 }
 
 wire('btn-research-historical-low', async event => {

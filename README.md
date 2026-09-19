@@ -565,6 +565,22 @@ and "Use this" only prefills the ordinary product-edit dialog's `lowest_known_*`
 still goes through `PATCH /api/products/{id}`, exactly like typing the numbers in by hand - a
 research pass is a source for that decision, never a shortcut around it.
 
+**A byproduct of the same search: other retailers noticed along the way.** `HISTORICAL_LOW_PROMPT`
+already asks the model to search broadly across "any legitimate Australian retailer" for the
+lowest price ever seen, so it will often incidentally notice retailers currently selling the item
+that shopwatch does not yet track. Rather than throw that away, the model is also asked for a
+best-effort `other_retailers` list (`{"name": ..., "url": ...}`), stored as a raw JSON string on
+`research_jobs.historical_low_other_retailers` - same convention `retailer_search_jobs.result` and
+`llm_jobs.result` already use, parsed client-side rather than server-side. Both the runner
+(`deploy/research-runner.py`) and the API (`app/research.py`) drop any candidate whose URL is not
+`http`/`https` before it is ever stored - a URL surfaced by an LLM's web search is untrusted
+content relayed through the model, and the product page renders it straight into a link's `href`.
+The product page shows each candidate as a checkbox next to the historical-low result; ticking one
+and pressing "Add ticked as listings" calls the exact same `POST /api/products/{id}/retailers` (no
+URL) or `POST /api/products/{id}/retailers/from-url` (URL present) endpoints "Add retailer" and
+"Paste a listing URL" already use - no separate listing-creation path, and nothing is added until
+a person ticks the box and confirms, same discipline as "Use this" above.
+
 ## Suggesting a model number ("Set up your LLM")
 
 **TL;DR - 5 minutes, no coding:**
@@ -895,7 +911,7 @@ what would fire without sending anything.
 | `GET` | `/api/research-jobs/{id}` | poll a job's status; per-retailer results for `price`, `historical_low_*` fields for `historical_low` |
 | `POST` | `/api/research-jobs/claim` | host-runner only: claims the oldest QUEUED job |
 | `POST` | `/api/research-jobs/{id}/results` | host-runner only: one retailer's outcome (`price` jobs) |
-| `POST` | `/api/research-jobs/{id}/historical-low` | host-runner only: the job's proposed finding (`historical_low` jobs) - never written to the product |
+| `POST` | `/api/research-jobs/{id}/historical-low` | host-runner only: the job's proposed finding (`historical_low` jobs), plus an optional best-effort `other_retailers` list - never written to the product, never turns into a retailer or listing itself |
 | `POST` | `/api/research-jobs/{id}/complete` | host-runner only: marks DONE or FAILED |
 | `GET` | `/api/retailers/{listing_id}` | one enriched listing |
 | `PATCH` | `/api/retailers/{listing_id}` | inline edit; **locks the field as MANUAL** |

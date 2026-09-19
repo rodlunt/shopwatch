@@ -1093,6 +1093,11 @@ def api_report_research_historical_low(job_id: int, payload: dict = Body(...)) -
     migrations/0010. This never writes to the product; the wizard/product-page UI reads
     it back and offers it as a prefill for the ordinary product-edit form, which is the
     only path that can actually change lowest_known_price and friends.
+
+    `other_retailers` (issue #98, migrations/0013) is stored the same best-effort way -
+    a list of {"name", "url"} the runner noticed while researching the price - and is
+    likewise never turned into a retailer or listing here; the product page offers each
+    one as a tickable checkbox that calls the ordinary retailer/listing endpoints below.
     """
     with session() as conn:
         if research.get_job(conn, job_id) is None:
@@ -1103,6 +1108,7 @@ def api_report_research_historical_low(job_id: int, payload: dict = Body(...)) -
                 price=payload.get("price"), date=payload.get("date"),
                 retailer=payload.get("retailer"), notes=payload.get("notes"),
                 confidence=payload.get("confidence"),
+                other_retailers=payload.get("other_retailers"),
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc

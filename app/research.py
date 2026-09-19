@@ -22,10 +22,17 @@ the ordinary product-edit form, or discard.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
+from urllib.parse import urlparse
 
 from .db import utcnow
+
+#: Best-effort cap on how many "other retailers noticed" candidates a historical-low
+#: finding can carry - matches deploy/research-runner.py's FIRECRAWL_MAX_CANDIDATES,
+#: so neither side of the pipeline can be the one that lets an unbounded list through.
+MAX_OTHER_RETAILERS = 8
 
 STATUSES = ("QUEUED", "RUNNING", "DONE", "FAILED")
 RESULT_STATUSES = ("PENDING", "FOUND", "NEEDS_MANUAL_CHECK", "BLOCKED", "TIMED_OUT")
@@ -240,6 +247,52 @@ def report_result(
     )
 
 
+def _safe_http_url(url: str | None) -> str | None:
+    """http(s)-only allowlist, same reasoning and same check deploy/research-runner.py
+    already applies before it ever reports a candidate to this endpoint: the URL
+    ultimately came out of an LLM's reply to a "search the web" prompt, so it is
+    untrusted content relayed through the model, not content safe to store or later
+    render into an href unexamined. Re-checked here rather than trusting the
+    runner's own filtering, since this is the actual boundary that writes to the
+    database and re-exposes the value through the API - the runner is a separate
+    process this code must not simply assume behaved.
+    """
+    if not url:
+        return None
+    try:
+        scheme = urlparse(url).scheme.lower()
+    except ValueError:
+        return None
+    return url if scheme in ("http", "https") else None
+
+
+def _clean_other_retailers(other_retailers: list[Any] | None) -> str | None:
+    """Best-effort coercion of "other retailers noticed along the way" (issue #98)
+    into a JSON string, same storage convention retailer_search_jobs.result and
+    llm_jobs.result already use. An item with no usable name is dropped rather than
+    raising - this rides along with the historical-low answer as incidental
+    information, not something worth failing the whole report over. Capped at
+    MAX_OTHER_RETAILERS in case a future prompt/model version returns more than the
+    product page should ever render as a one-shot checkbox list.
+    """
+    if not other_retailers:
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for item in other_retailers:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        name = name.strip() if isinstance(name, str) else ""
+        if not name:
+            continue
+        url = item.get("url")
+        url = url.strip() if isinstance(url, str) and url.strip() else None
+        cleaned.append({"name": name, "url": _safe_http_url(url)})
+        if len(cleaned) >= MAX_OTHER_RETAILERS:
+            break
+    return json.dumps(cleaned) if cleaned else None
+
+
 def report_historical_low(
     conn: sqlite3.Connection,
     job_id: int,
@@ -248,6 +301,7 @@ def report_historical_low(
     retailer: str | None = None,
     notes: str | None = None,
     confidence: str | None = None,
+    other_retailers: list[Any] | None = None,
 ) -> None:
     """Record a kind="historical_low" job's finding on the job itself.
 
@@ -257,14 +311,22 @@ def report_historical_low(
     job DONE, whether or not it actually found anything: price=None with a note is a
     legitimate, honest outcome ("could not find a confident historical low"), not an
     error.
+
+    `other_retailers` (issue #98): retailers the model noticed selling this product
+    while researching the historical low - genuinely incidental, since the prompt
+    already asks it to search broadly across "any legitimate Australian retailer".
+    Stored via _clean_other_retailers, never applied to a retailer or listing here -
+    see the product page's checkbox confirm step, which calls the ordinary
+    POST /api/products/{id}/retailers / .../retailers/from-url endpoints itself.
     """
     if confidence is not None and confidence not in CONFIDENCES:
         raise ValueError(f"confidence must be one of {CONFIDENCES}")
     conn.execute(
         "UPDATE research_jobs SET historical_low_price = ?, historical_low_date = ?,"
         " historical_low_retailer = ?, historical_low_notes = ?,"
-        " historical_low_confidence = ? WHERE id = ?",
-        (price, date, retailer, notes, confidence, job_id),
+        " historical_low_confidence = ?, historical_low_other_retailers = ? WHERE id = ?",
+        (price, date, retailer, notes, confidence,
+         _clean_other_retailers(other_retailers), job_id),
     )
 
 
