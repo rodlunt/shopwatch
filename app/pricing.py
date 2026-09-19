@@ -195,15 +195,30 @@ def threshold_scale(
     window from each item's raw value rather than from a position it would have to
     un-project first.
     """
-    marks = []
+    # Two targets landing on the exact same value is no longer rare: issue #101's
+    # auto-derived defaults set excellent_price = historical_low_price = lowest_known_price
+    # exactly, so a product that has never had its targets hand-tuned routinely has two
+    # (or all three) marks at one price. Each mark is plotted as its own absolutely
+    # positioned label centered on its axis position - two at the same position render
+    # directly on top of each other, illegible. Group by value first so same-position
+    # marks share one label ("hist low + excellent") instead of two marks fighting for
+    # the same pixels.
+    marks_by_value: dict[float, dict[str, Any]] = {}
     for key, label in (
         ("historical_low_price", "hist low"),
         ("excellent_price", "excellent"),
         ("trigger_price", "trigger"),
     ):
         value = _num(targets.get(key))
-        if value is not None:
-            marks.append({"key": key, "label": label, "value": value})
+        if value is None:
+            continue
+        existing = marks_by_value.get(value)
+        if existing is None:
+            marks_by_value[value] = {"key": key, "label": label, "value": value}
+        else:
+            existing["key"] = f"{existing['key']}+{key}"
+            existing["label"] = f"{existing['label']} + {label}"
+    marks = list(marks_by_value.values())
 
     best_value = best.value if isinstance(best, Delivered) else _num(best)
 
