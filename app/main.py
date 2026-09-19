@@ -32,6 +32,7 @@ from . import (
     retailer_search,
     retailers,
     store,
+    url_intake,
 )
 from .config import load_config
 from .db import backup, migrate, session, utcnow
@@ -603,6 +604,116 @@ def api_create_listing(product_id: int, payload: dict = Body(...)) -> Any:
         return jsonable(
             store.enrich_listing(conn, row, dict(product), load_config().unresolved_freight_penalty)
         )
+
+
+@app.post("/api/products/{product_id}/retailers/from-url", status_code=201)
+def api_create_listing_from_url(product_id: int, payload: dict = Body(...)) -> Any:
+    """"Paste a listing URL" (issue #94): the low-friction sibling of
+    api_create_listing above, for the common case of having a retailer page open and
+    nothing else - no retailer name typed, no price known yet.
+
+    Derives the retailer from the URL's domain, creating it via store.ensure_retailer
+    exactly as the ordinary "Add retailer" flow already does, and always creates the
+    listing with the URL saved even if nothing further succeeds - "nowhere to put the
+    URL at all" was the actual dead end this issue reported, so that much happens
+    unconditionally, before either enrichment path below is even attempted.
+
+    Then it tries to do better than a bare URL, in order:
+      1. If the domain matches a registered scraper adapter, fetch it synchronously
+         (same adapter price_watch would use on its next scheduled pass) and write
+         whatever it finds under the ordinary LIVE provenance state.
+      2. Otherwise (no adapter, or the adapter's fetch failed - bot protection, a
+         config with scraping disabled, a dead link), queue a one-off research job
+         scoped to this single URL via the existing research-job pipeline
+         (app/research.py, deploy/research-runner.py), so a human doesn't have to
+         separately go and check it. Its finding still lands through the ordinary
+         POST /api/import path, same as every other research job. A job already
+         running for this product (JobAlreadyRunning) is not an error here - the
+         listing with its URL still stands, and the running job will surface on the
+         product page as usual.
+    """
+    url = (payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "url is required")
+    domain = url_intake.bare_domain(url)
+    if not domain:
+        raise HTTPException(400, "url must be a full http:// or https:// address")
+
+    with session() as conn:
+        product = store.get_product(conn, product_id)
+        if product is None:
+            raise HTTPException(404, "no such product")
+
+        adapter_cls = url_intake.adapter_for_domain(domain)
+        if adapter_cls is not None:
+            retailer = store.ensure_retailer(
+                conn, adapter_cls.name, adapter=adapter_cls.slug, homepage=adapter_cls.homepage
+            )
+        else:
+            retailer = store.ensure_retailer(
+                conn, url_intake.display_name_for_domain(domain), homepage=f"https://{domain}"
+            )
+
+        existing = store.find_listing(conn, product_id, retailer["id"], url)
+        if existing is None:
+            listing_id = store.create_listing(
+                conn, {"product_id": product_id, "retailer_id": retailer["id"], "url": url}
+            )
+        else:
+            listing_id = existing["id"]
+
+        scraped = False
+        if adapter_cls is not None:
+            try:
+                observation = adapter_cls().check(url, expected_model=product["model"])
+            except retailers.FetchError:
+                observation = None
+            if observation is not None:
+                values = observation.to_values()
+                if values:
+                    provenance.apply_values(
+                        conn, listing_id, values, state=provenance.LIVE, source=adapter_cls.slug
+                    )
+                    conn.execute(
+                        "UPDATE listings SET last_checked_at = ?, updated_at = ? WHERE id = ?",
+                        (utcnow(), utcnow(), listing_id),
+                    )
+                    provenance.sync_verification_from_provenance(conn, listing_id)
+                    mismatch = next(
+                        (w for w in observation.warnings if "model mismatch" in w), None
+                    )
+                    if mismatch:
+                        provenance.set_verification(
+                            conn, listing_id, "model", provenance.FLAGGED, mismatch
+                        )
+                    store.record_observation(conn, listing_id, source=adapter_cls.slug)
+                    scraped = True
+
+        research_job = None
+        if not scraped:
+            try:
+                job_id = research.create_job(
+                    conn, product_id, [retailer["id"]], urls={retailer["id"]: url}
+                )
+                research_job = research.get_job(conn, job_id)
+            except research.JobAlreadyRunning:
+                research_job = None
+
+        row = conn.execute(
+            "SELECT l.*, r.name AS retailer_name, r.slug AS retailer_slug,"
+            " r.adapter AS retailer_adapter FROM listings l"
+            " JOIN retailers r ON r.id = l.retailer_id WHERE l.id = ?",
+            (listing_id,),
+        ).fetchone()
+        listing = store.enrich_listing(
+            conn, row, dict(product), load_config().unresolved_freight_penalty
+        )
+        return {
+            "listing": jsonable(listing),
+            "retailer": dict(retailer),
+            "scraped": scraped,
+            "research_job": jsonable(research_job) if research_job else None,
+        }
 
 
 @app.patch("/api/retailers/{listing_id}")

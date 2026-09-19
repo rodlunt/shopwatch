@@ -1050,6 +1050,44 @@ wire('al-save', async () => {
   } catch (err) { toast(`Could not add listing: ${err.message}`, 'bad'); }
 });
 
+/* ---------------------------------------------------- paste a listing URL (issue #94)
+ *
+ * The low-friction sibling of "Add retailer" above: no retailer name to type, no
+ * price to know yet - just the page address. See app/main.py's
+ * api_create_listing_from_url for what happens server-side (adapter scrape first,
+ * a URL-scoped research job otherwise, and the listing lands with its URL either way).
+ */
+
+wire('btn-add-listing-url', () => {
+  document.getElementById('ul-url').value = '';
+  document.getElementById('url-listing-dialog').showModal();
+});
+wire('ul-save', async () => {
+  const input = document.getElementById('ul-url');
+  const url = input.value.trim();
+  if (!url) { toast('Paste a URL first.', 'bad'); return; }
+  const productId = Number(location.pathname.split('/').pop());
+  const btn = document.getElementById('ul-save');
+  btn.disabled = true;
+  try {
+    const result = await api(`/api/products/${productId}/retailers/from-url`, {
+      method: 'POST', body: { url },
+    });
+    const message = result.scraped
+      ? `Listing added for ${result.retailer.name} - price found straight away.`
+      : result.research_job
+        ? `Listing added for ${result.retailer.name}. Checking that page for a price now.`
+        : `Listing added for ${result.retailer.name}. No price yet - add one by hand, `
+          + 'or try again once any research already running for this product finishes.';
+    toast(message, 'good');
+    location.reload();
+  } catch (err) {
+    toast(`Could not add listing: ${err.message}`, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 /* ------------------------------------------------------ retry research (product page)
  *
  * The wizard's own research step only ever runs once, against a product just created -

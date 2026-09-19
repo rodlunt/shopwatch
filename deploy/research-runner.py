@@ -138,6 +138,34 @@ Return ONLY a JSON object, no prose, no code fence, matching this shape:
 }}
 """
 
+#: Used instead of PROMPT when the job names an exact page to read (issue #94's "paste
+#: a listing URL" path). Deliberately does not invite a web search at all: the whole
+#: point of having a URL in hand is that the runner reads the page the person actually
+#: found, not whatever a generic search turns up for the same retailer.
+PROMPT_URL = """You are confirming the current price on one specific retailer page,
+for a personal price-tracking tool. Read the page at this exact URL directly - do not
+search the web, and do not substitute a different page even if you believe you know a
+better one.
+
+Product: {product_name}
+Exact model: {model}
+Retailer: {retailer_name}
+URL: {url}
+
+Read that page and find this exact model's current price. If the page cannot be
+reached (blocked, 404, moved), or the model on the page does not match, or you are not
+confident it is the same product, say so - a wrong price is worse than no price.
+
+Return ONLY a JSON object, no prose, no code fence, matching this shape:
+{{
+  "found": true or false,
+  "price": number or null (the advertised price, before freight),
+  "stock": string or null (e.g. "In stock", "Out of stock"),
+  "url": string or null (the URL you were given, echoed back),
+  "reason": string (why not found, if found is false; brief confirmation if true)
+}}
+"""
+
 
 class RunnerError(RuntimeError):
     """A retailer attempt failed in a way worth reporting as its own status."""
@@ -264,15 +292,31 @@ def research_one_retailer(
     model: str,
     retailer_name: str,
     homepage: str | None,
+    url: str | None = None,
 ) -> dict[str, Any]:
-    """Ask the headless CLI about one retailer. Returns a parsed finding or raises RunnerError."""
-    hint = f" ({homepage})" if homepage else ""
-    prompt = PROMPT.format(
-        product_name=product_name, model=model, retailer_name=retailer_name, homepage_hint=hint
-    )
+    """Ask the headless CLI about one retailer. Returns a parsed finding or raises RunnerError.
+
+    `url` scopes the whole request to one specific page (issue #94) rather than a
+    general search - see PROMPT_URL's own docstring-equivalent comment above. The tool
+    grant is narrowed to match: WebSearch is withheld outright rather than merely
+    asked not to be used, so "read this exact page" is enforced structurally, not just
+    by a sentence in the prompt the model could ignore.
+    """
+    if url:
+        prompt = PROMPT_URL.format(
+            product_name=product_name, model=model, retailer_name=retailer_name, url=url
+        )
+        allowed_tools = "WebFetch"
+    else:
+        hint = f" ({homepage})" if homepage else ""
+        prompt = PROMPT.format(
+            product_name=product_name, model=model, retailer_name=retailer_name,
+            homepage_hint=hint,
+        )
+        allowed_tools = "WebSearch,WebFetch"
     try:
         proc = subprocess.run(
-            [claude_bin, "-p", "--allowedTools", "WebSearch,WebFetch"],
+            [claude_bin, "-p", "--allowedTools", allowed_tools],
             input=prompt, capture_output=True, text=True, timeout=RETAILER_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:
@@ -368,7 +412,7 @@ def process_job(base_url: str, claude_bin: str, job: dict[str, Any]) -> None:
         try:
             found = research_one_retailer(
                 base_url, claude_bin, product["name"], product["model"],
-                retailer_name, result.get("retailer_homepage"),
+                retailer_name, result.get("retailer_homepage"), result.get("url"),
             )
         except RunnerError as exc:
             log.info("job %s / %s: %s (%s)", job["id"], retailer_name, exc.status, exc.note)

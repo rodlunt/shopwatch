@@ -6,6 +6,7 @@
 {% call c.card(product, linked=false) %}
   <button id="btn-edit-product">Edit</button>
   <button id="btn-add-listing">Add retailer</button>
+  <button id="btn-add-listing-url">Paste a listing URL</button>
   <button id="btn-watch-product" data-product="{{ product.id }}">Check prices now</button>
   <button id="btn-research-retailers" data-product="{{ product.id }}" data-name="{{ product.name }}" data-model="{{ product.model }}">Research retailers again</button>
   <button id="btn-research-historical-low" data-product="{{ product.id }}" data-name="{{ product.name }}" data-model="{{ product.model }}">Research historical low</button>
@@ -212,6 +213,24 @@
   <footer><button data-close>Cancel</button><button class="primary" id="al-save">Add retailer</button></footer>
 </dialog>
 <datalist id="retailer-names">{% for r in retailers %}<option>{{ r.name }}</option>{% endfor %}</datalist>
+
+<dialog id="url-listing-dialog">
+  <header>Paste a listing URL</header>
+  <div class="body">
+    <p class="small muted" style="margin:0 0 10px;max-width:60ch">
+      Found this somewhere and just have the page address? Paste it below. The
+      retailer is worked out from the URL - if it's one shopwatch already knows how to
+      scrape, the price comes back straight away; otherwise a one-off check is queued
+      for it.
+    </p>
+    <div class="form-grid">
+      <label class="wide">Listing URL
+        <input id="ul-url" placeholder="https://www.example.com.au/the-product" autocomplete="off">
+      </label>
+    </div>
+  </div>
+  <footer><button data-close>Cancel</button><button class="primary" id="ul-save">Add</button></footer>
+</dialog>
 
 <dialog id="research-dialog">
   <header>Research retailer prices</header>

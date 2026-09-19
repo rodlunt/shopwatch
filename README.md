@@ -501,6 +501,36 @@ fewer than 2 real listings, and when it does, the response is deliberately label
 "estimate, from N listings" rather than reusing `HISTORICAL LOW TERRITORY` or
 `EXCELLENT` - those are earned through real tracking over time.
 
+## Paste a listing URL
+
+Sometimes you already have the one thing that matters: a link to the listing. "Add
+retailer" wants a retailer name typed in, and the wizard's research step wants a
+retailer picked from a list - neither is built for "I found this page, just add it."
+The product page's **Paste a listing URL** button is: paste an address, nothing else,
+and `POST /api/products/{id}/retailers/from-url` works out the rest.
+
+1. The retailer is derived from the URL's own domain and created via
+   `store.ensure_retailer` if it's new - the same call "Add retailer" already uses, so
+   a retailer created this way behaves identically to one typed by hand.
+2. The listing is created (or matched, if you paste the same URL twice) with that URL
+   saved, unconditionally, before anything else is attempted - a URL with nowhere to
+   land was the actual gap this closes, and that much happens even if every step below
+   fails.
+3. If the domain matches a retailer shopwatch already has a scraper adapter for, that
+   adapter is called synchronously and the price lands immediately, under the ordinary
+   `LIVE` provenance state - the same as an ordinary price-watch pass.
+4. Otherwise (no adapter, or the adapter's fetch failed - bot protection, a dead link),
+   a one-off research job is queued, scoped to **that exact URL** rather than a general
+   search: the runner (`deploy/research-runner.py`) reads the page directly with
+   `WebFetch` and nothing else - `WebSearch` is withheld from that call outright, not
+   just asked not to be used, so "read this page, don't go looking for a different one"
+   is enforced by the tool grant, not only the prompt. Its finding still lands through
+   the ordinary `POST /api/import` path, exactly like every other research job.
+
+A job already running for this product (the wizard's own concurrency guard, one active
+job per product) does not block the listing from being created - it just means the
+research half sits out this round, same as it would for any other retry.
+
 ## Researching a historical low
 
 Shopwatch only ever knows what it has observed since a product was added - `lowest_known_price`
@@ -857,6 +887,7 @@ what would fire without sending anything.
 | `DELETE` | `/api/products/{id}` | archives, never deletes |
 | `GET` | `/api/products/{id}/retailers` | the listings |
 | `POST` | `/api/products/{id}/retailers` | add a listing |
+| `POST` | `/api/products/{id}/retailers/from-url` | `{"url": "..."}`; derives the retailer, always saves the URL, scrapes or queues research |
 | `GET` | `/api/products/check-model?model=...` | deterministic duplicate check for the wizard |
 | `GET` | `/api/products/{id}/price-suggestion` | a same-day trigger-price estimate from real listings, or `null` below 2 |
 | `POST` | `/api/retailers` | `{"name": "..."}`; ensures a retailer exists with no listing attached |
