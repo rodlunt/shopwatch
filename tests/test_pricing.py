@@ -168,6 +168,29 @@ def test_a_single_target_does_not_divide_by_zero():
     assert 0 <= scale["best"]["pos"] <= 100
 
 
+def test_marks_sharing_a_value_merge_into_one_labelled_mark():
+    """Issue #101's auto-derive sets excellent_price = historical_low_price exactly,
+    so two targets landing on the same value is now routine, not a rare coincidence.
+    Each mark renders as its own absolutely-positioned label on the axis - two at the
+    same position previously overlapped into illegible text. One merged mark with a
+    combined label is the fix, not two marks fighting for the same pixels."""
+    scale = pricing.threshold_scale(
+        {"historical_low_price": 69.30, "excellent_price": 69.30, "trigger_price": 76.23}, 88.95
+    )
+    assert [m["value"] for m in scale["marks"]] == [69.30, 76.23]
+    hist_and_excellent = scale["marks"][0]
+    assert hist_and_excellent["label"] == "hist low + excellent"
+    assert hist_and_excellent["key"] == "historical_low_price+excellent_price"
+
+
+def test_all_three_targets_sharing_a_value_merge_into_one_mark():
+    scale = pricing.threshold_scale(
+        {"historical_low_price": 55, "excellent_price": 55, "trigger_price": 55}, 55
+    )
+    assert len(scale["marks"]) == 1
+    assert scale["marks"][0]["label"] == "hist low + excellent + trigger"
+
+
 # ------------------------------------------------------- every contender on the axis
 
 CONTENDERS = [
