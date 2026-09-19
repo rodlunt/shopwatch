@@ -108,6 +108,14 @@ live classification the moment it runs - a listing at or under the known low new
 tier has no width under pure auto-derived defaults - `HISTORICAL_LOW` is checked first
 and wins the tie - until a human types over one of the two, which locks it.
 
+**A one-time backfill catches products that already existed before this shipped**
+(`store.run_price_target_backfill`, run from `app/main.py`'s `lifespan` on every boot,
+self-marking via a `python_backfills` table so it only actually sweeps once). The
+derivation above only ever fires from a write (`create_product`/`update_product`/
+`maybe_lower_known_low`) - a product that already had a `lowest_known_price` sitting
+there before this feature existed would otherwise stay un-derived forever, since nothing
+would touch it again until some unrelated future edit happened to.
+
 ### The three states a listing can be in
 
 | State | On the board | On the axis | Can it be the answer |
@@ -975,6 +983,10 @@ what would fire without sending anything.
 | `GET` | `/api/products/{id}/price-suggestion` | a same-day trigger-price estimate from real listings, or `null` below 2 |
 | `POST` | `/api/retailers` | `{"name": "..."}`; ensures a retailer exists with no listing attached |
 | `GET` | `/api/retailers` | every known retailer, with `excluded`, `listing_count`, and adapter/mail-alert metadata merged in |
+| `POST` | `/api/groups` | `{"name": "..."}`; several candidates tracked together, no shared pricing |
+| `GET` / `PATCH` | `/api/groups/{id}` | the merged comparison view / rename, edit notes |
+| `DELETE` | `/api/groups/{id}` | detaches every member (never deletes them - a group is just a grouping); a group that empties out via this, "Leave group", or a permanent product delete removes itself automatically |
+| `POST` / `DELETE` | `/api/products/{id}/group` | join (`{"group_id": 1}` or `{"name": "..."}` to create one) / leave |
 | `PATCH` | `/api/retailer/{id}` | **singular** - a retailer-level flag, currently `{"excluded": true\|false}` (issue #112); excluding deactivates every listing under it, across every product; un-excluding does NOT reactivate them |
 | `POST` | `/api/research-jobs` | `{"product_id": 1, "retailer_ids": [...], "kind": "price"\|"historical_low"}`; `retailer_ids` required for `price`, ignored for `historical_low`; 202, 409 if one is already active for this product |
 | `GET` | `/api/research-jobs/{id}` | poll a job's status; per-retailer results for `price`, `historical_low_*` fields for `historical_low` |
