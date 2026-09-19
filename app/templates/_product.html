@@ -365,7 +365,7 @@
   {% if product.lowest_known_notes %}
   <details class="more" style="margin:0 20px">
     <summary>Historical low notes</summary>
-    <p class="small muted" style="line-height:1.5">{{ product.lowest_known_notes }}</p>
+    <div class="small muted" style="line-height:1.5">{{ product.lowest_known_notes|notes_html }}</div>
   </details>
   {% endif %}
   {% endif %}

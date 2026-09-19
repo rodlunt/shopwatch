@@ -254,6 +254,60 @@ def test_parse_historical_low_reply_with_a_confident_finding():
     }
 
 
+def test_parse_historical_low_reply_formats_reason_points_as_bullet_lines():
+    """issue: "the notes should be split into dot points". reason_points (an array)
+    is the current prompt shape - joined into "- " prefixed lines so a renderer
+    (app/main.py's notes_html filter, app.js's notesElement) can build a real <ul>."""
+    reply = (
+        '{"found": true, "price": 69.30, "date": "2025-11-18", "retailer": "eBay", '
+        '"confidence": "MEDIUM", "reason_points": '
+        '["OzBargain thread from 18 Nov 2025: $69.30 via eBay seller Shopping Express", '
+        '"Checked deals through Aug 2026 - none went lower"]}'
+    )
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["reason"] == (
+        "- OzBargain thread from 18 Nov 2025: $69.30 via eBay seller Shopping Express\n"
+        "- Checked deals through Aug 2026 - none went lower"
+    )
+
+
+def test_parse_historical_low_reply_falls_back_to_plain_reason_string():
+    """A reply that still uses the pre-bullet-points shape (no reason_points at all)
+    must keep working exactly as before - the old test above this one pins that."""
+    reply = '{"found": true, "price": 500, "reason": "single sentence, no bullets"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["reason"] == "single sentence, no bullets"
+
+
+def test_parse_historical_low_reply_ignores_reason_points_with_no_usable_strings():
+    reply = '{"found": true, "price": 500, "reason_points": ["", "   "], "reason": "fallback text"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["reason"] == "fallback text"
+
+
+def test_parse_historical_low_reply_ignores_a_non_list_reason_points():
+    reply = '{"found": true, "price": 500, "reason_points": "not a list", "reason": "fallback text"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["reason"] == "fallback text"
+
+
+def test_truncate_notes_backs_off_to_a_line_boundary_rather_than_cutting_mid_line():
+    text = "- " + ("a" * 100) + "\n- " + ("b" * 2000)
+    truncated = research_runner._truncate_notes(text, limit=150)
+    assert truncated == "- " + ("a" * 100)
+    assert "b" not in truncated
+
+
+def test_truncate_notes_falls_back_to_a_plain_slice_with_no_early_newline():
+    text = "a" * 2000
+    truncated = research_runner._truncate_notes(text, limit=500)
+    assert len(truncated) == 500
+
+
+def test_truncate_notes_leaves_short_text_untouched():
+    assert research_runner._truncate_notes("short", limit=500) == "short"
+
+
 def test_parse_historical_low_reply_not_found_is_a_finding_not_an_exception():
     """Unlike parse_research_reply, there is no per-retailer status to raise into for
     this kind - "found: false" must come back as a usable (empty) finding, not an

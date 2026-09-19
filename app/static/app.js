@@ -1404,6 +1404,43 @@ async function renderOtherRetailers(job, container) {
   container.appendChild(actions);
 }
 
+/* JS-side twin of app/main.py's _notes_html Jinja filter - same "- " prefixed line
+ * convention (deploy/research-runner.py's _format_reason), same order-preserving
+ * <ul> grouping, same "fewer than 2 bullet lines renders as plain text" fallback for
+ * old single-paragraph notes. Needed here too because this dialog shows a job's
+ * result before it is ever saved to the product (and the Jinja filter only ever
+ * sees saved product data) - a fresh research result must read the same way the
+ * saved note will once "Use this" is clicked. */
+function notesElement(text, fallbackText) {
+  const wrap = el('div', '', 'reason');
+  if (!text) {
+    if (fallbackText) wrap.textContent = fallbackText;
+    return wrap;
+  }
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.filter(l => l.startsWith('- ')).length < 2) {
+    wrap.textContent = lines.join(' ');
+    return wrap;
+  }
+  let list = null;
+  for (const line of lines) {
+    if (line.startsWith('- ')) {
+      if (!list) {
+        list = document.createElement('ul');
+        list.style.cssText = 'margin:0 0 6px;padding-left:20px';
+        wrap.appendChild(list);
+      }
+      list.appendChild(el('li', line.slice(2).trim()));
+    } else {
+      list = null;
+      const p = el('p', line);
+      p.style.margin = '0 0 6px';
+      wrap.appendChild(p);
+    }
+  }
+  return wrap;
+}
+
 function renderHistLowResult(job) {
   const box = document.getElementById('historical-low-result');
   box.replaceChildren();
@@ -1413,7 +1450,7 @@ function renderHistLowResult(job) {
   if (job.historical_low_price === null || job.historical_low_price === undefined) {
     box.append(
       el('span', 'No confident historical low found.', 'meta'),
-      el('div', job.historical_low_notes || 'The research pass could not find a source it trusted.', 'reason'),
+      notesElement(job.historical_low_notes, 'The research pass could not find a source it trusted.'),
     );
     renderOtherRetailers(job, box);
     return;
@@ -1433,9 +1470,14 @@ function renderHistLowResult(job) {
     set('ep-lowest_known_price', job.historical_low_price);
     set('ep-lowest_known_date', job.historical_low_date);
     set('ep-lowest_known_retailer', job.historical_low_retailer);
-    const note = 'AI-estimated historical low, unconfirmed'
-      + (job.historical_low_confidence ? ` (${job.historical_low_confidence.toLowerCase()} confidence)` : '')
-      + (job.historical_low_notes ? ` - ${job.historical_low_notes}` : '') + '. Check before saving.';
+    // The meta line stays on its own line rather than glued onto the reason text with
+    // " - " and a trailing ". Check before saving." - historical_low_notes can now be
+    // several "- " prefixed bullet lines (deploy/research-runner.py's _format_reason),
+    // and gluing free text onto the end of a bullet line reads as broken, not joined.
+    const metaLine = 'AI-estimated historical low, unconfirmed'
+      + (job.historical_low_confidence ? ` (${job.historical_low_confidence.toLowerCase()} confidence).` : '.')
+      + ' Check before saving.';
+    const note = job.historical_low_notes ? `${metaLine}\n${job.historical_low_notes}` : metaLine;
     set('ep-lowest_known_notes', note);
     document.getElementById('historical-low-dialog').close();
     document.getElementById('product-dialog').showModal();
@@ -1447,7 +1489,7 @@ function renderHistLowResult(job) {
     el('span', 'UNCONFIRMED ESTIMATE - not a real listing', 'tag'),
     el('div', money(job.historical_low_price), 'num'),
     el('div', meta.join(' · '), 'meta'),
-    el('div', job.historical_low_notes || '', 'reason'),
+    notesElement(job.historical_low_notes, ''),
     (() => { const actions = el('div', '', 'actions'); actions.append(useBtn, discardBtn); return actions; })(),
   );
   renderOtherRetailers(job, box);

@@ -142,7 +142,12 @@ Return ONLY a JSON object, no prose, no code fence, matching this shape:
   "retailer": string or null (who sold it at that price),
   "confidence": "LOW", "MEDIUM" or "HIGH" (how sure you are this is a real historical
     low for this exact model, not a guess or a different model/size),
-  "reason": string (what source(s) you used, or why nothing usable was found),
+  "reason_points": array of short strings, one distinct fact or source per string (e.g.
+    ["OzBargain thread from 18 Nov 2025: $69.30 via eBay seller Shopping Express, flagged
+    as an all-time low", "Checked OzBargain-tracked deals through Aug 2026 (Amazon AU,
+    Amazon Business, Officeworks, Costco, digiDirect, KS Computer) - none went lower"]) -
+    what source(s) you used, or why nothing usable was found, broken into separate points
+    rather than one long sentence - a person reading this wants to scan it, not parse it,
   "other_retailers": [] or a list of objects like {{"name": string, "url": string or
     null}}, one per OTHER retailer you noticed selling this exact model - empty list
     if you did not notice any
@@ -294,6 +299,51 @@ def _clean_other_retailers(raw: Any) -> list[dict[str, Any]]:
     return cleaned
 
 
+#: Was 500 - too tight once "reason" can be several bullet lines rather than one
+#: sentence, and a plain character slice cut mid-word/mid-sentence regardless (the
+#: "$70.37-$80.. Check before saving." artifact seen live on a real product came from
+#: exactly this: a 500-char slice landing mid-number, immediately followed by the
+#: dialog's own trailing ". Check before saving." with nothing to signal the cut).
+NOTES_LENGTH_LIMIT = 1200
+
+
+def _truncate_notes(text: str, limit: int = NOTES_LENGTH_LIMIT) -> str:
+    """Cut `text` to at most `limit` characters without severing a bullet line (or, for
+    old-style single-paragraph text, a sentence) mid-word. Backs off to the last
+    newline within the limit when there is one comfortably placed; otherwise falls
+    back to a plain slice, same behaviour as before for text with no line breaks at
+    all - never worse than the previous [:limit], only ever better."""
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("\n", 0, limit)
+    if cut > limit * 0.5:
+        return text[:cut]
+    return text[:limit]
+
+
+def _format_reason(data: dict[str, Any], found: bool) -> str:
+    """Build the human-readable "reason" text from the model's reply.
+
+    Prefers `reason_points` (a list of short strings, one distinct fact/source each) -
+    joined into "- " prefixed lines so a renderer (the product page, the historical-low
+    dialog) can split on newline and show real bullet points instead of one dense
+    run-on paragraph a person has to parse rather than scan. Falls back to a plain
+    `reason` string for a reply that still uses the pre-bullet-points schema (an older
+    prompt version cached in a stale CLI session, or a model that ignored the new
+    field), so nothing already relying on that shape breaks - see the fallback-covering
+    tests below.
+    """
+    points = data.get("reason_points")
+    if isinstance(points, list):
+        cleaned = [str(p).strip() for p in points if isinstance(p, str) and str(p).strip()]
+        if cleaned:
+            return "\n".join(f"- {p}" for p in cleaned)
+    reason = data.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    return "not found" if not found else ""
+
+
 def parse_historical_low_reply(raw: str) -> dict[str, Any]:
     """Pull the JSON object out of a historical-low CLI reply.
 
@@ -340,7 +390,7 @@ def parse_historical_low_reply(raw: str) -> dict[str, Any]:
         "date": data.get("date") if found else None,
         "retailer": data.get("retailer") if found else None,
         "confidence": confidence if found else None,
-        "reason": str(data.get("reason") or ("not found" if not found else "")),
+        "reason": _format_reason(data, found),
         # Independent of whether a historical-low price itself was found - the model
         # can honestly report "no confident historical low, but I did see these
         # retailers selling it" in the same pass.
@@ -488,7 +538,7 @@ def process_historical_low_job(base_url: str, claude_bin: str, job: dict[str, An
         f"{base_url}/api/research-jobs/{job['id']}/historical-low",
         json={
             "price": found["price"], "date": found["date"], "retailer": found["retailer"],
-            "confidence": found["confidence"], "notes": (found.get("reason") or "")[:500],
+            "confidence": found["confidence"], "notes": _truncate_notes(found.get("reason") or ""),
             "other_retailers": found.get("other_retailers") or [],
         },
         timeout=30,

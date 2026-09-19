@@ -610,6 +610,18 @@ An excluded retailer (see "Excluding a retailer" below) never reaches this check
 named directly in `HISTORICAL_LOW_PROMPT` so the model is told not to bother, and dropped again
 server-side (`app/research.py`'s `_clean_other_retailers`) as the backstop if it turns up anyway.
 
+**The reason text is dot points, not one dense paragraph.** `HISTORICAL_LOW_PROMPT` asks for
+`reason_points` (an array, one distinct fact/source per string) rather than a single `reason`
+sentence - `deploy/research-runner.py`'s `_format_reason` joins them into `"- "`-prefixed lines,
+one per line. A reply that still uses the old single-`reason` shape (a stale cached CLI session,
+or a model that ignored the field) falls back to that string unchanged, so nothing already relying
+on it breaks. The rendering side has two independent implementations that must stay in sync: the
+product page uses `app/main.py`'s `notes_html` Jinja filter (real `<ul>`/`<li>`, HTML-escaped since
+this is LLM-relayed web content); the historical-low dialog, which shows a job's result before it
+is ever saved to the product, uses `app.js`'s `notesElement` to build the identical structure in
+JS. Both fall back to a single plain paragraph when fewer than two `"- "` lines are present, so old
+single-paragraph notes (pre-`reason_points`, or typed by hand in Edit) render exactly as before.
+
 ## Excluding a retailer
 
 Issue #112: some retailers just are not relevant - wrong city, a marketplace you don't use,
