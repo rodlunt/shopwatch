@@ -643,6 +643,37 @@ def group_view(
     return group
 
 
+def delete_group(conn: sqlite3.Connection, group_id: int) -> None:
+    """Permanently remove a group. Members are never touched - the FK's own
+    ON DELETE SET NULL (migration 0006) detaches any remaining product from it
+    automatically, the same "the group is just a grouping" reasoning that migration's
+    own comment gives for not cascading. There was no way to do this at all before -
+    "nothing in the API actually does today" was true until this existed."""
+    conn.execute("DELETE FROM watch_groups WHERE id = ?", (group_id,))
+
+
+def delete_group_if_empty(conn: sqlite3.Connection, group_id: int) -> bool:
+    """Delete a group once nothing points at it any more, and only then.
+
+    "Empty" means no product's group_id references it - not "every member is
+    archived". A resolved group (a purchase archived the rest, see
+    archive_other_group_members) keeps every member's group_id exactly as it was:
+    "these were the candidates, this one won" is real history, the same reason a
+    product is archived rather than deleted. Auto-deleting on that would erase it.
+    This only fires from an action that actually detaches a product from the group -
+    "Leave group", or a permanent product delete - never from archiving.
+
+    Returns whether it actually deleted anything, so a caller can report it.
+    """
+    remaining = conn.execute(
+        "SELECT COUNT(*) AS n FROM products WHERE group_id = ?", (group_id,)
+    ).fetchone()["n"]
+    if remaining:
+        return False
+    delete_group(conn, group_id)
+    return True
+
+
 def list_groups(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict[str, Any]]:
     where = "" if include_archived else "WHERE archived = 0"
     ids = [r["id"] for r in conn.execute(f"SELECT id FROM watch_groups {where} ORDER BY name")]

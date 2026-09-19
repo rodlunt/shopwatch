@@ -829,6 +829,56 @@ def test_get_retailer_search_job_is_a_404_for_an_unknown_id(client):
     assert response.status_code == 404
 
 
+# ------------------------------------------------------------------- deleting a group
+
+
+def _new_product(client, name, model):
+    return client.post("/api/products", json={"name": name, "model": model}).json()
+
+
+def test_delete_group_detaches_its_members(client):
+    a = _new_product(client, "RTX 4070", "RTX-4070-A")
+    b = _new_product(client, "RX 7800 XT", "RX-7800-XT-A")
+    group = client.post(f"/api/products/{a['id']}/group", json={"name": "GPU search"}).json()
+    group_id = group["group_id"]
+    client.post(f"/api/products/{b['id']}/group", json={"group_id": group_id})
+
+    response = client.delete(f"/api/groups/{group_id}")
+    assert response.status_code == 200
+
+    assert client.get(f"/api/groups/{group_id}").status_code == 404
+    assert client.get(f"/api/products/{a['id']}").json()["group_id"] is None
+    assert client.get(f"/api/products/{b['id']}").json()["group_id"] is None
+
+
+def test_deleting_an_unknown_group_is_a_404(client):
+    assert client.delete("/api/groups/999999").status_code == 404
+
+
+def test_leaving_the_last_member_auto_deletes_the_group(client):
+    a = _new_product(client, "RTX 4070", "RTX-4070-A")
+    b = _new_product(client, "RX 7800 XT", "RX-7800-XT-A")
+    group = client.post(f"/api/products/{a['id']}/group", json={"name": "GPU search"}).json()
+    group_id = group["group_id"]
+    client.post(f"/api/products/{b['id']}/group", json={"group_id": group_id})
+
+    client.delete(f"/api/products/{a['id']}/group")
+    assert client.get(f"/api/groups/{group_id}").status_code == 200, "b is still a member"
+
+    client.delete(f"/api/products/{b['id']}/group")
+    assert client.get(f"/api/groups/{group_id}").status_code == 404
+
+
+def test_permanently_deleting_the_last_member_auto_deletes_the_group(client):
+    a = _new_product(client, "RTX 4070", "RTX-4070-A")
+    group = client.post(f"/api/products/{a['id']}/group", json={"name": "GPU search"}).json()
+    group_id = group["group_id"]
+
+    response = client.delete(f"/api/products/{a['id']}/permanently")
+    assert response.status_code == 200
+    assert client.get(f"/api/groups/{group_id}").status_code == 404
+
+
 # ------------------------------------------------ letting a retailer be excluded (#112)
 
 

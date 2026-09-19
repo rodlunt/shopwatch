@@ -243,3 +243,65 @@ def test_research_job_works_normally_on_an_unarchived_product(conn, two_candidat
     conn.commit()
     job_id = research.create_job(conn, a, [retailer["id"]])  # must not raise
     assert job_id is not None
+
+
+# ------------------------------------------------------- deleting a group (issue: no
+# way to delete a group, and an empty one should remove itself)
+
+
+def test_delete_group_detaches_members_rather_than_deleting_them(conn, two_candidates):
+    a, b = two_candidates
+    group_id = store.create_group(conn, {"name": "GPU search"})
+    store.set_product_group(conn, a, group_id)
+    store.set_product_group(conn, b, group_id)
+    conn.commit()
+
+    store.delete_group(conn, group_id)
+    conn.commit()
+
+    assert store.get_group(conn, group_id) is None
+    assert store.get_product(conn, a)["group_id"] is None
+    assert store.get_product(conn, b)["group_id"] is None
+    # Neither product itself was touched, only detached.
+    assert store.get_product(conn, a) is not None
+    assert store.get_product(conn, b) is not None
+
+
+def test_delete_group_if_empty_only_fires_with_no_members_left(conn, two_candidates):
+    a, b = two_candidates
+    group_id = store.create_group(conn, {"name": "GPU search"})
+    store.set_product_group(conn, a, group_id)
+    store.set_product_group(conn, b, group_id)
+    conn.commit()
+
+    assert store.delete_group_if_empty(conn, group_id) is False
+    assert store.get_group(conn, group_id) is not None
+
+    store.set_product_group(conn, a, None)
+    conn.commit()
+    assert store.delete_group_if_empty(conn, group_id) is False, "b is still a member"
+    assert store.get_group(conn, group_id) is not None
+
+    store.set_product_group(conn, b, None)
+    conn.commit()
+    assert store.delete_group_if_empty(conn, group_id) is True
+    assert store.get_group(conn, group_id) is None
+
+
+def test_an_archived_member_still_counts_as_belonging_to_its_group(conn, two_candidates):
+    """A resolved group (a purchase archived the rest) must not auto-delete just
+    because every remaining member is archived - "these were the candidates, this
+    one won" is real history, group_id is untouched on purpose by
+    archive_other_group_members, and delete_group_if_empty must respect that."""
+    a, b = two_candidates
+    group_id = store.create_group(conn, {"name": "GPU search"})
+    store.set_product_group(conn, a, group_id)
+    store.set_product_group(conn, b, group_id)
+    conn.commit()
+    store.archive_other_group_members(conn, a)
+    conn.commit()
+
+    assert store.get_product(conn, b)["archived"] == 1
+    assert store.get_product(conn, b)["group_id"] == group_id
+    assert store.delete_group_if_empty(conn, group_id) is False
+    assert store.get_group(conn, group_id) is not None

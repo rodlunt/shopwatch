@@ -482,6 +482,21 @@ def api_update_group(group_id: int, payload: dict = Body(...)) -> Any:
         return jsonable(store.group_view(conn, group_id))
 
 
+@app.delete("/api/groups/{group_id}")
+def api_delete_group(group_id: int) -> Any:
+    """Explicit, manual delete - there was no way to do this at all before. Unlike a
+    product's own permanent delete, this has nothing irreversible to warn about: a
+    group is just a grouping (migration 0006's own words), so deleting one costs no
+    price history or listing - it only detaches whichever products still point at
+    it (the FK's ON DELETE SET NULL), which "Leave group" already does one at a
+    time. This is the same operation, just for every member still attached at once."""
+    with session() as conn:
+        if store.get_group(conn, group_id) is None:
+            raise HTTPException(404, "no such group")
+        store.delete_group(conn, group_id)
+    return {"deleted": group_id}
+
+
 @app.post("/api/products/{product_id}/group")
 def api_set_product_group(product_id: int, payload: dict = Body(...)) -> Any:
     """Attach a product to a group. `{"group_id": 1}` for an existing group, or
@@ -508,9 +523,16 @@ def api_set_product_group(product_id: int, payload: dict = Body(...)) -> Any:
 @app.delete("/api/products/{product_id}/group")
 def api_remove_product_group(product_id: int) -> Any:
     with session() as conn:
-        if store.get_product(conn, product_id) is None:
+        product = store.get_product(conn, product_id)
+        if product is None:
             raise HTTPException(404, "no such product")
+        group_id = product["group_id"]
         store.set_product_group(conn, product_id, None)
+        # The last candidate leaving a group is what "no members" actually means (see
+        # delete_group_if_empty's own docstring) - checked here, not on archiving,
+        # since an archived member still belongs to a resolved group.
+        if group_id is not None:
+            store.delete_group_if_empty(conn, group_id)
         return jsonable(store.product_view(conn, product_id))
 
 
@@ -563,9 +585,16 @@ def api_delete_product_permanently(product_id: int) -> Any:
     job tied to it. The wizard/product page's own confirmation (typing the product
     name back) is the only guard - nothing here asks twice."""
     with session() as conn:
-        if store.get_product(conn, product_id) is None:
+        product = store.get_product(conn, product_id)
+        if product is None:
             raise HTTPException(404, "no such product")
+        group_id = product["group_id"]
         store.delete_product(conn, product_id)
+        # Same "last member leaving" check leave-group does - deleting the last
+        # candidate in a group empties it exactly the way leaving it one at a time
+        # would, and the group should not linger with nothing left to compare.
+        if group_id is not None:
+            store.delete_group_if_empty(conn, group_id)
     return {"deleted": product_id}
 
 
