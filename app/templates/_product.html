@@ -330,6 +330,24 @@
 
   {{ ruler(product) }}
 
+  {# lowest_known_date/_retailer/_notes have existed since the historical-low feature
+     landed, tracked_fields on the product and editable, but were only ever shown
+     inside the Edit dialog - the axis's own "hist low" mark had a number with no way
+     to see when or where it was seen without opening Edit. #}
+  {% if product.lowest_known_price and (product.lowest_known_date or product.lowest_known_retailer or product.lowest_known_notes) %}
+  <p class="small muted" style="margin:6px 0 0">
+    Historical low {{ product.lowest_known_price|money }}
+    {%- if product.lowest_known_retailer %} from {{ product.lowest_known_retailer }}{% endif %}
+    {%- if product.lowest_known_date %}, {{ product.lowest_known_date|shortdate }}{% endif -%}.
+  </p>
+  {% if product.lowest_known_notes %}
+  <details class="more">
+    <summary>Historical low notes</summary>
+    <p class="small muted" style="max-width:66ch;line-height:1.5">{{ product.lowest_known_notes }}</p>
+  </details>
+  {% endif %}
+  {% endif %}
+
   {% if product.listings %}
   <div class="contenders">
     {% for l in product.contenders %}{{ listing_row(l, product) }}{% endfor %}

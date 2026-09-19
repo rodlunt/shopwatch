@@ -31,6 +31,48 @@ def test_product_page_renders(client):
     assert "Samsung Q-Series" in response.text
 
 
+def test_historical_low_date_and_retailer_show_on_the_product_page(client):
+    """lowest_known_date/_retailer/_notes have existed since the historical-low
+    feature landed and were editable, but only ever shown inside the Edit dialog -
+    the axis's own "hist low" mark had a number with no way to see when or where it
+    was seen without opening Edit."""
+    product = q930h(client)
+    response = client.patch(
+        f"/api/products/{product['id']}",
+        json={
+            "lowest_known_price": 869.0,
+            "lowest_known_date": "2025-11-18",
+            "lowest_known_retailer": "eBay (Shopping Express, AU)",
+            "lowest_known_notes": "OzBargain deal history shows a one-off low via eBay.",
+        },
+    )
+    assert response.status_code == 200
+
+    body = client.get(f"/products/{product['id']}").text
+    assert "from eBay (Shopping Express, AU)" in body
+    assert "18 Nov 2025" in body
+    assert "OzBargain deal history shows a one-off low via eBay." in body
+
+
+def test_no_historical_low_caption_without_a_lowest_known_price(client):
+    """The seeded soundbar has a manually-curated historical_low_price ($800, a
+    classification threshold) but no lowest_known_price (the actual tracked-lowest
+    record) - these are two distinct fields (see #101's PR body for the full
+    ambiguity). The caption is about the latter, and must not render off the former,
+    which the product-edit dialog's own "Historical low territory" field label would
+    otherwise false-positive a naive substring check on."""
+    product = q930h(client)
+    assert product["historical_low_price"] == 800
+    assert product["lowest_known_price"] is None
+
+    body = client.get(f"/products/{product['id']}").text
+    # "Historical low territory" (the edit dialog's own field label) is expected to be
+    # present - checking for that substring alone would false-positive here. The
+    # caption this test guards against always reads "Historical low $..." instead.
+    assert "Historical low $" not in body
+    assert "Historical low notes" not in body
+
+
 def test_seed_values_are_present_and_correct(client):
     product = q930h(client)
     assert product["verdict"] == "MAYBE"
