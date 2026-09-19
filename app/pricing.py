@@ -224,6 +224,10 @@ def threshold_scale(
             # Still plotted, deliberately. Ruling something out is a decision that can
             # be revisited, and it is easier to revisit one you can see sitting there.
             "ruled_out": bool(listing.get("ruled_out")),
+            # Set by store.product_view() (issue #100), not computed here - this
+            # module stays about positions, not presentation. Copied through rather
+            # than dropped so the dot and its listing row below share one value.
+            "retailer_color": listing.get("retailer_color"),
         })
     points.sort(key=lambda pt: pt["value"])
 
