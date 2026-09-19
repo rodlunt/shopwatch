@@ -263,7 +263,7 @@
   {% if l.seller_notes or l.price_guide or l.url %}
   <details class="more">
     <summary>Notes and source</summary>
-    <div class="small muted" style="padding:8px 0; max-width:70ch; line-height:1.55">
+    <div class="small muted" style="padding:8px 0; line-height:1.55">
       {% if l.price_guide %}<p style="margin:0 0 6px"><b>Price guide:</b> {{ l.price_guide }}</p>{% endif %}
       {% if l.seller_notes %}<p style="margin:0 0 6px">{{ l.seller_notes }}</p>{% endif %}
       {% if l.url|safe_url %}<a href="{{ l.url|safe_url }}" target="_blank" rel="noopener noreferrer">Open the retailer page</a>{% endif %}
@@ -329,7 +329,7 @@
         </span>
         <details class="more">
           <summary>Terms</summary>
-          <div class="small muted" style="padding:6px 0;max-width:66ch;line-height:1.5">
+          <div class="small muted" style="padding:6px 0;line-height:1.5">
             <p style="margin:0 0 4px"><b>Covers:</b> {{ o.applies_to }}</p>
             {% if o.excludes %}<p style="margin:0 0 4px"><b>Excludes:</b> {{ o.excludes }}</p>{% endif %}
             {% if o.code %}<p style="margin:0 0 4px"><b>Code:</b> <span class="num">{{ o.code }}</span></p>{% endif %}
@@ -365,7 +365,7 @@
   {% if product.lowest_known_notes %}
   <details class="more" style="margin:0 20px">
     <summary>Historical low notes</summary>
-    <p class="small muted" style="max-width:66ch;line-height:1.5">{{ product.lowest_known_notes }}</p>
+    <p class="small muted" style="line-height:1.5">{{ product.lowest_known_notes }}</p>
   </details>
   {% endif %}
   {% endif %}
