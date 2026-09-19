@@ -23,6 +23,18 @@ def test_migrations_are_recorded(db):
     assert "0001_initial.sql" in applied
 
 
+def test_retailer_excluded_migration_applies_cleanly_and_defaults_off(db):
+    """issue #112: every existing retailer must be unaffected until someone
+    deliberately excludes it."""
+    with connect(db) as conn:
+        applied = [r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")]
+        assert "0015_retailer_excluded.sql" in applied
+        retailer_id = store.ensure_retailer(conn, "Some Shop")["id"]
+        conn.commit()
+        row = conn.execute("SELECT excluded FROM retailers WHERE id = ?", (retailer_id,)).fetchone()
+    assert row["excluded"] == 0
+
+
 def test_wal_mode_is_on(db):
     with connect(db) as conn:
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"

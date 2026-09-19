@@ -877,3 +877,132 @@ def test_permanently_deleting_the_last_member_auto_deletes_the_group(client):
     response = client.delete(f"/api/products/{a['id']}/permanently")
     assert response.status_code == 200
     assert client.get(f"/api/groups/{group_id}").status_code == 404
+
+
+# ------------------------------------------------ letting a retailer be excluded (#112)
+
+
+def test_get_retailers_includes_excluded_and_listing_count(client):
+    product = q930h(client)
+    listing = next(x for x in product["listings"] if x["retailer_name"] == "Crowdshop")
+    rows = client.get("/api/retailers").json()
+    row = next(r for r in rows if r["id"] == listing["retailer_id"])
+    assert not row["excluded"]
+    assert row["listing_count"] >= 1
+
+
+def test_excluding_a_retailer_cascades_to_every_listing_across_products(client):
+    """issue #112 item 4: excluding also stops watching what is already tracked,
+    not just future adds - and it does so everywhere that retailer has a listing,
+    not just on the product it happened to be excluded from."""
+    product1 = q930h(client)
+    listing1 = next(x for x in product1["listings"] if x["retailer_name"] == "Crowdshop")
+    retailer_id = listing1["retailer_id"]
+
+    product2 = client.post(
+        "/api/products", json={"name": "LG C4 65", "model": "OLED65C4PSA"}
+    ).json()
+    listing2 = client.post(
+        f"/api/products/{product2['id']}/retailers",
+        json={"retailer": "Crowdshop", "advertised_price": 999},
+    ).json()
+    assert listing2["retailer_id"] == retailer_id, "same retailer, ensure_retailer dedup"
+
+    response = client.patch(f"/api/retailer/{retailer_id}", json={"excluded": True})
+    assert response.status_code == 200
+    assert response.json()["excluded"] is True
+
+    fresh1 = client.get(f"/api/retailers/{listing1['id']}").json()
+    fresh2 = client.get(f"/api/retailers/{listing2['id']}").json()
+    assert fresh1["active"] == 0
+    assert fresh2["active"] == 0
+
+
+def test_excluding_a_retailer_does_not_touch_another_retailers_listings(client):
+    """The control for the cascade test above: exclusion must be scoped to the
+    retailer actually named, not every listing on the product."""
+    product = q930h(client)
+    crowdshop = next(x for x in product["listings"] if x["retailer_name"] == "Crowdshop")
+    other = next(x for x in product["listings"] if x["retailer_name"] != "Crowdshop")
+
+    client.patch(f"/api/retailer/{crowdshop['retailer_id']}", json={"excluded": True})
+
+    fresh_other = client.get(f"/api/retailers/{other['id']}").json()
+    assert fresh_other["active"] == 1
+
+
+def test_unexcluding_a_retailer_does_not_reactivate_its_listings(client):
+    """issue #112's open question, resolved "stay off": un-excluding is not a
+    silent resume of watching - a listing switched off by exclusion stays off
+    until someone reactivates it by hand."""
+    product = q930h(client)
+    listing = next(x for x in product["listings"] if x["retailer_name"] == "Crowdshop")
+    retailer_id = listing["retailer_id"]
+
+    client.patch(f"/api/retailer/{retailer_id}", json={"excluded": True})
+    assert client.get(f"/api/retailers/{listing['id']}").json()["active"] == 0
+
+    response = client.patch(f"/api/retailer/{retailer_id}", json={"excluded": False})
+    assert response.json()["excluded"] is False
+    assert client.get(f"/api/retailers/{listing['id']}").json()["active"] == 0
+
+
+def test_patch_retailer_is_a_404_for_an_unknown_retailer(client):
+    response = client.patch("/api/retailer/999999", json={"excluded": True})
+    assert response.status_code == 404
+
+
+def test_patch_retailer_requires_the_excluded_field(client):
+    row = client.post("/api/retailers", json={"name": "Some Shop"}).json()
+    response = client.patch(f"/api/retailer/{row['id']}", json={})
+    assert response.status_code == 400
+
+
+def test_excluded_retailer_blocks_adding_a_listing_manually(client):
+    product = q930h(client)
+    row = client.post("/api/retailers", json={"name": "Bing Lee"}).json()
+    client.patch(f"/api/retailer/{row['id']}", json={"excluded": True})
+
+    response = client.post(
+        f"/api/products/{product['id']}/retailers",
+        json={"retailer": "Bing Lee", "advertised_price": 100},
+    )
+    assert response.status_code == 400
+    assert "excluded" in response.json()["detail"].lower()
+
+
+def test_excluded_retailer_blocks_adding_a_listing_from_a_url(client):
+    """Same refusal as the manual-add path, but through the retailer the URL's
+    own domain resolves to (app/url_intake.py's display_name_for_domain), not a
+    typed name - the two are different code paths into the same guard."""
+    product = q930h(client)
+    row = client.post("/api/retailers", json={"name": "Excludedshop"}).json()
+    client.patch(f"/api/retailer/{row['id']}", json={"excluded": True})
+
+    response = client.post(
+        f"/api/products/{product['id']}/retailers/from-url",
+        json={"url": "https://excludedshop.com.au/some-product"},
+    )
+    assert response.status_code == 400
+    assert "excluded" in response.json()["detail"].lower()
+
+
+def test_a_non_excluded_retailer_still_adds_a_listing_from_a_url(client):
+    """The control for the two refusal tests above: an ordinary, non-excluded
+    retailer must still work through both add paths."""
+    product = q930h(client)
+    response = client.post(
+        f"/api/products/{product['id']}/retailers/from-url",
+        json={"url": "https://freshshop.com.au/some-product"},
+    )
+    assert response.status_code == 201
+    assert response.json()["listing"]["retailer_name"] == "Freshshop"
+
+
+def test_retailers_page_lists_a_retailer_and_its_excluded_state(client):
+    row = client.post("/api/retailers", json={"name": "Bing Lee"}).json()
+    client.patch(f"/api/retailer/{row['id']}", json={"excluded": True})
+
+    body = client.get("/retailers").text
+    assert "Bing Lee" in body
+    assert "excluded" in body.lower()

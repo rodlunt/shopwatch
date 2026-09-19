@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Retailers | Shopwatch{% endblock %}
+
+{% block content %}
+<section class="panel" id="retailers-page">
+  <h3>Retailers</h3>
+  <p class="muted small" style="margin:0 0 12px;max-width:70ch">
+    Exclude a retailer to stop it appearing anywhere shopwatch offers one: the
+    research-retailer picker, historical-low search candidates, and the LLM's own
+    web search. Excluding one also switches off every listing already tracked under
+    it, across every product - un-excluding does not turn those back on, so
+    reactivate by hand if that is what you actually want.
+  </p>
+  <table class="plain" id="retailers-table">
+    <tr><th>Name</th><th>Homepage</th><th class="r">Active listings</th><th></th></tr>
+    {% for r in retailers %}
+    <tr data-retailer-row="{{ r.id }}"{% if r.excluded %} class="muted"{% endif %}>
+      <td>{{ r.name }}{% if r.excluded %} <span class="tag ruled-out">excluded</span>{% endif %}</td>
+      <td class="small">{% if r.homepage|safe_url %}<a href="{{ r.homepage|safe_url }}" target="_blank" rel="noopener noreferrer">{{ r.homepage }}</a>{% else %}-{% endif %}</td>
+      <td class="r num">{{ r.listing_count }}</td>
+      <td class="r">
+        <button type="button" class="small" data-retailer-toggle="{{ r.id }}" data-excluded="{{ 1 if r.excluded else 0 }}">
+          {{ 'Un-exclude' if r.excluded else 'Exclude' }}
+        </button>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No retailers known yet.</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

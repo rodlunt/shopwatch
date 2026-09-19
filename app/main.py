@@ -291,6 +291,30 @@ def group_page(request: Request, group_id: int, sort: str = "delivered") -> Any:
     )
 
 
+@app.get("/retailers", response_class=HTMLResponse)
+def retailers_page(request: Request) -> Any:
+    """Every known retailer with an excluded toggle (issue #112).
+
+    A real page, not a dialog like "Paste in research"/"Set up your LLM" in
+    base.html - this is a list with a per-row action, not a one-shot form, and the
+    board.html/product.html/group.html routes already establish "one route per page,
+    one template" as the pattern for anything bigger than a dialog's worth of content.
+    """
+    with session() as conn:
+        retailer_list = store.list_retailers(conn)
+    return templates.TemplateResponse(
+        request,
+        "retailers.html",
+        {
+            "retailers": retailer_list,
+            "version": ASSET_VERSION,
+            "app_version": __version__,
+            "git_sha": GIT_SHA,
+            "git_sha_is_deploy": GIT_SHA_IS_DEPLOY,
+        },
+    )
+
+
 # ------------------------------------------------------------------------------- API
 
 
@@ -631,6 +655,11 @@ def api_create_listing(product_id: int, payload: dict = Body(...)) -> Any:
         if store.get_product(conn, product_id) is None:
             raise HTTPException(404, "no such product")
         retailer = store.ensure_retailer(conn, name)
+        if retailer["excluded"]:
+            raise HTTPException(
+                400, f"{retailer['name']} is excluded - remove the exclusion first"
+                " (Retailers page) if you want to track it again."
+            )
         listing_id = store.create_listing(
             conn,
             {
@@ -672,7 +701,10 @@ def api_create_listing_from_url(product_id: int, payload: dict = Body(...)) -> A
     exactly as the ordinary "Add retailer" flow already does, and always creates the
     listing with the URL saved even if nothing further succeeds - "nowhere to put the
     URL at all" was the actual dead end this issue reported, so that much happens
-    unconditionally, before either enrichment path below is even attempted.
+    unconditionally, before either enrichment path below is even attempted. The one
+    exception (issue #112) is a resolved retailer that is excluded: refused outright,
+    before any listing is created - the whole point of exclusion is that this retailer
+    never gets tracked again, not merely never suggested.
 
     Then it tries to do better than a bare URL, in order:
       1. If the domain matches a registered scraper adapter, fetch it synchronously
@@ -708,6 +740,12 @@ def api_create_listing_from_url(product_id: int, payload: dict = Body(...)) -> A
         else:
             retailer = store.ensure_retailer(
                 conn, url_intake.display_name_for_domain(domain), homepage=f"https://{domain}"
+            )
+
+        if retailer["excluded"]:
+            raise HTTPException(
+                400, f"{retailer['name']} is excluded - remove the exclusion first"
+                " (Retailers page) if you want to track it again."
             )
 
         existing = store.find_listing(conn, product_id, retailer["id"], url)
@@ -1368,6 +1406,33 @@ def api_retailers() -> Any:
         row["never_scrapable"] = list(cls.never_scrapable) if cls else []
         row["mail_alerts_parsed"] = row["name"] in mail_parsed
     return rows
+
+
+@app.patch("/api/retailer/{retailer_id}")
+def api_update_retailer(retailer_id: int, payload: dict = Body(...)) -> Any:
+    """Toggle a retailer-level flag - currently only `excluded` (issue #112).
+
+    Deliberately `/api/retailer/{retailer_id}` (singular), not another route nested
+    under `/api/retailers/{id}` - that shape is already taken, and taken to mean
+    something else: `/api/retailers/{listing_id}` (plus its `/clear-override`,
+    `/verification`, `/ruled-out` siblings) is a LISTING id everywhere else in this
+    file. Reusing that shape for a retailer id would silently collide in meaning even
+    where the route strings themselves don't literally clash - a caller mixing up
+    which kind of id a bare `/api/retailers/{n}` PATCH means would fail confusingly,
+    not obviously. A distinct singular prefix makes the two impossible to conflate.
+
+    See store.set_retailer_excluded for what excluding actually does (cascading
+    deactivation of that retailer's listings) and what un-excluding deliberately does
+    not do (reactivate them).
+    """
+    if "excluded" not in payload:
+        raise HTTPException(400, "excluded is required")
+    with session() as conn:
+        row = store.set_retailer_excluded(conn, retailer_id, bool(payload["excluded"]))
+        if row is None:
+            raise HTTPException(404, "no such retailer")
+    row["excluded"] = bool(row["excluded"])
+    return row
 
 
 @app.get("/api/meta")

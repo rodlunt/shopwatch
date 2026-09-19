@@ -405,3 +405,77 @@ def test_report_historical_low_neutralises_a_javascript_url_in_other_retailers(c
     assert json.loads(job["historical_low_other_retailers"]) == [
         {"name": "Evil Co", "url": None},
     ]
+
+
+# ------------------------------------------------ excluded retailers dropped (#112)
+
+
+def test_report_historical_low_drops_a_candidate_matching_an_excluded_retailer(
+    conn, product_id
+):
+    """issue #112 item 6: the historical-low "other retailers found" list must never
+    surface an excluded retailer as a tick-to-add option - filtered here, the actual
+    boundary that writes to the database, not only trusted to the runner's prompt."""
+    bing_lee = store.ensure_retailer(conn, "Bing Lee")
+    store.set_retailer_excluded(conn, bing_lee["id"], True)
+    conn.commit()
+
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0,
+        other_retailers=[
+            {"name": "Bing Lee", "url": "https://www.binglee.com.au/x"},
+            {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+        ],
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert json.loads(job["historical_low_other_retailers"]) == [
+        {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+    ]
+
+
+def test_report_historical_low_matches_an_excluded_retailer_case_insensitively(
+    conn, product_id
+):
+    bing_lee = store.ensure_retailer(conn, "Bing Lee")
+    store.set_retailer_excluded(conn, bing_lee["id"], True)
+    conn.commit()
+
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0,
+        other_retailers=[{"name": "bing lee", "url": "https://www.binglee.com.au/x"}],
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["historical_low_other_retailers"] is None
+
+
+def test_report_historical_low_keeps_a_candidate_once_it_is_un_excluded(conn, product_id):
+    """Control for the drop test above: exclusion is live-checked against the
+    retailers table, not a one-off snapshot."""
+    bing_lee = store.ensure_retailer(conn, "Bing Lee")
+    store.set_retailer_excluded(conn, bing_lee["id"], True)
+    store.set_retailer_excluded(conn, bing_lee["id"], False)
+    conn.commit()
+
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0,
+        other_retailers=[{"name": "Bing Lee", "url": "https://www.binglee.com.au/x"}],
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert json.loads(job["historical_low_other_retailers"]) == [
+        {"name": "Bing Lee", "url": "https://www.binglee.com.au/x"},
+    ]
