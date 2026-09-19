@@ -1042,3 +1042,22 @@ def test_the_retailers_pages_own_breadcrumb(client):
     body = client.get("/retailers").text
     assert 'aria-label="Breadcrumb"' in body
     assert '<span aria-current="page">Retailers</span>' in body
+
+
+# -------------------------------------------------------------------- card-margin sweep
+
+
+def test_a_groups_notes_are_indented_like_the_rest_of_the_card(client):
+    """.muted is a bare colour utility with no spacing of its own, and
+    <section class="product"> carries none either - found via a full sweep for this
+    exact bug class (already hit twice elsewhere in this same card system): this
+    paragraph rendered flush against the card's edge whenever a group had notes."""
+    a = _new_product(client, "RTX 4070", "RTX-4070-A")
+    group = client.post(
+        f"/api/products/{a['id']}/group",
+        json={"name": "GPU search", "notes": "Whichever hits $700 first."},
+    ).json()
+
+    body = client.get(f"/groups/{group['group_id']}").text
+    assert 'style="margin:0 20px 12px"' in body
+    assert "Whichever hits $700 first." in body

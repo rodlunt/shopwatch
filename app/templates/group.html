@@ -16,7 +16,13 @@
       <button id="btn-delete-group" data-group="{{ group.id }}" class="danger">Delete group</button>
     </div>
   </div>
-  {% if group.notes %}<p class="muted">{{ group.notes }}</p>{% endif %}
+  {# margin, not padding: .muted is a bare colour utility with no spacing of its own
+     (style.css: `.muted { color: var(--muted); }`), and <section class="product">
+     itself carries none either - every direct child self-insets. Found during a full
+     sweep for this exact bug class (already hit twice for other elements in this
+     same card system): this paragraph sat flush against the card's edge whenever a
+     group actually had notes set. #}
+  {% if group.notes %}<p class="muted" style="margin:0 20px 12px">{{ group.notes }}</p>{% endif %}
   {% if group.archived %}
     <p class="verdict bought">Resolved - a purchase in this group archived the rest.</p>
   {% endif %}
