@@ -2,6 +2,10 @@
 {% import "_product.html" as c with context %}
 {% block title %}{{ product.name }} | Shopwatch{% endblock %}
 
+{% block breadcrumbs %}
+{{ c.breadcrumbs(product.name, crumbs=[{'label': group.name, 'href': '/groups/' ~ group.id}] if group else []) }}
+{% endblock %}
+
 {% block content %}
 {% call c.card(product, linked=false) %}
   <button id="btn-edit-product">Edit</button>

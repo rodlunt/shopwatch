@@ -2,6 +2,8 @@
 {% import "_product.html" as c with context %}
 {% block title %}{{ group.name }} | Shopwatch{% endblock %}
 
+{% block breadcrumbs %}{{ c.breadcrumbs(group.name) }}{% endblock %}
+
 {% block content %}
 <section class="product" id="group-{{ group.id }}">
   <div class="product-head">

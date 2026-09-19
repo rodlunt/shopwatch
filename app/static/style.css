@@ -163,6 +163,19 @@ main {
   flex: 1 0 auto;
 }
 
+/* Same width/gutter as main, so the trail lines up with the content below it rather
+ * than reading as a second, misaligned header. Sits outside <main> (base.html) since
+ * it is navigation, not page content, but must still match its measure. */
+.breadcrumbs {
+  width: 100%; max-width: 1180px; margin: 0 auto; padding: 12px 24px 0;
+  font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+}
+.breadcrumbs a { color: var(--muted); text-decoration: none; }
+.breadcrumbs a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.breadcrumbs .sep { color: var(--rule); }
+.breadcrumbs [aria-current="page"] { color: var(--ink-soft); }
+
 footer.site {
   display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap;
   padding: 16px 24px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 12.5px;
@@ -198,7 +211,15 @@ footer.site .build { font-family: var(--mono); }
   margin-bottom: var(--gap); overflow: hidden;
 }
 
-.product-head { padding: 18px 20px 0; }
+/* Bottom padding matters here specifically because of what can follow with nothing in
+ * between: the ruler macro (_product.html) renders literally nothing when a group has
+ * no priced candidates yet ({% if s %}, no else), so on that page the header's own
+ * button row is the direct previous sibling of the candidate panel below it with no
+ * guaranteed gap otherwise - confirmed live, the "Delete group" button (group.html)
+ * sat with its bottom edge exactly touching the panel's top edge, 0px apart. The
+ * product page always has an unconditional verdict paragraph in between (its own
+ * padding already covers this), so this is a no-op there, not a double-up. */
+.product-head { padding: 18px 20px 12px; }
 .product-head .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .product-head h2 {
   margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.25;

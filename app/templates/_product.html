@@ -1,5 +1,22 @@
 {# The product card: answer, then scale, then contenders, then forensics on demand. #}
 
+{# Breadcrumbs: Home is always first and always a link, the current page is always
+   last and never one - matches how every other trail like this works, so nobody has
+   to learn a house convention for it. `crumbs` is a list of {label, href} dicts for
+   whatever sits between the two (e.g. a product's own group), href omitted or falsy
+   for a non-link crumb. #}
+{% macro breadcrumbs(current, crumbs=[]) %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="/">Home</a>
+  {% for crumb in crumbs %}
+    <span class="sep" aria-hidden="true">/</span>
+    {% if crumb.href %}<a href="{{ crumb.href }}">{{ crumb.label }}</a>{% else %}<span>{{ crumb.label }}</span>{% endif %}
+  {% endfor %}
+  <span class="sep" aria-hidden="true">/</span>
+  <span aria-current="page">{{ current }}</span>
+</nav>
+{% endmacro %}
+
 {# The axis. Thresholds and what each stretch MEANS sit above the line, contenders
    below it, so neither ever sits on the line or on each other. Positions are rendered
    server-side for the full domain and recomputed from data-value when zoomed, so the
