@@ -1006,3 +1006,39 @@ def test_retailers_page_lists_a_retailer_and_its_excluded_state(client):
     body = client.get("/retailers").text
     assert "Bing Lee" in body
     assert "excluded" in body.lower()
+
+
+# --------------------------------------------------------------------------- breadcrumbs
+
+
+def test_an_ungrouped_products_breadcrumb_has_no_group_crumb(client):
+    product = q930h(client)
+    body = client.get(f"/products/{product['id']}").text
+    assert 'aria-label="Breadcrumb"' in body
+    assert "Samsung Q-Series 9.1.4ch Soundbar" in body
+    # Only "Home" before the current-page crumb - no group in between.
+    assert body.count('<a href="/"') >= 1
+
+
+def test_a_grouped_products_breadcrumb_names_its_group(client):
+    a = _new_product(client, "RTX 4070", "RTX-4070-A")
+    group = client.post(f"/api/products/{a['id']}/group", json={"name": "GPU search"}).json()
+
+    body = client.get(f"/products/{a['id']}").text
+    assert f'href="/groups/{group["group_id"]}"' in body
+    assert "GPU search" in body
+
+
+def test_the_group_pages_own_breadcrumb_names_the_group(client):
+    a = _new_product(client, "RTX 4070", "RTX-4070-A")
+    group = client.post(f"/api/products/{a['id']}/group", json={"name": "GPU search"}).json()
+
+    body = client.get(f"/groups/{group['group_id']}").text
+    assert 'aria-label="Breadcrumb"' in body
+    assert '<span aria-current="page">GPU search</span>' in body
+
+
+def test_the_retailers_pages_own_breadcrumb(client):
+    body = client.get("/retailers").text
+    assert 'aria-label="Breadcrumb"' in body
+    assert '<span aria-current="page">Retailers</span>' in body

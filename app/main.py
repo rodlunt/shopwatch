@@ -237,6 +237,9 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
         product = store.product_view(conn, product_id, sort=sort)
         if product is None:
             raise HTTPException(404, "no such product")
+        # For the breadcrumb only - product_view itself never joins the group's own
+        # name in, only group_id.
+        group = store.get_group(conn, product["group_id"]) if product["group_id"] else None
         retailer_list = store.list_retailers(conn)
         history = store.price_history(conn, product_id, limit=200)
         rules = [dict(r) for r in conn.execute(
@@ -247,6 +250,7 @@ def product_page(request: Request, product_id: int, sort: str = "delivered") -> 
         "product.html",
         {
             "product": product,
+            "group": dict(group) if group else None,
             "retailers": retailer_list,
             "history": history,
             "rules": rules,

@@ -1,5 +1,8 @@
 {% extends "base.html" %}
+{% import "_product.html" as c with context %}
 {% block title %}Retailers | Shopwatch{% endblock %}
+
+{% block breadcrumbs %}{{ c.breadcrumbs("Retailers") }}{% endblock %}
 
 {% block content %}
 <section class="panel" id="retailers-page">
