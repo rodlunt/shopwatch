@@ -501,6 +501,40 @@ fewer than 2 real listings, and when it does, the response is deliberately label
 "estimate, from N listings" rather than reusing `HISTORICAL LOW TERRITORY` or
 `EXCELLENT` - those are earned through real tracking over time.
 
+## Researching a historical low
+
+Shopwatch only ever knows what it has observed since a product was added - `lowest_known_price`
+only ever moves downward, and only from a confirmed delivered price found going forward
+(`store.maybe_lower_known_low`). There was no way to ask "has this ever been cheaper?" for
+something that already existed before tracking started. The product page's **"Research
+historical low"** button asks the same research-job pipeline described above a different
+question to close that gap.
+
+**Same job table, a second `kind`.** `research_jobs.kind` is `"price"` (the default, and the
+only kind before this) or `"historical_low"`. A price job asks "what's it selling for today",
+once per selected retailer. A historical-low job asks "has this ever been cheaper", once for the
+whole product - no retailer selection, no `research_job_results` rows. `POST /api/research-jobs`
+takes an optional `"kind"` in its body; `retailer_ids` is required for `"price"` and ignored for
+`"historical_low"`. Both kinds share the same one-active-job-per-product guard, since both spend
+the same shared, credentialed CLI quota.
+
+**The host runner asks a different question, not a different pipeline.** `deploy/research-runner.py`
+still claims the job, still runs the headless `claude` CLI with the same `WebSearch`/`WebFetch`
+tools, still reports back and completes it - `process_historical_low_job` is one call instead of a
+per-retailer loop, and the prompt asks the model to look specifically for AU price-history
+trackers, deal-forum threads and cached listings, not today's advertised price.
+
+**The finding never lands through `/api/import`, and never touches the product.** A price job's
+findings become real listings through the ordinary import path; a historical-low job's finding is
+a single best-effort guess, reported via `POST /api/research-jobs/{id}/historical-low` and stored
+only on the job row (`historical_low_price` / `_date` / `_retailer` / `_notes` / `_confidence`).
+There is no code path from those columns to `products.lowest_known_price` - the product page shows
+the finding labelled "UNCONFIRMED ESTIMATE - not a real listing" (never `HISTORICAL LOW TERRITORY`
+or any other earned classification, for the same reason the price-suggestion guard above exists),
+and "Use this" only prefills the ordinary product-edit dialog's `lowest_known_*` fields. Saving it
+still goes through `PATCH /api/products/{id}`, exactly like typing the numbers in by hand - a
+research pass is a source for that decision, never a shortcut around it.
+
 ## Suggesting a model number ("Set up your LLM")
 
 **TL;DR - 5 minutes, no coding:**
@@ -826,10 +860,11 @@ what would fire without sending anything.
 | `GET` | `/api/products/check-model?model=...` | deterministic duplicate check for the wizard |
 | `GET` | `/api/products/{id}/price-suggestion` | a same-day trigger-price estimate from real listings, or `null` below 2 |
 | `POST` | `/api/retailers` | `{"name": "..."}`; ensures a retailer exists with no listing attached |
-| `POST` | `/api/research-jobs` | `{"product_id": 1, "retailer_ids": [...]}`; 202, 409 if one is already active for this product |
-| `GET` | `/api/research-jobs/{id}` | poll a job's status and per-retailer results |
+| `POST` | `/api/research-jobs` | `{"product_id": 1, "retailer_ids": [...], "kind": "price"\|"historical_low"}`; `retailer_ids` required for `price`, ignored for `historical_low`; 202, 409 if one is already active for this product |
+| `GET` | `/api/research-jobs/{id}` | poll a job's status; per-retailer results for `price`, `historical_low_*` fields for `historical_low` |
 | `POST` | `/api/research-jobs/claim` | host-runner only: claims the oldest QUEUED job |
-| `POST` | `/api/research-jobs/{id}/results` | host-runner only: one retailer's outcome |
+| `POST` | `/api/research-jobs/{id}/results` | host-runner only: one retailer's outcome (`price` jobs) |
+| `POST` | `/api/research-jobs/{id}/historical-low` | host-runner only: the job's proposed finding (`historical_low` jobs) - never written to the product |
 | `POST` | `/api/research-jobs/{id}/complete` | host-runner only: marks DONE or FAILED |
 | `GET` | `/api/retailers/{listing_id}` | one enriched listing |
 | `PATCH` | `/api/retailers/{listing_id}` | inline edit; **locks the field as MANUAL** |

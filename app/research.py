@@ -8,9 +8,16 @@ back, exactly the way `app/mailwatch.py` already does for retailer marketing ema
 token never enters this container; this module only ever talks to sqlite and answers
 HTTP calls from that host script.
 
-Whatever a job finds still lands through the ordinary import path (`app/ingest.py`),
-under the ordinary IMPORTED provenance state - a research job is not a second, parallel
-way for prices to enter the database, only a new way to trigger `POST /api/import`.
+Whatever a `kind="price"` job finds still lands through the ordinary import path
+(`app/ingest.py`), under the ordinary IMPORTED provenance state - a research job is not
+a second, parallel way for prices to enter the database, only a new way to trigger
+`POST /api/import`.
+
+A `kind="historical_low"` job (issue #93) asks a different question - "has this ever
+been cheaper, before tracking started" - and is answered once per job rather than once
+per retailer. Its finding is never imported and never written to a product directly: it
+sits on the job row (`historical_low_*`) purely as a suggestion for a human to copy into
+the ordinary product-edit form, or discard.
 """
 
 from __future__ import annotations
@@ -22,6 +29,13 @@ from .db import utcnow
 
 STATUSES = ("QUEUED", "RUNNING", "DONE", "FAILED")
 RESULT_STATUSES = ("PENDING", "FOUND", "NEEDS_MANUAL_CHECK", "BLOCKED", "TIMED_OUT")
+
+#: price: the original question, "what's this retailer selling it for today", answered
+#: once per selected retailer via research_job_results. historical_low: "has this ever
+#: been cheaper", a single whole-product question with no retailer selection, answered
+#: via the historical_low_* columns on the job itself - see migrations/0010.
+KINDS = ("price", "historical_low")
+CONFIDENCES = ("LOW", "MEDIUM", "HIGH")
 
 #: Hard backstop for a job that never reports back (host script crashed, opti rebooted
 #: mid-run, network partition). Matches the per-job ceiling the host-level script is
@@ -74,39 +88,55 @@ def reconcile_stale(conn: sqlite3.Connection) -> list[int]:
 
 
 def create_job(
-    conn: sqlite3.Connection, product_id: int, retailer_ids: list[int]
+    conn: sqlite3.Connection, product_id: int, retailer_ids: list[int], kind: str = "price"
 ) -> int:
-    """Queue a job for one product across a fixed set of retailers.
+    """Queue a job for one product.
 
-    Default-deny by construction: a retailer id that is not already in the `retailers`
-    table is silently dropped rather than passed through, so this can only ever ask
-    about a retailer shopwatch already knows, never wherever a typo or a scraped page
-    might lead the research pass.
+    For kind="price" (the default, and the only kind this accepted before issue #93):
+    a fixed set of retailers, one result row each. Default-deny by construction - a
+    retailer id that is not already in the `retailers` table is silently dropped
+    rather than passed through, so this can only ever ask about a retailer shopwatch
+    already knows, never wherever a typo or a scraped page might lead the research
+    pass.
+
+    For kind="historical_low": no retailer selection at all. "Has this ever been
+    cheaper" is one question about the product as a whole, not one answer per
+    retailer, so retailer_ids is ignored and no research_job_results rows are created -
+    the finding lands on the job itself (report_historical_low) for a human to review.
 
     Refuses outright for an archived product - "give up on this" (or a group purchase
     that archived every other candidate) means stop watching, and a stray research job
     against something nobody is hunting any more is exactly the wasted spend that
     guarantee exists to prevent.
+
+    At most one active (QUEUED or RUNNING) job per product regardless of kind: the
+    host runner processes one job at a time per product anyway, and a price job and a
+    historical-low job both spend the same shared, credentialed CLI quota.
     """
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}")
     row = conn.execute("SELECT archived FROM products WHERE id = ?", (product_id,)).fetchone()
     if row is not None and row["archived"]:
         raise ValueError("cannot start research on an archived product")
-    if not retailer_ids:
-        raise ValueError("at least one retailer is required")
-    placeholders = ",".join("?" * len(retailer_ids))
-    known_ids = [
-        r["id"]
-        for r in conn.execute(
-            f"SELECT id FROM retailers WHERE id IN ({placeholders})", retailer_ids
-        )
-    ]
-    if not known_ids:
-        raise ValueError("no known retailers in the request")
+
+    known_ids: list[int] = []
+    if kind == "price":
+        if not retailer_ids:
+            raise ValueError("at least one retailer is required")
+        placeholders = ",".join("?" * len(retailer_ids))
+        known_ids = [
+            r["id"]
+            for r in conn.execute(
+                f"SELECT id FROM retailers WHERE id IN ({placeholders})", retailer_ids
+            )
+        ]
+        if not known_ids:
+            raise ValueError("no known retailers in the request")
 
     try:
         cur = conn.execute(
-            "INSERT INTO research_jobs (product_id, status) VALUES (?, 'QUEUED')",
-            (product_id,),
+            "INSERT INTO research_jobs (product_id, status, kind) VALUES (?, 'QUEUED', ?)",
+            (product_id, kind),
         )
     except sqlite3.IntegrityError as exc:
         existing = conn.execute(
@@ -195,6 +225,34 @@ def report_result(
         "UPDATE research_job_results SET status = ?, listing_id = ?, note = ?,"
         " updated_at = ? WHERE job_id = ? AND retailer_id = ?",
         (status, listing_id, note, utcnow(), job_id, retailer_id),
+    )
+
+
+def report_historical_low(
+    conn: sqlite3.Connection,
+    job_id: int,
+    price: float | None = None,
+    date: str | None = None,
+    retailer: str | None = None,
+    notes: str | None = None,
+    confidence: str | None = None,
+) -> None:
+    """Record a kind="historical_low" job's finding on the job itself.
+
+    Deliberately does NOT touch products.lowest_known_price or any other product
+    column - see migrations/0010 and app/main.py's product-edit endpoint. This is
+    called once by the host runner (deploy/research-runner.py) before it marks the
+    job DONE, whether or not it actually found anything: price=None with a note is a
+    legitimate, honest outcome ("could not find a confident historical low"), not an
+    error.
+    """
+    if confidence is not None and confidence not in CONFIDENCES:
+        raise ValueError(f"confidence must be one of {CONFIDENCES}")
+    conn.execute(
+        "UPDATE research_jobs SET historical_low_price = ?, historical_low_date = ?,"
+        " historical_low_retailer = ?, historical_low_notes = ?,"
+        " historical_low_confidence = ? WHERE id = ?",
+        (price, date, retailer, notes, confidence, job_id),
     )
 
 
