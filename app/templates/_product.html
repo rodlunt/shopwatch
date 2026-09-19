@@ -352,13 +352,18 @@
      inside the Edit dialog - the axis's own "hist low" mark had a number with no way
      to see when or where it was seen without opening Edit. #}
   {% if product.lowest_known_price and (product.lowest_known_date or product.lowest_known_retailer or product.lowest_known_notes) %}
-  <p class="small muted" style="margin:6px 0 0">
+  {# margin, not padding: matches .verdict/.lead's own 20px horizontal inset, since
+     <section class="product"> itself carries no padding of its own - every direct
+     child is individually responsible for its own inset. Missing this the first time
+     round left this whole block sitting flush against the card's edge instead of
+     lined up with the verdict/axis text above it. #}
+  <p class="small muted" style="margin:6px 20px 0">
     Historical low {{ product.lowest_known_price|money }}
     {%- if product.lowest_known_retailer %} from {{ product.lowest_known_retailer }}{% endif %}
     {%- if product.lowest_known_date %}, {{ product.lowest_known_date|shortdate }}{% endif -%}.
   </p>
   {% if product.lowest_known_notes %}
-  <details class="more">
+  <details class="more" style="margin:0 20px">
     <summary>Historical low notes</summary>
     <p class="small muted" style="max-width:66ch;line-height:1.5">{{ product.lowest_known_notes }}</p>
   </details>
