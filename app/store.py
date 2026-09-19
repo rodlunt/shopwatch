@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import zlib
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any
@@ -31,6 +32,15 @@ VERDICTS = ["BUY", "MAYBE", "IGNORE"]
 #: PURCHASED - bought; alerts off unless a price-protection window is open
 #: PARKED    - set aside without deleting anything
 STATUSES = ["ACTIVE", "PURCHASED", "PARKED"]
+
+#: Matches style.css's --candidate-1..8 custom properties exactly, in order. Only the
+#: count matters here (for the modulo cycle); the actual colour values live in CSS,
+#: including their dark-mode variants, so this list is never rendered directly.
+#: Shared by two features: a watch group's per-model identity colour (group_view,
+#: assigned by list position) and, since issue #100, a single product's per-retailer
+#: identity colour (retailer_color, hashed from the retailer's id). The two never
+#: appear on the same page, so reusing one palette is not a collision risk.
+CANDIDATE_PALETTE = ["blue", "amber", "green", "violet", "orange", "teal", "pink", "taupe"]
 
 
 def normalise_model(model: str | None) -> str:
@@ -82,6 +92,25 @@ def ensure_retailer(conn: sqlite3.Connection, name: str, **extra: Any) -> sqlite
 
 def list_retailers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(r) for r in conn.execute("SELECT * FROM retailers ORDER BY name")]
+
+
+def retailer_color(retailer_id: int | None) -> str | None:
+    """A stable colour for a retailer (issue #100), so its dot on a product's price
+    axis and its row in the listing list below are recognisably the same retailer at
+    a glance, without hovering or reading names.
+
+    Hashed from the retailer's own id, not assigned by position in any one product's
+    listing set - deliberately, so the same retailer keeps the same colour on every
+    product it appears on, not just within one page. crc32 rather than the builtin
+    hash(): PYTHONHASHSEED randomises str/int hashing per process by default, which
+    would reshuffle every retailer's colour on each server restart. No schema change:
+    reuses group_view's existing --candidate-1..8 palette (already colourblind-
+    considered and dark-mode aware) rather than a second one just for this.
+    """
+    if retailer_id is None:
+        return None
+    index = zlib.crc32(str(retailer_id).encode()) % len(CANDIDATE_PALETTE)
+    return f"var(--candidate-{index + 1})"
 
 
 # --------------------------------------------------------------------------- products
@@ -256,6 +285,11 @@ def product_view(
     product["specs"] = json.loads(product.pop("specs_json") or "{}")
     product["components"] = json.loads(product.pop("components_json") or "{}")
     listings = listings_for_product(conn, product, sort=sort)
+    # Set once here so the axis (via threshold_scale, which copies it onto each point
+    # below) and the listing rows read the same value off the same dict - never
+    # derived twice, which is how the two views could quietly drift apart.
+    for listing in listings:
+        listing["retailer_color"] = retailer_color(listing.get("retailer_id"))
 
     best = pricing.best_listing(listings, load_config().unresolved_freight_penalty)
     product["best_listing"] = best
@@ -420,11 +454,6 @@ STATUS_ORDER = {"ACTIVE": 0, "PURCHASED": 1, "PARKED": 2}
 # member keeps its own.
 
 GROUP_FIELDS = ["name", "notes"]
-
-#: Matches style.css's --candidate-1..8 custom properties exactly, in order. Only the
-#: count matters here (for the modulo cycle); the actual colour values live in CSS,
-#: including their dark-mode variants, so this list is never rendered directly.
-CANDIDATE_PALETTE = ["blue", "amber", "green", "violet", "orange", "teal", "pink", "taupe"]
 
 
 def create_group(conn: sqlite3.Connection, data: Mapping[str, Any]) -> int:

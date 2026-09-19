@@ -319,9 +319,18 @@ footer.site .build { font-family: var(--mono); }
 /* --- contenders, below the line ------------------------------------------ */
 
 .axis-point { position: absolute; top: 68px; transform: translateX(-50%); }
+/* --retailer-color (issue #100): a stable per-retailer hue, set inline by
+ * store.retailer_color() and shared with .retailer-swatch below so a dot here and
+ * its row in the listing list read as the same retailer without hovering or reading
+ * names. Falls back to the old flat --ink-soft when unset (a cluster point, or any
+ * page that never sets it), so nothing regresses where a retailer colour makes no
+ * sense. This is a second, lower-priority layer under is-best/at-act/at-close/
+ * is-cluster/is-ruled-out below, all of which still win outright where they apply -
+ * colour-means-act keeps beating colour-means-which-retailer, exactly as the issue
+ * asked: a second dimension, not a replacement for the existing ones. */
 .axis-point i {
   display: block; width: 9px; height: 9px; margin: -4px auto 0;
-  border-radius: 50%; background: var(--ink-soft);
+  border-radius: 50%; background: var(--retailer-color, var(--ink-soft));
   border: 2px solid var(--paper);
   box-sizing: content-box;
 }
@@ -352,7 +361,11 @@ footer.site .build { font-family: var(--mono); }
   background: var(--rule); transform: translateX(-.5px);
 }
 
-.axis-point.is-open i { background: var(--paper); border-color: var(--muted); box-shadow: 0 0 0 1px var(--muted); }
+.axis-point.is-open i {
+  background: var(--paper);
+  border-color: var(--retailer-color, var(--muted));
+  box-shadow: 0 0 0 1px var(--retailer-color, var(--muted));
+}
 .axis-point.is-best i { background: var(--ink); width: 11px; height: 11px; margin-top: -5px; }
 .axis-point.is-best .axis-label b { color: var(--ink); font-size: 13px; }
 
@@ -495,6 +508,22 @@ footer.site .build { font-family: var(--mono); }
  * promo that has now ended is a real reason to go back and check it. */
 .listing .who small .promo-lapsed { color: var(--fault); font-weight: 600; }
 
+/* The row half of issue #100: same dot, same --retailer-color, same filled/hollow
+ * rule as .axis-point above, so a retailer's colour on the axis and here read as one
+ * fact shown twice rather than two things that happen to match. Sized and inset to
+ * match .axis-point i exactly rather than approximately. */
+.retailer-swatch {
+  display: inline-block; width: 9px; height: 9px; margin: 0 6px -1px 0;
+  border-radius: 50%; background: var(--retailer-color, var(--ink-soft));
+  border: 2px solid var(--paper);
+  box-sizing: content-box;
+}
+.retailer-swatch.is-open {
+  background: var(--paper);
+  border-color: var(--retailer-color, var(--muted));
+  box-shadow: 0 0 0 1px var(--retailer-color, var(--muted));
+}
+
 .listing .price { font-family: var(--mono); font-size: 16px; font-weight: 600; text-align: right; }
 .listing .price small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); font-family: var(--sans); }
 .listing.is-act .price { color: var(--act); }
@@ -516,6 +545,9 @@ footer.site .build { font-family: var(--mono); }
  * so the decision can be revisited, not so it can be re-read every visit. */
 .listing.is-ruled-out .price { color: var(--muted); text-decoration: line-through; }
 .listing.is-ruled-out .who { color: var(--ink-soft); }
+/* Same .55 as .axis-point.is-ruled-out: a ruled-out listing's identity colour steps
+ * back along with the rest of the row instead of still popping out. */
+.listing.is-ruled-out .retailer-swatch { opacity: .55; }
 
 .ruled-out-control { padding: 10px 0 2px; border-top: 1px solid var(--rule-soft); margin-top: 10px; }
 .ruled-out-why { margin: 0 0 6px; font-size: 13px; color: var(--ink-soft); max-width: 70ch; }
