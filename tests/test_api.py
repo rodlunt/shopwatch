@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from app import provenance, store
 from app.db import connect
 
@@ -694,6 +696,35 @@ def test_report_historical_low_never_writes_the_product(client):
 def test_report_historical_low_is_a_404_for_an_unknown_job(client):
     response = client.post("/api/research-jobs/999999/historical-low", json={"price": 1})
     assert response.status_code == 404
+
+
+def test_report_historical_low_round_trips_other_retailers(client):
+    """issue #98: retailers noticed along the way survive through the API as a raw
+    JSON string on the job, same convention as a retailer-discovery job's result."""
+    pid = q930h(client)["id"]
+    created = client.post(
+        "/api/research-jobs", json={"product_id": pid, "kind": "historical_low"}
+    ).json()
+
+    reported = client.post(
+        f"/api/research-jobs/{created['id']}/historical-low",
+        json={
+            "price": 799.0, "confidence": "LOW",
+            "other_retailers": [
+                {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+                {"name": "Evil Co", "url": "javascript:alert(1)"},
+            ],
+        },
+    ).json()
+
+    other = json.loads(reported["historical_low_other_retailers"])
+    assert other == [
+        {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+        {"name": "Evil Co", "url": None},
+    ]
+
+    fetched = client.get(f"/api/research-jobs/{created['id']}").json()
+    assert json.loads(fetched["historical_low_other_retailers"]) == other
 
 
 def test_create_research_job_rejects_an_unknown_kind(client):

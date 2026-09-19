@@ -250,6 +250,7 @@ def test_parse_historical_low_reply_with_a_confident_finding():
         "found": True, "price": 899, "date": "2025-11-20",
         "retailer": "Appliances Online", "confidence": "MEDIUM",
         "reason": "Black Friday 2025 price-history thread",
+        "other_retailers": [],
     }
 
 
@@ -352,6 +353,133 @@ def test_research_historical_low_returns_the_parsed_finding_on_success(monkeypat
     result = research_runner.research_historical_low("http://x", "claude", "Some Product", "SKU-1")
     assert result["found"] is True
     assert result["price"] == 750
+
+
+# ----------------------------------------- other retailers noticed along the way (#98)
+
+def test_parse_historical_low_reply_captures_other_retailers():
+    reply = (
+        '{"found": true, "price": 899, "reason": "ok", "other_retailers": '
+        '[{"name": "Centre Com", "url": "https://www.centrecom.com.au/x"}, '
+        '{"name": "Mwave", "url": null}]}'
+    )
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["other_retailers"] == [
+        {"name": "Centre Com", "url": "https://www.centrecom.com.au/x"},
+        {"name": "Mwave", "url": None},
+    ]
+
+
+def test_parse_historical_low_reply_reports_other_retailers_even_with_no_price():
+    """A model can honestly say "no confident historical low, but I did see these
+    retailers selling it" in the same pass - the two findings are independent."""
+    reply = (
+        '{"found": false, "reason": "no trustworthy source", '
+        '"other_retailers": [{"name": "Mwave", "url": null}]}'
+    )
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["found"] is False
+    assert result["other_retailers"] == [{"name": "Mwave", "url": None}]
+
+
+def test_parse_historical_low_reply_drops_a_malformed_other_retailer_entry():
+    """A missing/blank name, or a non-object entry, is dropped rather than failing
+    the whole reply - this rides along as incidental information, not the thing
+    being validated for correctness the way price/found are."""
+    reply = (
+        '{"found": true, "price": 100, "reason": "ok", "other_retailers": '
+        '[{"name": "  "}, {"url": "https://x.com.au"}, "not an object", '
+        '{"name": "Good Guys", "url": "  "}]}'
+    )
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["other_retailers"] == [{"name": "Good Guys", "url": None}]
+
+
+def test_parse_historical_low_reply_ignores_a_non_list_other_retailers():
+    reply = '{"found": true, "price": 100, "reason": "ok", "other_retailers": "Centre Com"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["other_retailers"] == []
+
+
+def test_parse_historical_low_reply_caps_other_retailers():
+    many = ", ".join(f'{{"name": "Retailer {i}"}}' for i in range(20))
+    reply = f'{{"found": true, "price": 100, "reason": "ok", "other_retailers": [{many}]}}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert len(result["other_retailers"]) == research_runner.FIRECRAWL_MAX_CANDIDATES
+
+
+def test_parse_historical_low_reply_defaults_other_retailers_to_empty_list_when_absent():
+    result = research_runner.parse_historical_low_reply(
+        '{"found": true, "price": 100, "reason": "ok"}'
+    )
+    assert result["other_retailers"] == []
+
+
+def test_parse_historical_low_reply_neutralises_a_javascript_url():
+    """candidate.url ultimately came out of the model's own reply to a "search the
+    web" prompt - untrusted content relayed through the model, not something safe to
+    store as-is. A non-http(s) scheme must never survive into the stored finding,
+    since the product page renders this value straight into an anchor's href."""
+    reply = (
+        '{"found": true, "price": 100, "reason": "ok", "other_retailers": '
+        '[{"name": "Evil Co", "url": "javascript:alert(1)"}, '
+        '{"name": "Good Co", "url": "https://good.com.au/x"}]}'
+    )
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["other_retailers"] == [
+        {"name": "Evil Co", "url": None},
+        {"name": "Good Co", "url": "https://good.com.au/x"},
+    ]
+
+
+def test_safe_http_url_rejects_non_http_schemes():
+    assert research_runner._safe_http_url("javascript:alert(1)") is None
+    assert research_runner._safe_http_url("data:text/html,<script>1</script>") is None
+    assert research_runner._safe_http_url(None) is None
+    assert research_runner._safe_http_url("https://good.com.au/x") == "https://good.com.au/x"
+
+
+def test_process_historical_low_job_forwards_other_retailers(monkeypatch):
+    """process_historical_low_job must pass the parsed other_retailers list through
+    to POST .../historical-low untouched, the same "no third code path" discipline
+    the rest of this feature follows."""
+
+    class FakeResponse:
+        def json(self):
+            return self._data
+
+    def fake_get(url, timeout=None):
+        resp = FakeResponse()
+        resp._data = {"name": "Some Product", "model": "SKU-1"}
+        return resp
+
+    posted = []
+
+    def fake_post(url, json=None, timeout=None):
+        posted.append((url, json))
+        resp = FakeResponse()
+        resp._data = {}
+        return resp
+
+    def fake_research_historical_low(base_url, claude_bin, product_name, model):
+        return {
+            "found": True, "price": 899, "date": "2025-11-20", "retailer": "Bing Lee",
+            "confidence": "MEDIUM", "reason": "ok",
+            "other_retailers": [{"name": "Centre Com", "url": "https://x.com.au"}],
+        }
+
+    monkeypatch.setattr(research_runner, "research_historical_low", fake_research_historical_low)
+    monkeypatch.setattr(research_runner.requests, "get", fake_get)
+    monkeypatch.setattr(research_runner.requests, "post", fake_post)
+
+    job = {"id": 42, "product_id": 1}
+    research_runner.process_historical_low_job("http://x", "claude", job)
+
+    hist_low_calls = [p for p in posted if p[0] == "http://x/api/research-jobs/42/historical-low"]
+    assert len(hist_low_calls) == 1
+    assert hist_low_calls[0][1]["other_retailers"] == [
+        {"name": "Centre Com", "url": "https://x.com.au"}
+    ]
 
 
 def test_the_claude_call_grants_web_search_and_fetch(monkeypatch):

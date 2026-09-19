@@ -33,7 +33,10 @@ Also claims a second kind of research_jobs row (issue #93): kind="historical_low
 "has this ever been cheaper" instead of "what's it selling for today", once per job
 rather than once per retailer (process_historical_low_job). The finding is reported via
 POST .../historical-low, never through /api/import - it is a best-effort estimate for a
-human to confirm or discard on the product page, not a confirmed listing.
+human to confirm or discard on the product page, not a confirmed listing. Since that
+same search inevitably turns up other retailers currently selling the product, issue
+#98 has it also report those (best-effort, name + URL) on the same call, for the
+product page to offer as tickable "add as a listing" candidates.
 """
 
 from __future__ import annotations
@@ -125,6 +128,11 @@ reasonably confident is this exact model, say so - a wrong number is worse than 
 number, since a person will use this to decide whether a current price is actually
 good.
 
+Separately, while you are searching: note any OTHER Australian retailers you notice
+currently selling this exact model, even ones you did not end up using as your
+historical-low source. This is a bonus, not a second search - only report retailers
+you actually saw while looking for the historical low, never invent or guess one.
+
 Return ONLY a JSON object, no prose, no code fence, matching this shape:
 {{
   "found": true or false,
@@ -134,7 +142,10 @@ Return ONLY a JSON object, no prose, no code fence, matching this shape:
   "retailer": string or null (who sold it at that price),
   "confidence": "LOW", "MEDIUM" or "HIGH" (how sure you are this is a real historical
     low for this exact model, not a guess or a different model/size),
-  "reason": string (what source(s) you used, or why nothing usable was found)
+  "reason": string (what source(s) you used, or why nothing usable was found),
+  "other_retailers": [] or a list of objects like {{"name": string, "url": string or
+    null}}, one per OTHER retailer you noticed selling this exact model - empty list
+    if you did not notice any
 }}
 """
 
@@ -236,6 +247,53 @@ def parse_research_reply(raw: str) -> dict[str, Any]:
     return data
 
 
+def _safe_http_url(url: str | None) -> str | None:
+    """http(s)-only allowlist for a URL that ultimately came out of an LLM's reply to
+    a prompt asking it to search the open web - this is untrusted content relayed
+    through the model, not content the model itself is trusted to have sanitised.
+    Anything else (javascript:, data:, an unparseable string) is dropped rather than
+    stored or ever reaching an href - the product page renders `candidate.url`
+    straight into a link's href attribute, so a `javascript:` URL surviving this far
+    would execute in the page on click. Checked here (server-side, before the value
+    is even stored) as well as again in app.js before it is rendered, since the value
+    is also exposed as-is through the API and must not rely on client-side
+    validation alone.
+    """
+    if not url:
+        return None
+    try:
+        scheme = urlparse(url).scheme.lower()
+    except ValueError:
+        return None
+    return url if scheme in ("http", "https") else None
+
+
+def _clean_other_retailers(raw: Any) -> list[dict[str, Any]]:
+    """Best-effort coercion of the model's own "other retailers noticed" list
+    (issue #98). Any malformed item is dropped rather than failing the whole reply -
+    this rides along with the historical-low answer as incidental information, not
+    the thing being validated for correctness the way price/found are. Capped at
+    FIRECRAWL_MAX_CANDIDATES, the same limit discover_retailers already applies, so a
+    verbose reply cannot blow out the product page's checkbox list.
+    """
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        name = name.strip() if isinstance(name, str) else ""
+        if not name:
+            continue
+        url = item.get("url")
+        url = url.strip() if isinstance(url, str) and url.strip() else None
+        cleaned.append({"name": name, "url": _safe_http_url(url)})
+        if len(cleaned) >= FIRECRAWL_MAX_CANDIDATES:
+            break
+    return cleaned
+
+
 def parse_historical_low_reply(raw: str) -> dict[str, Any]:
     """Pull the JSON object out of a historical-low CLI reply.
 
@@ -257,13 +315,14 @@ def parse_historical_low_reply(raw: str) -> dict[str, Any]:
         return {
             "found": False, "price": None, "date": None, "retailer": None,
             "confidence": None, "reason": f"no JSON in reply: {raw[:150]!r}",
+            "other_retailers": [],
         }
     try:
         data = _last_json_object(raw, start)
     except ValueError as exc:
         return {
             "found": False, "price": None, "date": None, "retailer": None,
-            "confidence": None, "reason": str(exc),
+            "confidence": None, "reason": str(exc), "other_retailers": [],
         }
 
     price = data.get("price")
@@ -282,6 +341,10 @@ def parse_historical_low_reply(raw: str) -> dict[str, Any]:
         "retailer": data.get("retailer") if found else None,
         "confidence": confidence if found else None,
         "reason": str(data.get("reason") or ("not found" if not found else "")),
+        # Independent of whether a historical-low price itself was found - the model
+        # can honestly report "no confident historical low, but I did see these
+        # retailers selling it" in the same pass.
+        "other_retailers": _clean_other_retailers(data.get("other_retailers")),
     }
 
 
@@ -384,6 +447,7 @@ def process_historical_low_job(base_url: str, claude_bin: str, job: dict[str, An
         json={
             "price": found["price"], "date": found["date"], "retailer": found["retailer"],
             "confidence": found["confidence"], "notes": (found.get("reason") or "")[:500],
+            "other_retailers": found.get("other_retailers") or [],
         },
         timeout=30,
     )
