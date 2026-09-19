@@ -809,6 +809,59 @@ def maybe_derive_price_targets(conn: sqlite3.Connection, product_id: int) -> boo
     return True
 
 
+#: Name of the one-off backfill row in python_backfills (see run_price_target_backfill).
+#: Numbered like the SQL migrations for the same "forward-only, applied once" reason,
+#: but kept out of schema_migrations itself - see that function's docstring.
+PRICE_TARGET_BACKFILL_NAME = "0001_price_targets_from_lowest_known_low"
+
+
+def run_price_target_backfill(conn: sqlite3.Connection) -> int:
+    """One-off sweep: run maybe_derive_price_targets against every existing product once.
+
+    maybe_derive_price_targets (above) only ever runs when create_product, update_product,
+    or maybe_lower_known_low is called - so a product that already had a lowest_known_price
+    before #106 shipped, and has not been touched by any of those three paths since, sits
+    with trigger_price/excellent_price/historical_low_price still NULL until some unrelated
+    future edit happens to fire one of them. Confirmed live: a product sat at "No trigger
+    set" until a no-op Edit-Save was performed on it, at which point targets appeared
+    correctly. This sweep catches every such product up on the next deploy instead of
+    leaving it to chance.
+
+    Tracked the same way app/migrations/*.sql tracks schema changes in schema_migrations -
+    forward-only, applied exactly once, self-marking - but in its own python_backfills
+    table rather than schema_migrations itself. schema_migrations' rows are meant to
+    correspond 1:1 with the *.sql files db.migrate() finds under app/migrations; this is a
+    one-off Python sweep with business logic (maybe_derive_price_targets), not a DDL file,
+    and a synthetic entry in schema_migrations would break that correspondence for anyone
+    auditing it against the files on disk. A dedicated table gets the same "applied once,
+    tracked" discipline without that confusion.
+
+    Safe to run against a large, real production table: every write goes through
+    maybe_derive_price_targets, which only ever fills a NULL field and never overwrites a
+    hand-set one (or an earlier auto-fill), so a second run - or a first run against rows
+    already fixed by an incidental edit - is a no-op for those rows regardless of whether
+    the sweep itself has already been marked done. The marker row exists purely to avoid
+    re-scanning every product on every startup, not to guarantee correctness; correctness
+    comes from maybe_derive_price_targets' own null-only-fill rule either way.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS python_backfills ("
+        " name TEXT PRIMARY KEY, applied_at TEXT NOT NULL, rows_updated INTEGER NOT NULL)"
+    )
+    already = conn.execute(
+        "SELECT 1 FROM python_backfills WHERE name = ?", (PRICE_TARGET_BACKFILL_NAME,)
+    ).fetchone()
+    if already is not None:
+        return 0
+    ids = [r["id"] for r in conn.execute("SELECT id FROM products")]
+    updated = sum(1 for product_id in ids if maybe_derive_price_targets(conn, product_id))
+    conn.execute(
+        "INSERT INTO python_backfills (name, applied_at, rows_updated) VALUES (?, ?, ?)",
+        (PRICE_TARGET_BACKFILL_NAME, utcnow(), updated),
+    )
+    return updated
+
+
 def price_history(
     conn: sqlite3.Connection, product_id: int, limit: int = 500
 ) -> list[dict[str, Any]]:

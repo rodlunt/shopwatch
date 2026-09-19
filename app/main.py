@@ -50,8 +50,14 @@ async def lifespan(_: FastAPI):
     job at container startup is not evidence of anything gone wrong. Staleness is judged
     purely by elapsed time (`research.reconcile_stale`, called from every job read),
     which is correct regardless of *why* nothing has reported back yet.
+
+    Also runs any pending one-off Python data backfills (store.run_price_target_backfill
+    and friends), each self-marking so it applies exactly once across every future boot -
+    see that function's docstring for why this lives outside schema_migrations.
     """
     migrate()
+    with session() as conn:
+        store.run_price_target_backfill(conn)
     yield
 
 
