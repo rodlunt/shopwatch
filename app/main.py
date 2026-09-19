@@ -994,13 +994,14 @@ def api_price_watch_runs(limit: int = 20) -> Any:
 def api_create_research_job(payload: dict = Body(...)) -> Any:
     product_id = payload.get("product_id")
     retailer_ids = payload.get("retailer_ids") or []
+    kind = payload.get("kind") or "price"
     if not product_id:
         raise HTTPException(400, "product_id is required")
     with session() as conn:
         if store.get_product(conn, product_id) is None:
             raise HTTPException(404, "no such product")
         try:
-            job_id = research.create_job(conn, product_id, retailer_ids)
+            job_id = research.create_job(conn, product_id, retailer_ids, kind=kind)
         except research.JobAlreadyRunning as exc:
             raise HTTPException(
                 409, f"a research job is already active for this product: job {exc.job_id}"
@@ -1057,6 +1058,30 @@ def api_report_research_result(job_id: int, payload: dict = Body(...)) -> Any:
             research.report_result(
                 conn, job_id, retailer_id, status,
                 listing_id=payload.get("listing_id"), note=payload.get("note"),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return jsonable(research.get_job(conn, job_id))
+
+
+@app.post("/api/research-jobs/{job_id}/historical-low")
+def api_report_research_historical_low(job_id: int, payload: dict = Body(...)) -> Any:
+    """Called only by the host-level research runner, for a kind="historical_low" job.
+
+    Records the estimate on the job row only - see research.report_historical_low and
+    migrations/0010. This never writes to the product; the wizard/product-page UI reads
+    it back and offers it as a prefill for the ordinary product-edit form, which is the
+    only path that can actually change lowest_known_price and friends.
+    """
+    with session() as conn:
+        if research.get_job(conn, job_id) is None:
+            raise HTTPException(404, "no such research job")
+        try:
+            research.report_historical_low(
+                conn, job_id,
+                price=payload.get("price"), date=payload.get("date"),
+                retailer=payload.get("retailer"), notes=payload.get("notes"),
+                confidence=payload.get("confidence"),
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc

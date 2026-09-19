@@ -1,4 +1,4 @@
--- 0010: URL-scoped research-job results - "paste a listing URL" (issue #94).
+-- 0011: URL-scoped research-job results - "paste a listing URL" (issue #94).
 --
 -- A job created from a pasted URL (app.main's from-url endpoint) asks the runner about
 -- ONE specific page, not "search generically for this retailer" - the whole reason

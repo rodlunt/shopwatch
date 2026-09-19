@@ -239,6 +239,121 @@ def test_discover_retailers_raises_when_the_request_itself_fails(monkeypatch):
         research_runner.discover_retailers("http://firecrawl", "Product", "MODEL", [], [])
 
 
+# --------------------------------------------------- historical-low research (#93)
+
+def test_parse_historical_low_reply_with_a_confident_finding():
+    reply = ('{"found": true, "price": 899, "date": "2025-11-20", '
+             '"retailer": "Appliances Online", "confidence": "MEDIUM", '
+             '"reason": "Black Friday 2025 price-history thread"}')
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result == {
+        "found": True, "price": 899, "date": "2025-11-20",
+        "retailer": "Appliances Online", "confidence": "MEDIUM",
+        "reason": "Black Friday 2025 price-history thread",
+    }
+
+
+def test_parse_historical_low_reply_not_found_is_a_finding_not_an_exception():
+    """Unlike parse_research_reply, there is no per-retailer status to raise into for
+    this kind - "found: false" must come back as a usable (empty) finding, not an
+    error, so the runner can still report and complete the job normally."""
+    reply = '{"found": false, "price": null, "reason": "no trustworthy source found"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["found"] is False
+    assert result["price"] is None
+    assert result["reason"] == "no trustworthy source found"
+
+
+def test_parse_historical_low_reply_with_no_json_is_a_finding_not_an_exception():
+    result = research_runner.parse_historical_low_reply("I couldn't find historical pricing.")
+    assert result["found"] is False
+    assert "no JSON" in result["reason"]
+
+
+def test_parse_historical_low_reply_with_malformed_json_is_a_finding_not_an_exception():
+    result = research_runner.parse_historical_low_reply('{"found": true, "price": }')
+    assert result["found"] is False
+
+
+def test_parse_historical_low_reply_empty_raises():
+    """The one case that IS treated as a hard failure: the CLI produced nothing at
+    all, as distinct from producing a considered "couldn't find one"."""
+    with pytest.raises(ValueError):
+        research_runner.parse_historical_low_reply("")
+
+
+def test_parse_historical_low_reply_rejects_a_nan_price():
+    reply = '{"found": true, "price": NaN, "reason": "estimate"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["found"] is False
+    assert result["price"] is None
+
+
+def test_parse_historical_low_reply_drops_an_unrecognised_confidence_value():
+    reply = '{"found": true, "price": 500, "confidence": "PRETTY_SURE", "reason": "ok"}'
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["found"] is True
+    assert result["confidence"] is None
+
+
+def test_parse_historical_low_reply_takes_the_last_json_object():
+    """Same discipline as parse_research_reply: a worked example before the real
+    answer must not shadow it."""
+    reply = (
+        'For a similar model I found {"found": true, "price": 400, "reason": "similar"} '
+        'but for the exact model: '
+        '{"found": true, "price": 899, "date": "2025-11-20", "reason": "ok"}'
+    )
+    result = research_runner.parse_historical_low_reply(reply)
+    assert result["price"] == 899
+
+
+def test_research_historical_low_grants_web_search_and_fetch(monkeypatch):
+    """Same discipline as the price-research call: neither tool is available by
+    default in a non-interactive `-p` call, so the prompt asking the model to search
+    is useless without explicitly granting them."""
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError) as exc_info:
+        research_runner.research_historical_low("http://x", "claude", "Some Product", "SKU-1")
+    assert exc_info.value.status == "FAILED"
+    args = captured["args"]
+    assert "--allowedTools" in args
+    tools = args[args.index("--allowedTools") + 1]
+    assert "WebSearch" in tools.split(",")
+    assert "WebFetch" in tools.split(",")
+
+
+def test_research_historical_low_reports_a_non_zero_exit_as_failed(monkeypatch):
+    class FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "dead token"
+
+    monkeypatch.setattr(research_runner.subprocess, "run", lambda *a, **k: FakeProc())
+    with pytest.raises(research_runner.RunnerError) as exc_info:
+        research_runner.research_historical_low("http://x", "claude", "Some Product", "SKU-1")
+    assert exc_info.value.status == "FAILED"
+    assert "dead token" in exc_info.value.note
+
+
+def test_research_historical_low_returns_the_parsed_finding_on_success(monkeypatch):
+    class FakeProc:
+        returncode = 0
+        stdout = '{"found": true, "price": 750, "date": "2025-06-01", "reason": "ok"}'
+        stderr = ""
+
+    monkeypatch.setattr(research_runner.subprocess, "run", lambda *a, **k: FakeProc())
+    result = research_runner.research_historical_low("http://x", "claude", "Some Product", "SKU-1")
+    assert result["found"] is True
+    assert result["price"] == 750
+
+
 def test_the_claude_call_grants_web_search_and_fetch(monkeypatch):
     """The prompt tells the model to search the web and read the retailer's own
     site, but neither tool is available by default in a non-interactive `-p` call

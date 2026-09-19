@@ -9,6 +9,7 @@
   <button id="btn-add-listing-url">Paste a listing URL</button>
   <button id="btn-watch-product" data-product="{{ product.id }}">Check prices now</button>
   <button id="btn-research-retailers" data-product="{{ product.id }}" data-name="{{ product.name }}" data-model="{{ product.model }}">Research retailers again</button>
+  <button id="btn-research-historical-low" data-product="{{ product.id }}" data-name="{{ product.name }}" data-model="{{ product.model }}">Research historical low</button>
   {% if product.status == 'PURCHASED' %}
     <button id="btn-undo-purchase" data-product="{{ product.id }}">Undo purchase</button>
   {% else %}
@@ -252,6 +253,24 @@
   <footer>
     <button data-close>Cancel</button>
     <button class="primary" id="research-go">Research selected</button>
+  </footer>
+</dialog>
+
+<dialog id="historical-low-dialog">
+  <header>Research historical low</header>
+  <div class="body">
+    <p class="muted" style="margin:0 0 10px">Asks an AI research pass to look for the
+      lowest price this exact model has ever sold for anywhere, including before it was
+      added here - price-history trackers, deal forums, cached listings. This is always
+      an estimate for you to check: nothing is written to the product until you choose
+      "Use this" below and save it yourself.</p>
+    <p id="historical-low-status" class="muted"></p>
+    <ul id="historical-low-progress" class="wizard-progress" hidden></ul>
+    <div id="historical-low-result" hidden></div>
+  </div>
+  <footer>
+    <button data-close>Close</button>
+    <button class="primary" id="historical-low-go">Research</button>
   </footer>
 </dialog>
 

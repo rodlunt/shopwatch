@@ -579,6 +579,70 @@ def test_latest_research_job_reflects_the_one_just_created(client):
     assert {r["retailer_id"] for r in latest["results"]} == {retailer_id}
 
 
+def test_create_historical_low_research_job_needs_no_retailer_ids(client):
+    """issue #93: "has this ever been cheaper" is one question about the product, not
+    one per retailer, so this must succeed with no retailer_ids at all - unlike the
+    default kind="price", which requires at least one."""
+    pid = q930h(client)["id"]
+    created = client.post("/api/research-jobs", json={"product_id": pid, "kind": "historical_low"})
+    assert created.status_code == 202
+    body = created.json()
+    assert body["kind"] == "historical_low"
+    assert body["results"] == []
+
+
+def test_report_historical_low_then_complete_through_the_api(client):
+    pid = q930h(client)["id"]
+    created = client.post(
+        "/api/research-jobs", json={"product_id": pid, "kind": "historical_low"}
+    ).json()
+
+    reported = client.post(
+        f"/api/research-jobs/{created['id']}/historical-low",
+        json={"price": 799.0, "date": "2025-08-11", "retailer": "Bing Lee",
+              "notes": "Found on a deal-tracking forum thread.", "confidence": "LOW"},
+    ).json()
+    assert reported["historical_low_price"] == 799.0
+    assert reported["historical_low_confidence"] == "LOW"
+
+    completed = client.post(
+        f"/api/research-jobs/{created['id']}/complete", json={"status": "DONE"}
+    ).json()
+    assert completed["status"] == "DONE"
+    assert completed["historical_low_price"] == 799.0  # the finding survives completion
+
+
+def test_report_historical_low_never_writes_the_product(client):
+    """The control this test exists for: this endpoint has no code path to
+    products.lowest_known_price - only a person using the value it returns, then
+    saving through PATCH /api/products/{id} themselves, can change that field."""
+    product = q930h(client)
+    pid = product["id"]
+    assert product["lowest_known_price"] is None
+    created = client.post(
+        "/api/research-jobs", json={"product_id": pid, "kind": "historical_low"}
+    ).json()
+
+    client.post(
+        f"/api/research-jobs/{created['id']}/historical-low",
+        json={"price": 799.0, "confidence": "HIGH"},
+    )
+
+    refreshed = client.get(f"/api/products/{pid}").json()
+    assert refreshed["lowest_known_price"] is None
+
+
+def test_report_historical_low_is_a_404_for_an_unknown_job(client):
+    response = client.post("/api/research-jobs/999999/historical-low", json={"price": 1})
+    assert response.status_code == 404
+
+
+def test_create_research_job_rejects_an_unknown_kind(client):
+    pid = q930h(client)["id"]
+    response = client.post("/api/research-jobs", json={"product_id": pid, "kind": "made_up"})
+    assert response.status_code == 400
+
+
 def test_create_retailer_accepts_a_homepage(client):
     row = client.post("/api/retailers", json={"name": "Officeworks", "homepage": "https://officeworks.com.au"}).json()
     assert row["homepage"] == "https://officeworks.com.au"

@@ -230,3 +230,108 @@ def test_reconciling_a_stale_running_job_frees_the_product_for_a_new_one(
 
     new_job_id = research.create_job(conn, product_id, retailer_ids)  # must not raise
     assert new_job_id != job_id
+
+
+# --------------------------------------------------------- historical-low kind (#93)
+
+
+def test_create_job_defaults_to_price_kind(conn, product_id, retailer_ids):
+    job_id = research.create_job(conn, product_id, retailer_ids)
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["kind"] == "price"
+
+
+def test_create_job_rejects_an_unknown_kind(conn, product_id, retailer_ids):
+    with pytest.raises(ValueError, match="kind must be one of"):
+        research.create_job(conn, product_id, retailer_ids, kind="made_up_kind")
+
+
+def test_historical_low_job_needs_no_retailer_selection(conn, product_id):
+    """The control this test exists for: "has this ever been cheaper" is one question
+    about the whole product, not one per retailer - unlike a price job, an empty
+    retailer_ids must not be rejected."""
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["kind"] == "historical_low"
+    assert job["results"] == []
+
+
+def test_historical_low_job_ignores_any_retailer_ids_passed(conn, product_id, retailer_ids):
+    """retailer_ids is meaningless for this kind - passing some anyway must not create
+    research_job_results rows, since nothing will ever report against them."""
+    job_id = research.create_job(conn, product_id, retailer_ids, kind="historical_low")
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["results"] == []
+
+
+def test_a_historical_low_job_and_a_price_job_share_the_one_active_guard(
+    conn, product_id, retailer_ids
+):
+    """Both kinds spend the same shared, credentialed CLI quota, so a product must
+    never have two active jobs at once regardless of which kind either one is."""
+    first_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    with pytest.raises(research.JobAlreadyRunning) as exc_info:
+        research.create_job(conn, product_id, retailer_ids, kind="price")
+    assert exc_info.value.job_id == first_id
+
+
+def test_report_historical_low_sets_the_finding_on_the_job(conn, product_id):
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(
+        conn, job_id, price=899.0, date="2025-11-20", retailer="Appliances Online",
+        notes="Found via a Black Friday price-history thread.", confidence="MEDIUM",
+    )
+    research.complete_job(conn, job_id, "DONE")
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["historical_low_price"] == 899.0
+    assert job["historical_low_date"] == "2025-11-20"
+    assert job["historical_low_retailer"] == "Appliances Online"
+    assert job["historical_low_confidence"] == "MEDIUM"
+    assert "Black Friday" in job["historical_low_notes"]
+
+
+def test_report_historical_low_accepts_an_empty_finding(conn, product_id):
+    """No confident historical low found is a legitimate, honest outcome - not an
+    error - so price=None with just a note must be storable."""
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+
+    research.report_historical_low(conn, job_id, notes="No trustworthy source found.")
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert job["historical_low_price"] is None
+    assert job["historical_low_notes"] == "No trustworthy source found."
+
+
+def test_report_historical_low_rejects_an_unknown_confidence(conn, product_id):
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+    with pytest.raises(ValueError, match="confidence must be one of"):
+        research.report_historical_low(conn, job_id, price=100, confidence="VERY_SURE")
+
+
+def test_reporting_a_historical_low_never_touches_the_product(conn, product_id):
+    """The control this test exists for: nothing about this feature is allowed to
+    write products.lowest_known_price directly - only a human copying the estimate
+    into the ordinary edit form (PATCH /api/products/{id}) can do that."""
+    job_id = research.create_job(conn, product_id, [], kind="historical_low")
+    conn.commit()
+    research.report_historical_low(conn, job_id, price=42.0, confidence="HIGH")
+    research.complete_job(conn, job_id, "DONE")
+    conn.commit()
+
+    product = store.get_product(conn, product_id)
+    assert product["lowest_known_price"] is None

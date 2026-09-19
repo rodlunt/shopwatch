@@ -1225,6 +1225,153 @@ document.getElementById('research-dialog')?.addEventListener('close', () => {
   if (researchRetry.pollTimer) clearInterval(researchRetry.pollTimer);
 });
 
+/* ------------------------------------------------------ historical-low research
+ *
+ * issue #93: "has this ever been cheaper", not "what's it selling for today" - a
+ * different question put to the same research-job pipeline (kind: 'historical_low'),
+ * answered once for the whole product rather than once per retailer. The finding is
+ * always shown as something to confirm or discard, never applied on its own: "Use
+ * this" only prefills the ordinary product-edit dialog's lowest_known_* fields, the
+ * same dialog a manual edit already uses, so the only way it reaches the product is
+ * the person reviewing it and clicking that dialog's own Save.
+ */
+
+let histLow = { productId: null, name: '', model: '', pollTimer: null, generation: 0 };
+
+function histLowStatusText(job) {
+  if (!job) return 'Pick "Research" to look for a historical low.';
+  if (job.status === 'QUEUED') return 'Queued - waiting for the opti research runner to pick it up.';
+  if (job.status === 'RUNNING') return 'Researching... this can take a couple of minutes.';
+  if (job.status === 'FAILED') return `Could not complete the research: ${job.error || 'unknown error'}.`;
+  return '';
+}
+
+function renderHistLowResult(job) {
+  const box = document.getElementById('historical-low-result');
+  box.replaceChildren();
+  if (!job || job.status !== 'DONE') { box.hidden = true; return; }
+
+  if (job.historical_low_price === null || job.historical_low_price === undefined) {
+    box.hidden = false;
+    box.append(
+      el('span', 'No confident historical low found.', 'meta'),
+      el('div', job.historical_low_notes || 'The research pass could not find a source it trusted.', 'reason'),
+    );
+    return;
+  }
+
+  const meta = [];
+  if (job.historical_low_retailer) meta.push(job.historical_low_retailer);
+  if (job.historical_low_date) meta.push(job.historical_low_date);
+  if (job.historical_low_confidence) meta.push(`${job.historical_low_confidence.toLowerCase()} confidence`);
+
+  const useBtn = el('button', 'Use this', 'primary');
+  const discardBtn = el('button', 'Discard');
+  useBtn.type = 'button';
+  discardBtn.type = 'button';
+  useBtn.addEventListener('click', () => {
+    const set = (id, value) => { const field = document.getElementById(id); if (field) field.value = value ?? ''; };
+    set('ep-lowest_known_price', job.historical_low_price);
+    set('ep-lowest_known_date', job.historical_low_date);
+    set('ep-lowest_known_retailer', job.historical_low_retailer);
+    const note = 'AI-estimated historical low, unconfirmed'
+      + (job.historical_low_confidence ? ` (${job.historical_low_confidence.toLowerCase()} confidence)` : '')
+      + (job.historical_low_notes ? ` - ${job.historical_low_notes}` : '') + '. Check before saving.';
+    set('ep-lowest_known_notes', note);
+    document.getElementById('historical-low-dialog').close();
+    document.getElementById('product-dialog').showModal();
+    toast('Filled into the edit form below - check it, then Save to apply.', 'good');
+  });
+  discardBtn.addEventListener('click', () => document.getElementById('historical-low-dialog').close());
+
+  box.hidden = false;
+  box.append(
+    el('span', 'UNCONFIRMED ESTIMATE - not a real listing', 'tag'),
+    el('div', money(job.historical_low_price), 'num'),
+    el('div', meta.join(' · '), 'meta'),
+    el('div', job.historical_low_notes || '', 'reason'),
+    (() => { const actions = el('div', '', 'actions'); actions.append(useBtn, discardBtn); return actions; })(),
+  );
+}
+
+wire('btn-research-historical-low', async event => {
+  if (histLow.pollTimer) clearInterval(histLow.pollTimer);
+  const { product, name, model } = event.currentTarget.dataset;
+  histLow = { productId: Number(product), name, model, pollTimer: null, generation: histLow.generation + 1 };
+  const generation = histLow.generation;
+
+  const status = document.getElementById('historical-low-status');
+  const progress = document.getElementById('historical-low-progress');
+  const goBtn = document.getElementById('historical-low-go');
+  progress.hidden = true;
+  goBtn.hidden = false;
+  goBtn.disabled = false;
+  status.textContent = 'Checking for a previous run...';
+  renderHistLowResult(null);
+  document.getElementById('historical-low-dialog').showModal();
+
+  let latest;
+  try {
+    latest = await api(`/api/products/${histLow.productId}/research-jobs/latest`);
+  } catch (err) {
+    status.textContent = `Could not load research history: ${err.message}`;
+    return;
+  }
+  if (histLow.generation !== generation) return;
+  const relevant = latest && latest.kind === 'historical_low' ? latest : null;
+  status.textContent = histLowStatusText(relevant);
+  if (relevant && (relevant.status === 'QUEUED' || relevant.status === 'RUNNING')) {
+    goBtn.hidden = true;
+    pollHistLow(relevant.id, generation);
+  } else {
+    renderHistLowResult(relevant);
+  }
+});
+
+function pollHistLow(jobId, generation) {
+  const status = document.getElementById('historical-low-status');
+  histLow.pollTimer = setInterval(async () => {
+    if (histLow.generation !== generation) { clearInterval(histLow.pollTimer); return; }
+    let job;
+    try {
+      job = await api(`/api/research-jobs/${jobId}`);
+    } catch (err) {
+      clearInterval(histLow.pollTimer);
+      status.textContent = `Lost track of the job: ${err.message}`;
+      return;
+    }
+    status.textContent = histLowStatusText(job);
+    if (job.status === 'DONE' || job.status === 'FAILED') {
+      clearInterval(histLow.pollTimer);
+      document.getElementById('historical-low-go').hidden = false;
+      renderHistLowResult(job);
+    }
+  }, 2000);
+}
+
+wire('historical-low-go', async () => {
+  const goBtn = document.getElementById('historical-low-go');
+  const status = document.getElementById('historical-low-status');
+  const generation = histLow.generation;
+  goBtn.disabled = true;
+  renderHistLowResult(null);
+  try {
+    const job = await api('/api/research-jobs', { method: 'POST', body: {
+      product_id: histLow.productId, kind: 'historical_low',
+    }});
+    goBtn.hidden = true;
+    status.textContent = histLowStatusText(job);
+    pollHistLow(job.id, generation);
+  } catch (err) {
+    toast(`Could not start research: ${err.message}`, 'bad');
+    goBtn.disabled = false;
+  }
+});
+
+document.getElementById('historical-low-dialog')?.addEventListener('close', () => {
+  if (histLow.pollTimer) clearInterval(histLow.pollTimer);
+});
+
 /* ----------------------------------------------------------------- purchases */
 
 wire('btn-mark-purchased', () => {
