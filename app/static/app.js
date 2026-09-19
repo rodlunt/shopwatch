@@ -1683,6 +1683,33 @@ function setupAxis(root) {
     return visible;
   }
 
+  function layoutThresholdLabels() {
+    // Same lane-avoidance promise the block comment above makes for points - "a label
+    // never covers the line or another label" - extended to threshold marks, which
+    // never got it: draw() only ever called clusterAndLabel() below, which walks
+    // `points`, not `thresholds`. pricing.threshold_scale() already merges two marks
+    // that land on the exact same value into one ("hist low + excellent"), but that
+    // combined label is often wider than either label alone, so a *near* miss in
+    // position - two genuinely different values close together, e.g. a merged mark at
+    // $69.30 next to a lone "trigger" at $76.23 - collides even though the values
+    // themselves are correctly distinct. At most 3 threshold marks ever exist, so
+    // unlike points there is no "hide it" fallback: every mark always gets a lane.
+    const width = plot.clientWidth || 1;
+    const ordered = thresholds
+      .map(el => ({ el, centre: (project(Number(el.dataset.value)) / 100) * width }))
+      .filter(item => item.el.style.visibility !== 'hidden')
+      .sort((a, b) => a.centre - b.centre);
+
+    const laneEnds = [];
+    for (const item of ordered) {
+      const half = item.el.offsetWidth / 2 + LABEL_PAD;
+      let lane = laneEnds.findIndex(end => item.centre - half > end);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(-Infinity); }
+      laneEnds[lane] = item.centre + half;
+      item.el.style.top = (2 + lane * LANE_HEIGHT) + 'px';
+    }
+  }
+
   function clusterAndLabel() {
     // Five of these retailers sit within $32 of each other. Drawn individually at full
     // extent they are one illegible smudge of overlapping dots and text, which is worse
@@ -1765,6 +1792,7 @@ function setupAxis(root) {
     }
 
     clusterAndLabel();
+    layoutThresholdLabels();
     if (readout) {
       readout.textContent = view.lo <= full.lo && view.hi >= full.hi
         ? `${axisMoney(full.lo)} to ${axisMoney(full.hi)}, everything`
