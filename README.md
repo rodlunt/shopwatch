@@ -606,6 +606,36 @@ URL) or `POST /api/products/{id}/retailers/from-url` (URL present) endpoints "Ad
 manually" and "Add from a URL" already use - no separate listing-creation path, and nothing
 is added until a person ticks the box and confirms, same discipline as "Use this" above.
 
+An excluded retailer (see "Excluding a retailer" below) never reaches this checkbox list: it is
+named directly in `HISTORICAL_LOW_PROMPT` so the model is told not to bother, and dropped again
+server-side (`app/research.py`'s `_clean_other_retailers`) as the backstop if it turns up anyway.
+
+## Excluding a retailer
+
+Issue #112: some retailers just are not relevant - wrong city, a marketplace you don't use,
+somewhere you had a bad experience - and there was no way to tell shopwatch "never suggest this
+one again." The **Retailers** page (top nav) lists every known retailer with how many active
+listings it currently has, and an Exclude/Un-exclude button per row (`PATCH /api/retailer/{id}`,
+singular - deliberately not another route nested under `/api/retailers/{id}`, which already means
+a *listing* id everywhere else in this API).
+
+Excluding a retailer:
+- deactivates every listing already tracked under it, across every product, the same way deleting
+  a single listing does (`active = 0`) - it stops being watched, not just stops being suggested;
+- blocks `POST /api/products/{id}/retailers` and `.../retailers/from-url` from creating a new
+  listing under it (a clear 400, not a 500);
+- drops it from the wizard's and "Research retailers again"'s retailer picker;
+- drops it from the historical-low search's "other retailers found" candidates, and is named
+  directly in the search prompt so the model is asked not to look for it in the first place.
+
+**Un-excluding does not reactivate the listings it switched off.** A listing turned off by
+exclusion might also have been turned off for an unrelated reason, so resuming it silently just
+because the exclusion lifted would be a surprise, not a convenience. There is no separate
+"reactivate" action (shopwatch has never had one, even for a listing deactivated the ordinary way
+via `DELETE /api/retailers/{listing_id}`) - "reactivate by hand" means adding the retailer again
+through the ordinary "Add retailer manually" or "Add from a URL" flow, which creates a fresh
+listing.
+
 ## Suggesting a model number ("Set up your LLM")
 
 **TL;DR - 5 minutes, no coding:**
@@ -932,6 +962,8 @@ what would fire without sending anything.
 | `GET` | `/api/products/check-model?model=...` | deterministic duplicate check for the wizard |
 | `GET` | `/api/products/{id}/price-suggestion` | a same-day trigger-price estimate from real listings, or `null` below 2 |
 | `POST` | `/api/retailers` | `{"name": "..."}`; ensures a retailer exists with no listing attached |
+| `GET` | `/api/retailers` | every known retailer, with `excluded`, `listing_count`, and adapter/mail-alert metadata merged in |
+| `PATCH` | `/api/retailer/{id}` | **singular** - a retailer-level flag, currently `{"excluded": true\|false}` (issue #112); excluding deactivates every listing under it, across every product; un-excluding does NOT reactivate them |
 | `POST` | `/api/research-jobs` | `{"product_id": 1, "retailer_ids": [...], "kind": "price"\|"historical_low"}`; `retailer_ids` required for `price`, ignored for `historical_low`; 202, 409 if one is already active for this product |
 | `GET` | `/api/research-jobs/{id}` | poll a job's status; per-retailer results for `price`, `historical_low_*` fields for `historical_low` |
 | `POST` | `/api/research-jobs/claim` | host-runner only: claims the oldest QUEUED job |

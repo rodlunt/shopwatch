@@ -319,6 +319,27 @@ document.addEventListener('click', async event => {
     return;
   }
 
+  const retailerToggle = event.target.closest('[data-retailer-toggle]');
+  if (retailerToggle) {
+    const id = retailerToggle.dataset.retailerToggle;
+    const currentlyExcluded = retailerToggle.dataset.excluded === '1';
+    const next = !currentlyExcluded;
+    if (next && !confirm(
+      'Exclude this retailer? It stops being offered anywhere shopwatch suggests a '
+      + 'retailer, and every listing already tracked under it is switched off (across '
+      + 'every product). Un-excluding later does not turn those back on by itself.'
+    )) return;
+    retailerToggle.disabled = true;
+    try {
+      await api(`/api/retailer/${id}`, { method: 'PATCH', body: { excluded: next } });
+      location.reload();
+    } catch (err) {
+      toast(`Could not update retailer: ${err.message}`, 'bad');
+      retailerToggle.disabled = false;
+    }
+    return;
+  }
+
   const detailBtn = event.target.closest('[data-toggle-detail]');
   if (detailBtn) {
     const region = document.getElementById(`detail-${detailBtn.dataset.toggleDetail}`);
@@ -621,7 +642,10 @@ function makeRetailerPicker({ list, retailers, selected }) {
 }
 
 async function wizLoadRetailers() {
-  wiz.retailers = await api('/api/retailers');
+  // Issue #112: an excluded retailer is never offered as a choice here - filtered
+  // client-side because GET /api/retailers itself has to keep returning every
+  // retailer (the Retailers page needs the excluded ones too, to un-exclude them).
+  wiz.retailers = (await api('/api/retailers')).filter(r => !r.excluded);
   const list = document.getElementById('wiz-retailer-list');
   list.replaceChildren();
   wiz.picker = makeRetailerPicker({ list, retailers: wiz.retailers, selected: wiz.selected });
@@ -1144,6 +1168,8 @@ wire('btn-research-retailers', async event => {
     intro.textContent = `Could not load retailers: ${err.message}`;
     return;
   }
+  // Issue #112: same client-side filter as the wizard's own retailer picker.
+  retailers = retailers.filter(r => !r.excluded);
 
   researchRetry.retailers = retailers;
   researchRetry.picker = makeRetailerPicker({
@@ -1287,8 +1313,25 @@ function otherRetailersFound(job) {
  * (#94) already use, rather than inventing a third listing-creation path: a candidate
  * with a URL goes through .../retailers/from-url (which also tries to scrape a price
  * straight away), a name-only candidate through the plain .../retailers endpoint. */
-function renderOtherRetailers(job, container) {
-  const candidates = otherRetailersFound(job);
+async function renderOtherRetailers(job, container) {
+  let candidates = otherRetailersFound(job);
+  if (!candidates.length) return;
+
+  // Issue #112: server-side (_clean_other_retailers) already drops a candidate
+  // matching an excluded retailer's name before this is ever stored - this is the
+  // defensive second check, same "never trust only one layer" discipline the URL
+  // allowlist above already follows, in case a candidate was stored before an
+  // exclusion was added, or the two ever drift out of step.
+  try {
+    const excludedLower = new Set(
+      (await api('/api/retailers')).filter(r => r.excluded).map(r => r.name.toLowerCase())
+    );
+    candidates = candidates.filter(c => !excludedLower.has(c.name.toLowerCase()));
+  } catch {
+    // If the retailer list can't be loaded, fall back to whatever the server already
+    // sent - it did its own filtering, so this is a missed extra check, not an
+    // unfiltered one.
+  }
   if (!candidates.length) return;
 
   container.appendChild(el(

@@ -91,7 +91,56 @@ def ensure_retailer(conn: sqlite3.Connection, name: str, **extra: Any) -> sqlite
 
 
 def list_retailers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return [dict(r) for r in conn.execute("SELECT * FROM retailers ORDER BY name")]
+    """Every retailer, plus how many of its listings are currently active.
+
+    `listing_count` (issue #112) is a cheap join, not a second endpoint - the new
+    Retailers page (app/templates/retailers.html) needs it to tell someone what
+    excluding a retailer is actually about to switch off, before they do it, and
+    nothing else currently reading this list has a reason to mind an extra column.
+    """
+    rows = conn.execute(
+        "SELECT r.*, COUNT(CASE WHEN l.active = 1 THEN 1 END) AS listing_count"
+        " FROM retailers r LEFT JOIN listings l ON l.retailer_id = r.id"
+        " GROUP BY r.id ORDER BY r.name"
+    )
+    return [dict(r) for r in rows]
+
+
+def set_retailer_excluded(
+    conn: sqlite3.Connection, retailer_id: int, excluded: bool
+) -> dict[str, Any] | None:
+    """Toggle a retailer's excluded flag (issue #112) - "never suggest this retailer
+    again," enforced everywhere a retailer could enter the system. Returns the
+    updated retailer row, or None if retailer_id does not exist.
+
+    Excluding cascades: every currently active listing under this retailer, across
+    every product, is deactivated the same way a single listing's own soft-delete
+    already works (`UPDATE listings SET active = 0 ...`, app/main.py's
+    api_deactivate_listing) - just scoped by retailer_id instead of one listing id.
+    price_watch.py already only ever queries `WHERE l.active = 1`, so nothing else
+    has to change for an excluded retailer's listings to stop being price-checked.
+    Idempotent: re-excluding an already-excluded retailer just re-runs a no-op
+    UPDATE (WHERE active = 1 matches nothing already deactivated).
+
+    Un-excluding does NOT reactivate anything - deliberately (issue #112 left this
+    as an open question; resolved here as "stay off"). A listing switched off by
+    exclusion might also have been switched off for an unrelated reason, and
+    silently resuming it on nothing more than "the exclusion lifted" would be a
+    surprise, not a convenience. Reactivate by hand if that is actually wanted.
+    """
+    row = conn.execute("SELECT id FROM retailers WHERE id = ?", (retailer_id,)).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE retailers SET excluded = ? WHERE id = ?", (1 if excluded else 0, retailer_id)
+    )
+    if excluded:
+        conn.execute(
+            "UPDATE listings SET active = 0, updated_at = ?"
+            " WHERE retailer_id = ? AND active = 1",
+            (utcnow(), retailer_id),
+        )
+    return dict(conn.execute("SELECT * FROM retailers WHERE id = ?", (retailer_id,)).fetchone())
 
 
 def retailer_color(retailer_id: int | None) -> str | None:

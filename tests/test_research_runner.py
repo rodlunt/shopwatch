@@ -450,7 +450,10 @@ def test_process_historical_low_job_forwards_other_retailers(monkeypatch):
 
     def fake_get(url, timeout=None):
         resp = FakeResponse()
-        resp._data = {"name": "Some Product", "model": "SKU-1"}
+        if url.endswith("/api/retailers"):
+            resp._data = [{"id": 1, "name": "Bing Lee", "excluded": False}]
+        else:
+            resp._data = {"name": "Some Product", "model": "SKU-1"}
         return resp
 
     posted = []
@@ -461,7 +464,7 @@ def test_process_historical_low_job_forwards_other_retailers(monkeypatch):
         resp._data = {}
         return resp
 
-    def fake_research_historical_low(base_url, claude_bin, product_name, model):
+    def fake_research_historical_low(base_url, claude_bin, product_name, model, excluded_names=None):
         return {
             "found": True, "price": 899, "date": "2025-11-20", "retailer": "Bing Lee",
             "confidence": "MEDIUM", "reason": "ok",
@@ -480,6 +483,123 @@ def test_process_historical_low_job_forwards_other_retailers(monkeypatch):
     assert hist_low_calls[0][1]["other_retailers"] == [
         {"name": "Centre Com", "url": "https://x.com.au"}
     ]
+
+
+# ------------------------------------------ excluded retailers named to the LLM (#112)
+
+def test_excluded_retailers_section_is_empty_with_nothing_excluded():
+    assert research_runner._excluded_retailers_section(None) == ""
+    assert research_runner._excluded_retailers_section([]) == ""
+    assert research_runner._excluded_retailers_section(["   ", ""]) == ""
+
+
+def test_excluded_retailers_section_names_every_excluded_retailer():
+    section = research_runner._excluded_retailers_section(["Bing Lee", "Officeworks"])
+    assert "Bing Lee" in section
+    assert "Officeworks" in section
+    assert "excluded" in section.lower()
+
+
+def test_research_historical_low_names_excluded_retailers_in_the_prompt(monkeypatch):
+    """issue #112 item 8: the model must be told directly not to bother with an
+    excluded retailer, not just have its find discarded after the fact - so the
+    excluded names have to actually reach the prompt text sent to the CLI."""
+    captured = {}
+
+    def fake_run(args, input=None, **kwargs):
+        captured["prompt"] = input
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError):
+        research_runner.research_historical_low(
+            "http://x", "claude", "Some Product", "SKU-1", ["Bing Lee"],
+        )
+    assert "Bing Lee" in captured["prompt"]
+
+
+def test_research_historical_low_with_no_exclusions_omits_the_section(monkeypatch):
+    captured = {}
+
+    def fake_run(args, input=None, **kwargs):
+        captured["prompt"] = input
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError):
+        research_runner.research_historical_low("http://x", "claude", "Some Product", "SKU-1")
+    assert "excluded" not in captured["prompt"].lower()
+
+
+def test_process_historical_low_job_only_forwards_excluded_retailer_names(monkeypatch):
+    class FakeResponse:
+        def json(self):
+            return self._data
+
+    def fake_get(url, timeout=None):
+        resp = FakeResponse()
+        if url.endswith("/api/retailers"):
+            resp._data = [
+                {"id": 1, "name": "Bing Lee", "excluded": True},
+                {"id": 2, "name": "JB Hi-Fi", "excluded": False},
+            ]
+        else:
+            resp._data = {"name": "Some Product", "model": "SKU-1"}
+        return resp
+
+    monkeypatch.setattr(research_runner.requests, "get", fake_get)
+    monkeypatch.setattr(research_runner.requests, "post", lambda *a, **k: FakeResponse())
+
+    captured = {}
+
+    def fake_research_historical_low(base_url, claude_bin, product_name, model, excluded_names=None):
+        captured["excluded_names"] = excluded_names
+        return {
+            "found": False, "price": None, "date": None, "retailer": None,
+            "confidence": None, "reason": "not found", "other_retailers": [],
+        }
+
+    monkeypatch.setattr(research_runner, "research_historical_low", fake_research_historical_low)
+
+    research_runner.process_historical_low_job("http://x", "claude", {"id": 1, "product_id": 1})
+    assert captured["excluded_names"] == ["Bing Lee"]
+
+
+def test_process_historical_low_job_fails_the_job_when_the_retailer_list_cannot_be_loaded(
+    monkeypatch,
+):
+    """A failure to fetch the excluded list must never silently mean "nothing is
+    excluded" - that would be a search that ran unfiltered while looking exactly like
+    one that filtered correctly (hardening.md rule 2: no representable pass on a
+    skipped check)."""
+
+    class FakeResponse:
+        def json(self):
+            return self._data
+
+    def fake_get(url, timeout=None):
+        if url.endswith("/api/retailers"):
+            raise research_runner.requests.RequestException("connection refused")
+        resp = FakeResponse()
+        resp._data = {"name": "Some Product", "model": "SKU-1"}
+        return resp
+
+    posted = []
+
+    def fake_post(url, json=None, timeout=None):
+        posted.append((url, json))
+        resp = FakeResponse()
+        resp._data = {}
+        return resp
+
+    monkeypatch.setattr(research_runner.requests, "get", fake_get)
+    monkeypatch.setattr(research_runner.requests, "post", fake_post)
+
+    research_runner.process_historical_low_job("http://x", "claude", {"id": 7, "product_id": 1})
+
+    complete_calls = [p for p in posted if p[0] == "http://x/api/research-jobs/7/complete"]
+    assert len(complete_calls) == 1
+    assert complete_calls[0][1]["status"] == "FAILED"
 
 
 def test_the_claude_call_grants_web_search_and_fetch(monkeypatch):
