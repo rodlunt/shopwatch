@@ -490,6 +490,10 @@ footer.site .build { font-family: var(--mono); }
 
 .listing .who { font-weight: 550; }
 .listing .who small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+/* A stated deal end-date is informational until it lapses - only then does it borrow
+ * the "something is actually wrong" fault colour, because a price advertised under a
+ * promo that has now ended is a real reason to go back and check it. */
+.listing .who small .promo-lapsed { color: var(--fault); font-weight: 600; }
 
 .listing .price { font-family: var(--mono); font-size: 16px; font-weight: 600; text-align: right; }
 .listing .price small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); font-family: var(--sans); }

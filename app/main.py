@@ -10,6 +10,7 @@ import re
 import subprocess
 import zipfile
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +127,22 @@ def _short_time(value: Any) -> str:
     return str(value)[:16].replace("T", " ")
 
 
+def _short_date(value: Any) -> str:
+    """A bare YYYY-MM-DD date, e.g. for a promo end-date, as '21 Sep' (or '21 Sep
+    2027' once it is no longer this year - a date on a price like this is usually
+    checked back against months later, not just this week)."""
+    if not value:
+        return ""
+    try:
+        parsed = date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return str(value)
+    day_month = f"{parsed.day} {parsed.strftime('%b')}"
+    if parsed.year != date.today().year:
+        return f"{day_month} {parsed.year}"
+    return day_month
+
+
 #: A listing's url is free text: typed by hand in "Add listing", pasted through
 #: /api/import, or written by the research runner from whatever the model returned.
 #: None of those paths constrain the scheme, so a template must not trust it as an
@@ -142,6 +159,7 @@ def _safe_url(value: Any) -> str | None:
 
 templates.env.filters["money"] = _money
 templates.env.filters["dt"] = _short_time
+templates.env.filters["shortdate"] = _short_date
 templates.env.filters["safe_url"] = _safe_url
 
 
@@ -589,9 +607,12 @@ def api_create_listing(product_id: int, payload: dict = Body(...)) -> Any:
         )
         values = {k: v for k, v in payload.items() if k in provenance.TRACKED_FIELDS}
         if values:
-            provenance.apply_values(
-                conn, listing_id, values, state=provenance.MANUAL, source="ui"
-            )
+            try:
+                provenance.apply_values(
+                    conn, listing_id, values, state=provenance.MANUAL, source="ui"
+                )
+            except provenance.FieldError as exc:
+                raise HTTPException(400, str(exc)) from exc
             store.record_observation(conn, listing_id, source="ui")
         provenance.sync_verification_from_provenance(conn, listing_id)
         row = conn.execute(

@@ -197,12 +197,12 @@ function startEdit(span) {
     }
   } else {
     input = document.createElement('input');
-    input.type = kind === 'money' ? 'number' : 'text';
+    input.type = kind === 'money' ? 'number' : kind === 'date' ? 'date' : 'text';
     if (kind === 'money') input.step = '0.01';
     input.value = original;
     input.size = Math.max(6, String(original).length + 2);
   }
-  input.style.width = kind === 'money' ? '85px' : 'auto';
+  input.style.width = kind === 'money' ? '85px' : kind === 'date' ? '145px' : 'auto';
   span.textContent = '';
   span.appendChild(input);
   input.focus();
@@ -1041,7 +1041,8 @@ wire('al-save', async () => {
     freight: number('al-freight'), cashback: number('al-cashback'),
     condition: value('al-condition'), stock_status: value('al-stock') || null,
     pickup_status: value('al-pickup') || null, warranty: value('al-warranty') || null,
-    included_components: value('al-contents') || null, seller_notes: value('al-notes') || null
+    included_components: value('al-contents') || null, seller_notes: value('al-notes') || null,
+    price_valid_until: value('al-promo-end') || null
   };
   try {
     await api(`/api/products/${productId}/retailers`, { method: 'POST', body });

@@ -124,7 +124,7 @@
         </svg>
       </a>
       {% endif %}
-      <small>{{ l.condition|replace('_',' ')|capitalize }}{% if l.stock_status %} &middot; {{ l.stock_status }}{% endif %}</small>
+      <small>{{ l.condition|replace('_',' ')|capitalize }}{% if l.stock_status %} &middot; {{ l.stock_status }}{% endif %}{% if l.price_valid_until %} &middot; <span class="{{ 'promo-lapsed' if l.promo_lapsed else 'promo-ends' }}">{{ 'ended' if l.promo_lapsed else 'ends' }} {{ l.price_valid_until|shortdate }}</span>{% endif %}</small>
     </span>
     <span class="price" data-cell="delivered">
       {%- if l.delivered_price is none %}<span class="unresolved">no price</span>
@@ -212,6 +212,10 @@
     <div class="field">
       <div class="k">Warranty {{ prov(l, 'warranty') }}</div>
       <div class="v">{{ editable(l, 'warranty') }}</div>
+    </div>
+    <div class="field">
+      <div class="k">Deal ends {{ prov(l, 'price_valid_until') }}</div>
+      <div class="v">{{ editable(l, 'price_valid_until', 'date') }}</div>
     </div>
     <div class="field" style="grid-column: 1 / -1">
       <div class="k">In the box {{ prov(l, 'included_components') }}</div>

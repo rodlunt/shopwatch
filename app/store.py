@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 from collections.abc import Mapping
+from datetime import UTC, date, datetime
 from typing import Any
 
 from . import pricing, provenance
@@ -197,6 +198,14 @@ def enrich_listing(
         f for f, p in listing["provenance"].items() if p["manual_locked"]
     )
     listing["rank"] = pricing.rank_key(delivered, penalty)
+    # Display-only: whether a retailer-stated promo end-date has already passed. This
+    # never touches classify() or rank_key() above - issue #97 leaves "should a lapsed
+    # promo affect classification" as a separate, undecided question, so a lapsed date
+    # is shown, not acted on.
+    listing["promo_lapsed"] = (
+        listing["price_valid_until"] is not None
+        and date.fromisoformat(listing["price_valid_until"]) < datetime.now(UTC).date()
+    )
     return listing
 
 
