@@ -259,7 +259,15 @@ footer.site .build { font-family: var(--mono); }
   border: 0;
 }
 
-.axis { padding: 2px 24px 14px; }
+/* 20px, not 24px: every other direct child of .product (product-head, verdict, lead,
+ * the historical-low caption, contenders/listing-row) insets by 20px. 24px is this
+ * codebase's PAGE-level gutter (header.top, main, .breadcrumbs, footer.site all use
+ * it for the outer viewport margin) - .axis had it too despite being a card-level
+ * element nested at the same depth as verdict/product-head, not at the page edge.
+ * Found during a full sweep for this exact class of inconsistency; confirmed by
+ * measuring rendered text position (411.5px vs 407.5px for the axis-window readout
+ * against the verdict text directly above it), not just eyeballed. */
+.axis { padding: 2px 20px 14px; }
 
 .axis-head {
   display: flex; align-items: baseline; gap: 12px;
