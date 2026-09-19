@@ -290,7 +290,8 @@
         <small>Delivered{% if product.trigger_price_auto %} &middot; <span class="tag" title="Filled in from the best price ever seen - shopwatch's guess, not a chosen target. Change it, or clear it back to blank, and it stops tracking.">auto</span>{% endif %}</small></label>
       <label>A good price is <input id="ep-excellent_price" type="number" step="0.01" value="{{ product.excellent_price or '' }}">
         {% if product.excellent_price_auto %}<small><span class="tag" title="Filled in from the best price ever seen - shopwatch's guess, not a chosen target. Change it, or clear it back to blank, and it stops tracking.">auto</span></small>{% endif %}</label>
-      <label>Historical low territory <input id="ep-historical_low_price" type="number" step="0.01" value="{{ product.historical_low_price or '' }}"></label>
+      <label>Historical low territory <input id="ep-historical_low_price" type="number" step="0.01" value="{{ product.historical_low_price or '' }}">
+        {% if product.historical_low_price_auto %}<small><span class="tag" title="Filled in from the best price ever seen - shopwatch's guess, not a chosen target. A listing at or under this price rates HISTORICAL LOW TERRITORY, so this affects live classification, not just this dialog. Change it, or clear it back to blank, and it stops tracking.">auto</span></small>{% endif %}</label>
       <label>Best it has ever been <input id="ep-lowest_known_price" type="number" step="0.01" value="{{ product.lowest_known_price or '' }}"></label>
       <label>When <input id="ep-lowest_known_date" value="{{ product.lowest_known_date or '' }}" placeholder="YYYY-MM-DD"></label>
       <label>Where <input id="ep-lowest_known_retailer" value="{{ product.lowest_known_retailer or '' }}"></label>

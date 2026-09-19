@@ -159,14 +159,14 @@ def update_product(conn: sqlite3.Connection, product_id: int, data: Mapping[str,
         return
     # A genuine hand-typed change to a derived target locks it - the same "a manual
     # edit beats an automated write" discipline provenance.py enforces for listings,
-    # just without the full state machine (see migrations/0014 for why two booleans
+    # just without the full state machine (see migrations/0014 for why three booleans
     # are enough here). "Genuine" matters: the edit dialog's Save always resubmits
     # every field on the form (app.js ep-save), whether or not the user touched it,
     # so "present in the payload" cannot mean "the user changed this" - only a value
     # that actually differs from what is stored does. Clearing a target back to null
     # is a deliberate action too, but it reads as "let shopwatch guess again", not as
     # a value worth protecting, so it unlocks the field instead of locking it at null.
-    lockable = {"trigger_price", "excellent_price"} & payload.keys()
+    lockable = {"trigger_price", "excellent_price", "historical_low_price"} & payload.keys()
     if lockable:
         current = get_product(conn, product_id)
         if current is not None:
@@ -751,7 +751,8 @@ TRIGGER_MARGIN = 1.10
 
 
 def maybe_derive_price_targets(conn: sqlite3.Connection, product_id: int) -> bool:
-    """Fill trigger_price/excellent_price from lowest_known_price when they are unset.
+    """Fill trigger_price/excellent_price/historical_low_price from lowest_known_price
+    when they are unset.
 
     "Unset" is the whole trigger: this only ever writes into a NULL field, so a value
     the user typed in by hand - or a previous auto-fill they have not cleared - is
@@ -759,6 +760,23 @@ def maybe_derive_price_targets(conn: sqlite3.Connection, product_id: int) -> boo
     sits still (still labelled "auto" via *_price_auto) until either a human overwrites
     it, which locks it per update_product, or clears it back to null, which puts it
     back in scope for this function to fill again on the next call.
+
+    historical_low_price = lowest_known_price exactly, same reasoning as excellent_price
+    below: matching the actual recorded low IS what "historical low territory" means.
+    Unlike the other two, this one is not just a display default - pricing.classify()
+    reads historical_low_price directly, checked before excellent_price and trigger_price
+    (app/pricing.py, HISTORICAL_LOW is checked first and wins ties). So on a product that
+    already has a lowest_known_price and no historical_low_price set, this can change a
+    listing's classification the moment it runs - a listing sitting at or under the known
+    low newly rates HISTORICAL LOW TERRITORY instead of whatever it rated before. That is
+    the intended behaviour (the classification was arguably wrong before, given the price
+    data already on hand), not a side effect to guard against, but it is a real behavioural
+    change on existing products the first time this ships, not only a cosmetic UI default
+    the way the other two fields are. One consequence worth knowing: because both default
+    to exactly lowest_known_price, the EXCELLENT tier has no width under pure auto-derived
+    defaults - a price at or under the low always resolves to the better HISTORICAL_LOW
+    rating instead. A human who wants a distinct EXCELLENT band back can always type over
+    either threshold, which locks it.
 
     Called from every place lowest_known_price can change: update_product (a human
     typing it into the edit dialog, or confirming a historical-low research finding
@@ -772,6 +790,9 @@ def maybe_derive_price_targets(conn: sqlite3.Connection, product_id: int) -> boo
     if low is None:
         return False
     updates: dict[str, Any] = {}
+    if product["historical_low_price"] is None:
+        updates["historical_low_price"] = low
+        updates["historical_low_price_auto"] = 1
     if product["excellent_price"] is None:
         updates["excellent_price"] = low
         updates["excellent_price_auto"] = 1
