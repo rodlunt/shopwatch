@@ -709,6 +709,18 @@ dialog > footer { padding: 13px 20px; border-top: 1px solid var(--rule); display
 .wizard-suggest-list p.muted { width: 100%; margin: 0; font-size: 12.5px; }
 .wizard-suggest-chip { font-size: 12.5px; padding: 5px 10px; }
 
+/* issue #93's historical-low finding: styled deliberately plain (a bordered box, a
+ * neutral .tag, no green/red) so it never reads as a HISTORICAL LOW TERRITORY /
+ * EXCELLENT classification - those are earned through real tracked listings, this is
+ * one AI research pass the person still has to confirm or discard. */
+.historical-low-result[hidden] { display: none; }
+.historical-low-result { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--rule-soft);
+  border-radius: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.historical-low-result .num { font-size: 20px; font-weight: 700; }
+.historical-low-result .meta { color: var(--muted); font-size: 12.5px; }
+.historical-low-result .reason { color: var(--ink-soft); }
+.historical-low-result .actions { display: flex; gap: 8px; margin-top: 2px; }
+
 #toast { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #toast div {
   background: var(--surface); border: 1px solid var(--rule); border-left: 3px solid var(--close);

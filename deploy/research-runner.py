@@ -28,6 +28,12 @@ shopwatch-research-runner.sh (see deploy/).
 Default-deny is enforced server-side (research.create_job only ever queues retailer ids
 that already exist in shopwatch's own retailers table), so this script never has to
 decide which domains are in scope - it only ever sees retailers the job itself named.
+
+Also claims a second kind of research_jobs row (issue #93): kind="historical_low" asks
+"has this ever been cheaper" instead of "what's it selling for today", once per job
+rather than once per retailer (process_historical_low_job). The finding is reported via
+POST .../historical-low, never through /api/import - it is a best-effort estimate for a
+human to confirm or discard on the product page, not a confirmed listing.
 """
 
 from __future__ import annotations
@@ -58,6 +64,12 @@ FIRECRAWL_MAX_CANDIDATES = 8
 #: Matches the house convention already set by app/offers.py's own CLI timeouts.
 RETAILER_TIMEOUT_SECONDS = 90
 
+#: A historical-low pass reads more sources than a single retailer's product page (a
+#: price-history tracker, a deal-forum thread, a comparison site), so it gets more time
+#: than RETAILER_TIMEOUT_SECONDS - still one single-shot call, still well under
+#: JOB_CEILING_SECONDS.
+HISTORICAL_LOW_TIMEOUT_SECONDS = 150
+
 #: Hard ceiling for the whole job, independent of how many retailers it names. Backstops
 #: app/research.py's own time-based staleness check (JOB_CEILING_SECONDS) from the other
 #: side: if this script is still running past the point the server would have already
@@ -85,6 +97,44 @@ Return ONLY a JSON object, no prose, no code fence, matching this shape:
   "stock": string or null (e.g. "In stock", "Out of stock"),
   "url": string or null (the product page you read),
   "reason": string (why not found, if found is false; brief confirmation if true)
+}}
+"""
+
+#: issue #93: "has this ever been cheaper", not "what does it cost today". One call for
+#: the whole product, not one per retailer - a historical low is a single fact about the
+#: item, not something separate at each retailer. Deliberately asks for AU price-history
+#: trackers (the same kind of source a person would check by hand) rather than the
+#: model's own training-data recall of "typical" prices, and deliberately asks the model
+#: to say how confident it is, since this is going to be shown to a human as an estimate
+#: to confirm or discard, never as a fact.
+HISTORICAL_LOW_PROMPT = """You are researching the lowest price this specific product
+has ever been sold for in Australia, including BEFORE today - this is a historical
+question, not a current-price check. Use web search: price-history trackers (e.g.
+camelcamelcamel-style sites, Australian deal-tracking sites/forums such as OzBargain),
+cached or archived retailer pages, and reputable price-comparison sites that show past
+prices. Do not rely on general knowledge or a guess about "typical" prices for this
+category - only report a price you can point to a source for.
+
+Product: {product_name}
+Exact model: {model}
+
+Find the lowest confirmed price you can for this exact model, at any legitimate
+Australian retailer, at any point in time (including now, if today's price happens to
+be the lowest ever seen). If you cannot find a specific historical price you are
+reasonably confident is this exact model, say so - a wrong number is worse than no
+number, since a person will use this to decide whether a current price is actually
+good.
+
+Return ONLY a JSON object, no prose, no code fence, matching this shape:
+{{
+  "found": true or false,
+  "price": number or null (the lowest price found, before freight),
+  "date": string or null (YYYY-MM-DD if known, or a rough period like "mid 2025" if
+    that's the best you have - null if you cannot even estimate when),
+  "retailer": string or null (who sold it at that price),
+  "confidence": "LOW", "MEDIUM" or "HIGH" (how sure you are this is a real historical
+    low for this exact model, not a guess or a different model/size),
+  "reason": string (what source(s) you used, or why nothing usable was found)
 }}
 """
 
@@ -158,6 +208,55 @@ def parse_research_reply(raw: str) -> dict[str, Any]:
     return data
 
 
+def parse_historical_low_reply(raw: str) -> dict[str, Any]:
+    """Pull the JSON object out of a historical-low CLI reply.
+
+    Deliberately does NOT raise RunnerError for a well-formed "not found" or
+    unparseable reply, unlike parse_research_reply: a historical-low job has no
+    per-retailer result to attach a NEEDS_MANUAL_CHECK status to, so "the model ran
+    and came back with nothing usable" is reported as a legitimate empty finding
+    (found: False) rather than a failure of the job itself - see
+    process_historical_low_job. Only a genuinely empty reply raises, for the caller to
+    treat as a hard failure (the CLI produced nothing at all, as distinct from the CLI
+    producing a considered "couldn't find one").
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("empty reply")
+
+    start = raw.find("{")
+    if start == -1:
+        return {
+            "found": False, "price": None, "date": None, "retailer": None,
+            "confidence": None, "reason": f"no JSON in reply: {raw[:150]!r}",
+        }
+    try:
+        data = _last_json_object(raw, start)
+    except ValueError as exc:
+        return {
+            "found": False, "price": None, "date": None, "retailer": None,
+            "confidence": None, "reason": str(exc),
+        }
+
+    price = data.get("price")
+    price_is_usable = (
+        isinstance(price, int | float) and not isinstance(price, bool)
+        and math.isfinite(price)
+    )
+    found = data.get("found") is True and price_is_usable
+    confidence = data.get("confidence")
+    if confidence not in ("LOW", "MEDIUM", "HIGH"):
+        confidence = None
+    return {
+        "found": found,
+        "price": price if found else None,
+        "date": data.get("date") if found else None,
+        "retailer": data.get("retailer") if found else None,
+        "confidence": confidence if found else None,
+        "reason": str(data.get("reason") or ("not found" if not found else "")),
+    }
+
+
 def research_one_retailer(
     base_url: str,
     claude_bin: str,
@@ -193,7 +292,70 @@ def research_one_retailer(
     return parse_research_reply(proc.stdout)
 
 
+def research_historical_low(
+    base_url: str, claude_bin: str, product_name: str, model: str,
+) -> dict[str, Any]:
+    """Ask the headless CLI for the product's historical low. One call, whole product -
+    see HISTORICAL_LOW_PROMPT. Returns a parsed finding (which may honestly be "not
+    found") or raises RunnerError for a subprocess-level failure (crash, timeout,
+    missing binary, non-zero exit)."""
+    prompt = HISTORICAL_LOW_PROMPT.format(product_name=product_name, model=model)
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p", "--allowedTools", "WebSearch,WebFetch"],
+            input=prompt, capture_output=True, text=True,
+            timeout=HISTORICAL_LOW_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise RunnerError("FAILED", f"{claude_bin} not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RunnerError(
+            "FAILED", f"no reply within {HISTORICAL_LOW_TIMEOUT_SECONDS}s"
+        ) from exc
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "non-zero exit")[:300]
+        raise RunnerError("FAILED", f"claude exited {proc.returncode}: {stderr}")
+
+    try:
+        return parse_historical_low_reply(proc.stdout)
+    except ValueError as exc:
+        raise RunnerError("FAILED", str(exc)) from exc
+
+
+def process_historical_low_job(base_url: str, claude_bin: str, job: dict[str, Any]) -> None:
+    """issue #93: a single whole-product pass, not a loop over retailers. The finding
+    (or the honest lack of one) is recorded via /historical-low - never /import, and
+    never anything that could move products.lowest_known_price on its own."""
+    product = requests.get(f"{base_url}/api/products/{job['product_id']}", timeout=30).json()
+    try:
+        found = research_historical_low(base_url, claude_bin, product["name"], product["model"])
+    except RunnerError as exc:
+        log.info("job %s historical-low: %s (%s)", job["id"], exc.status, exc.note)
+        requests.post(f"{base_url}/api/research-jobs/{job['id']}/complete",
+                      json={"status": "FAILED", "error": exc.note[:300]}, timeout=30)
+        return
+
+    requests.post(
+        f"{base_url}/api/research-jobs/{job['id']}/historical-low",
+        json={
+            "price": found["price"], "date": found["date"], "retailer": found["retailer"],
+            "confidence": found["confidence"], "notes": (found.get("reason") or "")[:500],
+        },
+        timeout=30,
+    )
+    log.info(
+        "job %s historical-low: %s", job["id"],
+        f"found ${found['price']}" if found["found"] else "no confident historical low found",
+    )
+    requests.post(f"{base_url}/api/research-jobs/{job['id']}/complete",
+                  json={"status": "DONE"}, timeout=30)
+
+
 def process_job(base_url: str, claude_bin: str, job: dict[str, Any]) -> None:
+    if job.get("kind") == "historical_low":
+        process_historical_low_job(base_url, claude_bin, job)
+        return
+
     product = requests.get(f"{base_url}/api/products/{job['product_id']}", timeout=30).json()
     deadline = time.monotonic() + JOB_CEILING_SECONDS
 
