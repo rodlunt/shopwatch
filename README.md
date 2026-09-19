@@ -504,14 +504,14 @@ fewer than 2 real listings, and when it does, the response is deliberately label
 ## Paste a listing URL
 
 Sometimes you already have the one thing that matters: a link to the listing. "Add
-retailer" wants a retailer name typed in, and the wizard's research step wants a
+retailer manually" wants a retailer name typed in, and the wizard's research step wants a
 retailer picked from a list - neither is built for "I found this page, just add it."
-The product page's **Paste a listing URL** button is: paste an address, nothing else,
+The product page's **Add from a URL** button is: paste an address, nothing else,
 and `POST /api/products/{id}/retailers/from-url` works out the rest.
 
 1. The retailer is derived from the URL's own domain and created via
-   `store.ensure_retailer` if it's new - the same call "Add retailer" already uses, so
-   a retailer created this way behaves identically to one typed by hand.
+   `store.ensure_retailer` if it's new - the same call "Add retailer manually" already
+   uses, so a retailer created this way behaves identically to one typed by hand.
 2. The listing is created (or matched, if you paste the same URL twice) with that URL
    saved, unconditionally, before anything else is attempted - a URL with nowhere to
    land was the actual gap this closes, and that much happens even if every step below
@@ -577,9 +577,9 @@ best-effort `other_retailers` list (`{"name": ..., "url": ...}`), stored as a ra
 content relayed through the model, and the product page renders it straight into a link's `href`.
 The product page shows each candidate as a checkbox next to the historical-low result; ticking one
 and pressing "Add ticked as listings" calls the exact same `POST /api/products/{id}/retailers` (no
-URL) or `POST /api/products/{id}/retailers/from-url` (URL present) endpoints "Add retailer" and
-"Paste a listing URL" already use - no separate listing-creation path, and nothing is added until
-a person ticks the box and confirms, same discipline as "Use this" above.
+URL) or `POST /api/products/{id}/retailers/from-url` (URL present) endpoints "Add retailer
+manually" and "Add from a URL" already use - no separate listing-creation path, and nothing
+is added until a person ticks the box and confirms, same discipline as "Use this" above.
 
 ## Suggesting a model number ("Set up your LLM")
 

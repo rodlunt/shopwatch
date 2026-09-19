@@ -34,7 +34,7 @@ def test_product_page_renders_the_paste_url_action(client):
     product = q930h(client)
     response = client.get(f"/products/{product['id']}")
     assert response.status_code == 200
-    assert "Paste a listing URL" in response.text
+    assert "Add from a URL" in response.text
 
 
 def test_pasting_a_url_for_an_unconfigured_retailer_creates_a_listing_and_queues_research(
