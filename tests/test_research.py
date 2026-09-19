@@ -168,6 +168,50 @@ def test_a_job_running_within_the_ceiling_is_left_alone(conn, product_id, retail
     assert job["status"] == "RUNNING"
 
 
+def test_create_job_records_a_url_for_the_retailer_it_was_given(
+    conn, product_id, retailer_ids
+):
+    """The "paste a listing URL" path (issue #94): a job scoped to one URL must carry
+    it through to the result row, so the runner can read that exact page instead of
+    searching generically."""
+    url = "https://www.example.com.au/some-product"
+    job_id = research.create_job(
+        conn, product_id, [retailer_ids[0]], urls={retailer_ids[0]: url}
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    by_retailer = {r["retailer_id"]: r["url"] for r in job["results"]}
+    assert by_retailer[retailer_ids[0]] == url
+
+
+def test_create_job_without_urls_leaves_url_null(conn, product_id, retailer_ids):
+    """The ordinary wizard retailer-picker path (no urls argument at all) must not
+    regress: every result row's url stays null, exactly as before this column existed."""
+    job_id = research.create_job(conn, product_id, retailer_ids)
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    assert all(r["url"] is None for r in job["results"])
+
+
+def test_create_job_only_sets_url_for_the_retailer_it_was_given_for(
+    conn, product_id, retailer_ids
+):
+    """A urls dict naming only one of several retailers must not leak that URL onto
+    the others - each result row's url is specific to its own retailer."""
+    url = "https://www.example.com.au/some-product"
+    job_id = research.create_job(
+        conn, product_id, retailer_ids, urls={retailer_ids[0]: url}
+    )
+    conn.commit()
+
+    job = research.get_job(conn, job_id)
+    by_retailer = {r["retailer_id"]: r["url"] for r in job["results"]}
+    assert by_retailer[retailer_ids[0]] == url
+    assert by_retailer[retailer_ids[1]] is None
+
+
 def test_reconciling_a_stale_running_job_frees_the_product_for_a_new_one(
     conn, product_id, retailer_ids
 ):

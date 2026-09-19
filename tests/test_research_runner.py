@@ -263,3 +263,114 @@ def test_the_claude_call_grants_web_search_and_fetch(monkeypatch):
     tools = args[args.index("--allowedTools") + 1]
     assert "WebSearch" in tools.split(",")
     assert "WebFetch" in tools.split(",")
+
+
+# ------------------------------------------------------ URL-scoped requests (issue #94)
+
+
+def test_a_url_scoped_request_uses_the_url_prompt_and_names_the_exact_page(monkeypatch):
+    captured = {}
+
+    def fake_run(args, input=None, **kwargs):
+        captured["args"] = args
+        captured["prompt"] = input
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError):
+        research_runner.research_one_retailer(
+            "http://x", "claude", "Some Product", "SKU-1", "Centre Com", None,
+            "https://www.centrecom.com.au/some-product",
+        )
+
+    assert "https://www.centrecom.com.au/some-product" in captured["prompt"]
+    assert "Read the page at this exact URL directly" in captured["prompt"]
+
+
+def test_a_url_scoped_request_withholds_websearch(monkeypatch):
+    """The structural half of "read this exact page, don't search": WebSearch must not
+    even be a tool the model has available, not just a tool the prompt asks it to
+    avoid."""
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError):
+        research_runner.research_one_retailer(
+            "http://x", "claude", "Some Product", "SKU-1", "Centre Com", None,
+            "https://www.centrecom.com.au/some-product",
+        )
+
+    args = captured["args"]
+    tools = args[args.index("--allowedTools") + 1].split(",")
+    assert "WebFetch" in tools
+    assert "WebSearch" not in tools
+
+
+def test_a_request_with_no_url_still_uses_the_general_prompt_and_both_tools(monkeypatch):
+    captured = {}
+
+    def fake_run(args, input=None, **kwargs):
+        captured["args"] = args
+        captured["prompt"] = input
+        raise research_runner.subprocess.TimeoutExpired(args, 1)
+
+    monkeypatch.setattr(research_runner.subprocess, "run", fake_run)
+    with pytest.raises(research_runner.RunnerError):
+        research_runner.research_one_retailer(
+            "http://x", "claude", "Some Product", "SKU-1", "JB Hi-Fi", "https://www.jbhifi.com.au",
+        )
+
+    assert "Read the page at this exact URL directly" not in captured["prompt"]
+    tools = captured["args"][captured["args"].index("--allowedTools") + 1].split(",")
+    assert {"WebSearch", "WebFetch"} <= set(tools)
+
+
+def test_process_job_passes_the_result_row_url_through(monkeypatch):
+    """process_job must forward each result row's own url, not the product's or a
+    previous row's - a job mixing a URL-scoped retailer with an ordinary one must not
+    cross-contaminate them."""
+    captured_urls = []
+
+    def fake_research_one_retailer(base_url, claude_bin, product_name, model,
+                                    retailer_name, homepage, url=None):
+        captured_urls.append(url)
+        return {"price": 100, "stock": None, "url": url, "reason": "ok"}
+
+    class FakeResponse:
+        def json(self):
+            return self._data
+
+    def fake_get(url, timeout=None):
+        resp = FakeResponse()
+        resp._data = {"name": "Some Product", "model": "SKU-1"}
+        return resp
+
+    posted = []
+
+    def fake_post(url, json=None, timeout=None):
+        posted.append((url, json))
+        resp = FakeResponse()
+        resp._data = {"results": []}
+        return resp
+
+    monkeypatch.setattr(research_runner, "research_one_retailer", fake_research_one_retailer)
+    monkeypatch.setattr(research_runner.requests, "get", fake_get)
+    monkeypatch.setattr(research_runner.requests, "post", fake_post)
+
+    job = {
+        "id": 1,
+        "product_id": 1,
+        "results": [
+            {"retailer_id": 1, "retailer_name": "Centre Com", "retailer_homepage": None,
+             "url": "https://www.centrecom.com.au/x"},
+            {"retailer_id": 2, "retailer_name": "JB Hi-Fi",
+             "retailer_homepage": "https://www.jbhifi.com.au", "url": None},
+        ],
+    }
+    research_runner.process_job("http://x", "claude", job)
+
+    assert captured_urls == ["https://www.centrecom.com.au/x", None]

@@ -74,7 +74,10 @@ def reconcile_stale(conn: sqlite3.Connection) -> list[int]:
 
 
 def create_job(
-    conn: sqlite3.Connection, product_id: int, retailer_ids: list[int]
+    conn: sqlite3.Connection,
+    product_id: int,
+    retailer_ids: list[int],
+    urls: dict[int, str] | None = None,
 ) -> int:
     """Queue a job for one product across a fixed set of retailers.
 
@@ -82,6 +85,13 @@ def create_job(
     table is silently dropped rather than passed through, so this can only ever ask
     about a retailer shopwatch already knows, never wherever a typo or a scraped page
     might lead the research pass.
+
+    `urls` is optional and keyed by retailer_id: when a retailer id has an entry, the
+    runner reads that exact page instead of searching generically for the product at
+    that retailer (see deploy/research-runner.py's `research_one_retailer`). This is
+    the "paste a listing URL" path (issue #94) - the whole point of having a URL in
+    hand is that the runner does not have to guess which page is the right one. A
+    retailer id with no entry behaves exactly as before.
 
     Refuses outright for an archived product - "give up on this" (or a group purchase
     that archived every other candidate) means stop watching, and a stray research job
@@ -118,11 +128,12 @@ def create_job(
             raise JobAlreadyRunning(int(existing["id"])) from exc
         raise
     job_id = int(cur.lastrowid)
+    urls = urls or {}
     for retailer_id in known_ids:
         conn.execute(
-            "INSERT INTO research_job_results (job_id, retailer_id, status)"
-            " VALUES (?, ?, 'PENDING')",
-            (job_id, retailer_id),
+            "INSERT INTO research_job_results (job_id, retailer_id, status, url)"
+            " VALUES (?, ?, 'PENDING', ?)",
+            (job_id, retailer_id, urls.get(retailer_id)),
         )
     return job_id
 
