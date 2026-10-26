@@ -197,6 +197,61 @@ def test_a_variant_that_is_not_on_the_page_is_not_replaced_by_another():
               "Raspberry Pi 4 Model B 16GB")
 
 
+# ------------------------------------------------- Raspberry Pi 3 Model B+ (2018 board)
+
+B_PLUS = "Raspberry Pi 3 Model B+"
+B_PLUS_PAGES = [
+    # slug, fixture, price, availability
+    ("little_bird", "little_bird_pi3_bplus_in_stock.html", 83.23, av.IN_STOCK),
+    ("raspberry_pi_australia", "pi_australia_pi3_bplus_in_stock.html", 83.23, av.IN_STOCK),
+    ("core_electronics", "core_electronics_pi3_bplus_in_stock.html", 64.79, av.IN_STOCK),
+    ("pakronics", "pakronics_pi3_bplus_out_of_stock.html", 70.4, av.OUT_OF_STOCK),
+    ("pb_tech", "pb_tech_pi3_bplus_out_of_stock.html", 72.17, av.OUT_OF_STOCK),
+]
+
+
+@pytest.mark.parametrize("slug, name, price, state", B_PLUS_PAGES)
+def test_pi3_b_plus_reads_price_and_stock_at_each_retailer(slug, name, price, state):
+    obs = parse(slug, name, B_PLUS, B_PLUS)
+    assert (obs.advertised_price, obs.availability) == (price, state)
+    assert obs.freight is None, "freight is quoted at the cart and must stay unresolved"
+
+
+@pytest.mark.parametrize("slug, name, price, state", B_PLUS_PAGES)
+def test_pi3_b_plus_listing_pointed_at_the_plain_model_b_page_is_rejected(
+    slug, name, price, state
+):
+    """Control: the intact B+ page parses. The same page retitled as the 2016 Model B (a
+    different board with the same generation digit) must raise, not take its price."""
+    assert parse(slug, name, B_PLUS, B_PLUS).advertised_price == price
+    html = page(name).replace("Model B+", "Model B")
+    assert html != page(name)
+    with pytest.raises(ParseFailure, match="Model B"):
+        get_adapter(slug).parse(html, B_PLUS, B_PLUS)
+
+
+def test_a_plain_model_b_product_rejects_a_b_plus_page():
+    with pytest.raises(ParseFailure, match="Model B"):
+        parse("little_bird", "little_bird_pi3_bplus_in_stock.html", "Raspberry Pi 3 Model B",
+              "Raspberry Pi 3 Model B")
+
+
+def test_the_2014_model_b_plus_with_no_generation_is_rejected():
+    html = page("little_bird_pi3_bplus_in_stock.html").replace(
+        "Raspberry Pi 3 Model B+", "Raspberry Pi Model B+")
+    with pytest.raises(ParseFailure, match="no Pi generation"):
+        get_adapter("little_bird").parse(html, B_PLUS, B_PLUS)
+
+
+def test_little_bird_with_no_structured_data_is_a_failure():
+    name = "little_bird_pi3_bplus_in_stock.html"
+    assert get_adapter("little_bird").parse(page(name), B_PLUS, B_PLUS).advertised_price
+    broken = re.sub(r'<script type="application/ld\+json">.*?</script>', "", page(name),
+                    flags=re.S)
+    with pytest.raises(ParseFailure):
+        get_adapter("little_bird").parse(broken, B_PLUS, B_PLUS)
+
+
 # ----------------------------------------------------------- fetching and robots
 
 
@@ -283,7 +338,7 @@ def test_an_interstitial_and_an_http_error_are_failures(net):
 
 def test_every_adapter_is_registered_and_amazon_is_not():
     for slug in ("core_electronics", "pb_tech", "pakronics", "small_devices", "zaitronics",
-                 "raspberry_pi_australia"):
+                 "raspberry_pi_australia", "little_bird"):
         assert get_adapter(slug) is not None, slug
     assert get_adapter("amazon_au") is None, "Amazon AU is deliberately manual"
 

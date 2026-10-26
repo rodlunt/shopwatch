@@ -842,7 +842,7 @@ fired egress-watch pushes to `security-events`, because the container had never 
 those connections before and the destinations sit on rotating CDN addresses that cannot
 be allowlisted by `/32`. That is now solved properly rather than ignored: egress-watch
 learned **hostname** allowlist entries (`host:<name>`, resolved and refreshed by
-egress-watch itself) and only the six Pi retailer hostnames are listed, each with a
+egress-watch itself) and only the Pi retailer hostnames are listed, each with a
 reason, in `smart-home:opti-stacks/egress-watch/allowlist.conf`. An unrelated host from
 the same container still alerts. The general board has no schedule because it has no
 adapter worth running twice a day (Harvey Norman errors on a bot interstitial, Appliance
@@ -1036,6 +1036,7 @@ them, **twice a day**, and tells you when one goes on sale, drops, or becomes av
 | Raspberry Pi Australia | working | Shopify JSON-LD, variant chosen by SKU/RAM; reads "is backordered" |
 | Zaitronics | working | Shopify JSON-LD; lead time on sold-out items |
 | Small Devices | working | Shopify JSON-LD, variant chosen by RAM |
+| Little Bird Electronics | working | schema.org JSON-LD on a custom (non-Shopify) storefront; added for the Pi 3 Model B+ |
 | Amazon AU | **unsupported, manual** | see below |
 
 Amazon AU is deliberately not automated. Its conditions of use forbid automated access, the
@@ -1047,6 +1048,16 @@ that is wrong is worse than none, so those listings stay hand-maintained and sho
 All prices are GST inclusive. **Freight is never read**: every one of these shops quotes
 it at the cart by postcode, so it stays unresolved and alerts say "freight is quoted at the
 cart and is not included".
+
+### Raspberry Pi 3 Model B+
+
+`python tools/add_pi3_bplus.py` (run on opti, against `127.0.0.1:8477`) adds the 2018 Pi 3
+Model B+ as a `Barkmarker` product with its five Australian listings (Core Electronics,
+Little Bird, Pi Australia, Pakronics, PB Tech). Idempotent, sets no target price, and
+prints any listing the adapter could not read as `UNREAD`. The identity check refuses a
+page that names the plain Pi 3 Model B (a different 2016 board) or the 2014 Model B+. Zaitronics and Small Devices stock no
+Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to egress-watch
+(`host:littlebirdelectronics.com.au,443,tcp,...`) before its first scheduled run.
 
 ### Politeness, as a rule
 
@@ -1163,7 +1174,7 @@ Read-only, additive. For menu-crm on opti: `curl -s http://127.0.0.1:8477/api/pi
                              "automatic": true, "last_error": null}]}]}
 ```
 
-Egress: the container's connections to the six retailer hostnames are allowlisted by
+Egress: the container's connections to the seven retailer hostnames are allowlisted by
 hostname in egress-watch (see "Scheduling the watch"). If a retailer moves to a new host,
 the adapter fails with a connection error and the allowlist needs the new hostname; an
 unlisted host from this container still raises an egress alert, by design.
