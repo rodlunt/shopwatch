@@ -288,7 +288,7 @@ def test_every_adapter_is_registered_and_amazon_is_not():
     assert get_adapter("amazon_au") is None, "Amazon AU is deliberately manual"
 
 
-def test_a_429_with_a_short_retry_after_is_waited_out_once(net):
+def test_a_429_with_a_short_retry_after_is_waited_out(net):
     routes, calls = net
     routes[ROBOTS] = Resp(404)
     routes[URL] = [Resp(429, headers={"Retry-After": "60"}),
@@ -307,7 +307,17 @@ def test_it_gives_up_when_asked_to_wait_too_long_or_throttled_twice(net):
         get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
     assert [c[0] for c in calls].count(URL) == 1, "no retry when the wait is an hour"
     robots.clear_cache()
-    routes[URL] = [Resp(429, headers={"Retry-After": "5"}), Resp(429, headers={"Retry-After": "5"})]
+    before = [c[0] for c in calls].count(URL)
+    routes[URL] = [Resp(429, headers={"Retry-After": "5"})] * 5
     with pytest.raises(FetchError, match="429"):
         get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
-    assert [c[0] for c in calls].count(URL) == 3, "one retry only, never a loop"
+    assert [c[0] for c in calls].count(URL) - before == 3, "bounded: three tries, never a loop"
+
+
+def test_it_keeps_trying_through_two_throttles_then_succeeds(net):
+    routes, calls = net
+    routes[ROBOTS] = Resp(404)
+    throttled = Resp(429, headers={"Retry-After": "60"})
+    routes[URL] = [throttled, throttled, Resp(200, page("zaitronics_pi4_2gb_lead_time.html"))]
+    assert get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
+    assert [c[0] for c in calls].count(URL) == 3

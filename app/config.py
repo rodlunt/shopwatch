@@ -106,6 +106,7 @@ class Config:
     pi_retry_after_max: float = field(
         default_factory=lambda: _float("SHOPWATCH_PI_RETRY_AFTER_MAX", 90.0)
     )
+    pi_max_attempts: int = field(default_factory=lambda: _int("SHOPWATCH_PI_MAX_ATTEMPTS", 3))
     robots_enforced: bool = field(default_factory=lambda: _bool("SHOPWATCH_ROBOTS_ENFORCED", True))
     # Runs are twice a day, so 36 hours is "missed one run and then some".
     pi_stale_hours: float = field(default_factory=lambda: _float("SHOPWATCH_PI_STALE_HOURS", 36.0))
