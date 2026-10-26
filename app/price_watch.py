@@ -277,6 +277,10 @@ def run(
             if product is None:
                 continue
             status = check_listing(conn, listing, product, run_id, config)
+            # Commit per listing. A run with retries can take many minutes, and holding
+            # one write transaction open that long would make every other write (a UI
+            # edit, mailwatch posting an offer) wait out SQLite's busy timeout and fail.
+            conn.commit()
             summary["checked"] += 1
             summary[STATUS_COUNTER[status]] += 1
             if status != "skipped":

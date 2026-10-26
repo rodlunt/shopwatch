@@ -189,11 +189,14 @@ class PiAdapter(RetailerAdapter):
                 robots.check(url, agent, self.config.request_timeout)
             except robots.RobotsError as exc:
                 raise FetchError(str(exc)) from exc
-        # At most two attempts. The second happens only when the retailer says "slow down"
-        # (429 or 503) AND tells us how long to wait, and that wait is short enough to sit
-        # through. Shopify answered the first Pi runs with 429 and Retry-After: 60 on
-        # roughly every other request, then 200 once left alone.
-        for attempt in (1, 2):
+        # Up to pi_max_attempts tries. Another happens only when the retailer says "slow
+        # down" (429 or 503) AND tells us how long to wait, and that wait is short enough
+        # to sit through. Shopify's shared edge answers storefront requests with
+        # "429 local_rate_limited, Retry-After: 60" at random while it is busy (observed
+        # on opti 2026-10-26: roughly half of requests, any URL, any pace, 200 on the
+        # next try), so one patient retry is not enough; three is.
+        attempts = max(self.config.pi_max_attempts, 1)
+        for attempt in range(1, attempts + 1):
             jitter = random.uniform(0, max(self.config.request_jitter, 0))
             time.sleep(max(self.config.request_delay, 0) + jitter)
             try:
@@ -204,7 +207,7 @@ class PiAdapter(RetailerAdapter):
                 )
             except Exception as exc:
                 raise FetchError(f"{type(exc).__name__}: {exc}") from exc
-            if response.status_code in (429, 503) and attempt == 1:
+            if response.status_code in (429, 503) and attempt < attempts:
                 wait = _retry_after(response)
                 if wait is not None and wait <= self.config.pi_retry_after_max:
                     time.sleep(wait)

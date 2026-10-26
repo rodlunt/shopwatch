@@ -10,4 +10,5 @@ Type=oneshot
 # Runs inside the container so the egress it causes is attributed to the shopwatch bridge,
 # which is what the allowlist entries in smart-home egress-watch are written for.
 ExecStart=/usr/bin/docker exec shopwatch python -m app.price_watch --category Barkmarker --trigger timer
-TimeoutStartSec=900
+# Shopify throttles at random and each refusal costs a 60 second wait, so a bad run is slow.
+TimeoutStartSec=3600
