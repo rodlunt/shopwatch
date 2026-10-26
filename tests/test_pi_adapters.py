@@ -201,8 +201,8 @@ def test_a_variant_that_is_not_on_the_page_is_not_replaced_by_another():
 
 
 class Resp:
-    def __init__(self, status=200, text=""):
-        self.status_code, self.text = status, text
+    def __init__(self, status=200, text="", headers=None):
+        self.status_code, self.text, self.headers = status, text, headers or {}
 
 
 @pytest.fixture()
@@ -212,18 +212,24 @@ def net(monkeypatch):
     monkeypatch.setenv("SHOPWATCH_REQUEST_DELAY", "0")
     monkeypatch.setenv("SHOPWATCH_REQUEST_JITTER", "0")
     robots.clear_cache()
-    calls: list[tuple[str, str]] = []
-    routes: dict[str, Resp] = {}
+    class Calls(list):
+        pass
+
+    calls = Calls()
+    calls.sleeps = sleeps = []
+    routes: dict = {}
 
     def fake_get(url, timeout=None, headers=None):
         calls.append((url, (headers or {}).get("User-Agent", "")))
         if url not in routes:
             raise ConnectionError("no route " + url)
-        return routes[url]
+        route = routes[url]
+        return route.pop(0) if isinstance(route, list) else route
 
     import app.retailers.pi_base as pi_base
     import app.robots as robots_mod
 
+    monkeypatch.setattr(pi_base.time, "sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr(pi_base.requests, "get", fake_get)
     monkeypatch.setattr(robots_mod.requests, "get", fake_get)
     yield routes, calls
@@ -280,3 +286,28 @@ def test_every_adapter_is_registered_and_amazon_is_not():
                  "raspberry_pi_australia"):
         assert get_adapter(slug) is not None, slug
     assert get_adapter("amazon_au") is None, "Amazon AU is deliberately manual"
+
+
+def test_a_429_with_a_short_retry_after_is_waited_out_once(net):
+    routes, calls = net
+    routes[ROBOTS] = Resp(404)
+    routes[URL] = [Resp(429, headers={"Retry-After": "60"}),
+                   Resp(200, page("zaitronics_pi4_2gb_lead_time.html"))]
+    obs = get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert obs.advertised_price == 88.0
+    assert 60.0 in calls.sleeps, "it honoured the Retry-After"
+    assert [c[0] for c in calls].count(URL) == 2
+
+
+def test_it_gives_up_when_asked_to_wait_too_long_or_throttled_twice(net):
+    routes, calls = net
+    routes[ROBOTS] = Resp(404)
+    routes[URL] = [Resp(429, headers={"Retry-After": "3600"})]
+    with pytest.raises(FetchError, match="429"):
+        get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert [c[0] for c in calls].count(URL) == 1, "no retry when the wait is an hour"
+    robots.clear_cache()
+    routes[URL] = [Resp(429, headers={"Retry-After": "5"}), Resp(429, headers={"Retry-After": "5"})]
+    with pytest.raises(FetchError, match="429"):
+        get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert [c[0] for c in calls].count(URL) == 3, "one retry only, never a loop"
