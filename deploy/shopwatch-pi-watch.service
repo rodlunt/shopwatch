@@ -1,0 +1,13 @@
+[Unit]
+Description=Check Raspberry Pi prices and stock for Bark Marker
+After=network-online.target docker.service
+# A failed run must not be silent: there is no MAILTO on opti and nobody reads the journal.
+# Fires when every check errored or an alert could not be delivered (the CLI exits 1).
+OnFailure=ntfy-fail@%n.service
+
+[Service]
+Type=oneshot
+# Runs inside the container so the egress it causes is attributed to the shopwatch bridge,
+# which is what the allowlist entries in smart-home egress-watch are written for.
+ExecStart=/usr/bin/docker exec shopwatch python -m app.price_watch --category Barkmarker --trigger timer
+TimeoutStartSec=900

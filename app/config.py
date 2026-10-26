@@ -91,6 +91,34 @@ class Config:
     webhook_url: str = field(default_factory=lambda: _str("SHOPWATCH_WEBHOOK_URL", ""))
     alerts_enabled: bool = field(default_factory=lambda: _bool("SHOPWATCH_ALERTS_ENABLED", True))
 
+    # The Pi watch (Bark Marker). The category name is matched case-insensitively.
+    pi_category: str = field(default_factory=lambda: _str("SHOPWATCH_PI_CATEGORY", "Barkmarker"))
+    # Identifies the watcher honestly to retailers. Deliberately not a browser string.
+    pi_user_agent: str = field(
+        default_factory=lambda: _str(
+            "SHOPWATCH_PI_USER_AGENT",
+            "shopwatch/1.0 (+https://github.com/rodlunt/shopwatch; personal price watch)",
+        )
+    )
+    # Random extra delay added to the politeness delay before every request, seconds.
+    request_jitter: float = field(default_factory=lambda: _float("SHOPWATCH_REQUEST_JITTER", 2.0))
+    robots_enforced: bool = field(default_factory=lambda: _bool("SHOPWATCH_ROBOTS_ENFORCED", True))
+    # Runs are twice a day, so 36 hours is "missed one run and then some".
+    pi_stale_hours: float = field(default_factory=lambda: _float("SHOPWATCH_PI_STALE_HOURS", 36.0))
+    # Consecutive runs an adapter may fail before it is called broken. At two runs a day
+    # this is a day and a half.
+    pi_streak_limit: int = field(default_factory=lambda: _int("SHOPWATCH_PI_STREAK_LIMIT", 3))
+    pi_event_cooldown_hours: float = field(
+        default_factory=lambda: _float("SHOPWATCH_PI_EVENT_COOLDOWN_HOURS", 6.0)
+    )
+    pi_max_alerts_per_run: int = field(
+        default_factory=lambda: _int("SHOPWATCH_PI_MAX_ALERTS_PER_RUN", 10)
+    )
+    # A pending alert that still cannot be delivered after this long is expired loudly.
+    pi_event_expiry_hours: float = field(
+        default_factory=lambda: _float("SHOPWATCH_PI_EVENT_EXPIRY_HOURS", 36.0)
+    )
+
     host: str = field(default_factory=lambda: _str("SHOPWATCH_HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: _int("SHOPWATCH_PORT", 8477))
 

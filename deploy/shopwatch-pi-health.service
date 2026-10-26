@@ -1,0 +1,12 @@
+[Unit]
+Description=Is the Raspberry Pi watch still watching? (stale data, broken adapters)
+After=docker.service
+# This unit EXITS NON-ZERO while the watch is unhealthy, so OnFailure pushes a high priority
+# ntfy through the shared ntfy-fail handler, which repeats hourly while the fault lasts.
+# The reason is in the journal: journalctl -u shopwatch-pi-health -n 20
+OnFailure=ntfy-fail@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec shopwatch python -m app.pi_health
+TimeoutStartSec=120

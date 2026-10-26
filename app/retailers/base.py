@@ -53,6 +53,11 @@ class Observation:
     included_components: str | None = None
     price_guide: str | None = None
     notes: str | None = None
+    #: Normalised availability (see app/availability.py) and the retailer's own words.
+    #: Only the Pi adapters fill these; None means "this adapter does not say".
+    availability: str | None = None
+    availability_text: str | None = None
+    unit_limit: int | None = None
     unresolved: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -302,6 +307,8 @@ class RetailerAdapter:
     #: Fields this retailer structurally cannot expose to a scraper (freight behind a
     #: postcode, stock behind a store picker). Documented, not guessed at.
     never_scrapable: tuple[str, ...] = ()
+    #: True for adapters that need the product's name to pick a variant (the Pi adapters).
+    wants_product_name = False
 
     def __init__(self, config=None) -> None:
         self.config = config or load_config()

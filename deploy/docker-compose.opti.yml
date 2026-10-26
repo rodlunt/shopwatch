@@ -4,9 +4,11 @@
 #   /srv/prod/shopwatch/docker-compose.yml   (copy of this file)
 #   /srv/prod/shopwatch/repo                 (clone of /root/shopwatch.git)
 #
-# Deliberately publishes NO host port. The only way in is Caddy on the `web`
-# network, which is what gives it the wildcard cert and keeps it off the LAN
-# without a hostname. Mirrors the career-dashboard stack.
+# Publishes ONE host port, and only on loopback: 127.0.0.1:8477, so a host service on
+# opti (menu-crm) can read GET /api/pi-watch without going through Caddy's basic auth.
+# 127.0.0.1 means nothing else on the LAN can reach it; the way in for people is still
+# Caddy on the `web` network, which supplies the wildcard cert. Do not widen the bind
+# address: this port has no authentication.
 services:
   shopwatch:
     build:
@@ -15,6 +17,8 @@ services:
         GIT_SHA: ${GIT_SHA:-}
     container_name: shopwatch
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8477:8477"
     # Non-secret tuning lives here, in git, where it can be reviewed. Only secrets
     # go in the env file.
     environment:

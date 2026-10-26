@@ -773,6 +773,7 @@ Live at **https://shop.yourdomain.example** (LAN only, trusted `*.yourdomain.exa
 
 | Thing | Where |
 |---|---|
+| Pi watch timers | `shopwatch-pi-watch.timer`, `shopwatch-pi-health.timer` (see "The Pi watch") |
 | Self-hosted runner | `actions.runner.rodlunt-shopwatch.opti-shopwatch.service` |
 | Deploy script | `/usr/local/bin/shopwatch-deploy` (root, from `deploy/`) |
 | Bare repo (retired) | `root@YOUR-SERVER-IP:/root/shopwatch.git`, rejects pushes |
@@ -783,9 +784,11 @@ Live at **https://shop.yourdomain.example** (LAN only, trusted `*.yourdomain.exa
 | Caddy vhost | `opti-stacks/caddy/Caddyfile` in the `smart-home` repo |
 | DNS record | `dns.hosts` in `/srv/prod/pihole/etc-pihole/pihole.toml` |
 
-The container publishes **no host port**. Caddy reaches it by container name on the `web`
-network, which is what supplies the certificate and keeps it off the LAN without a
-hostname.
+The container publishes **one host port, on loopback only**: `127.0.0.1:8477`. People
+reach the board through Caddy on the `web` network (certificate, basic auth, LAN only).
+Host services on opti (menu-crm) read `GET /api/pi-watch` on `127.0.0.1:8477` directly,
+with no basic auth, so that port has **no authentication and must never be bound to
+anything wider than 127.0.0.1**. Nothing else on the LAN can reach it.
 
 ### How a deploy happens
 
@@ -826,64 +829,31 @@ That was a deliberate decision, made in #7, not a default inherited by accident.
 
 ### Scheduling the watch
 
-**There is no timer, and the reason is egress monitoring, not scraping.**
-
-The reason recorded here used to be "three of the five seeded retailers cannot be
-scraped at all, so a schedule would be a no-op that looks like coverage". That was
-measured before two adapters had ever been run, and it was wrong: JB Hi-Fi and The Good
-Guys both return a price, stock status and condition from a plain fetch with no
-warnings. A schedule would refresh two real listings.
-
-The actual blocker turned up the first time anything scraped from the container. opti
-runs `egress-watch`, which alerts on a container opening an outbound connection it has
-not made before. A single probe run produced four pushes to `security-events`:
-
-```
-egress: shopwatch -> Cloudflare [104.21.4.235]
-egress: shopwatch -> shops.myshopify.com (unrecognised)
-egress: shopwatch -> UNKNOWN (no reverse-DNS) [45.223.141.121]
-egress: shopwatch -> UNKNOWN (no reverse-DNS) [104.26.1.138]
-```
-
-That is egress-watch working correctly. The container had genuinely never reached a
-retailer before. But a scheduled run would fire those on **every** pass, and they cannot
-be suppressed cleanly:
-
-* retailers are Cloudflare-fronted and anycast IPs rotate, so `/32` allowlist entries go
-  stale and the alerts come back
-* `allowlist.conf` deliberately refuses wide CIDRs, in its own words because a
-  Cloudflare `/13` "would blind this tool to a compromised container beaconing to any
-  other Cloudflare-fronted host"
-* leaving it alone trains you to ignore `security-events`, which is the one topic that
-  has to keep meaning "something is wrong"
-
-**Decision, 2026-09-11: run it by hand, no timer.** Two of four watchable listings
-refresh, and both sit around $700 above the trigger, so automation buys very little
-today. That is not worth weakening egress monitoring for. Revisit if an Appliances
-Online adapter gets written, since they are the only reachable retailer in the price
-bracket that matters.
-
-A run also produces two failures every time, and they are **counted differently**, which
-matters if you are checking the summary to confirm them:
-
-| Retailer | What happens | Counted as |
-|---|---|---|
-| Harvey Norman | `FetchError` on the bot interstitial | `errors` |
-| Appliance Central | fetches fine, parses no price | `unresolved` |
-
-`check_listing` returns `"error"` only for a fetch failure; anything that fetched but
-yielded no price is `"ok" if advertised_price is not None else "unresolved"`. So one
-error out of four attempted makes the run `partial`, not `failed`, and the CLI exits 0.
-Only a run where **everything** errored, or where an alert could not be delivered, exits
-non-zero.
-
-Anyone reading "two failures" and checking the `errors` count will see one and conclude
-something changed. Run it by hand with:
+Only the **Raspberry Pi watch** (category `Barkmarker`) is scheduled. See "The Pi watch"
+below for the timers, the retailers, the alerts and the health checks. The rest of the
+board is still refreshed by hand:
 
 ```bash
-ssh root@YOUR-SERVER-IP 'docker compose -f /srv/prod/shopwatch/docker-compose.yml \
-  exec -T shopwatch python -m app.price_watch --trigger cron'
+ssh root@YOUR-SERVER-IP 'docker exec shopwatch python -m app.price_watch --trigger cron'
 ```
+
+The earlier decision (2026-09-11, no timer at all) rested on one fact: every scrape run
+fired egress-watch pushes to `security-events`, because the container had never opened
+those connections before and the destinations sit on rotating CDN addresses that cannot
+be allowlisted by `/32`. That is now solved properly rather than ignored: egress-watch
+learned **hostname** allowlist entries (`host:<name>`, resolved and refreshed by
+egress-watch itself) and only the six Pi retailer hostnames are listed, each with a
+reason, in `smart-home:opti-stacks/egress-watch/allowlist.conf`. An unrelated host from
+the same container still alerts. The general board has no schedule because it has no
+adapter worth running twice a day (Harvey Norman errors on a bot interstitial, Appliance
+Central parses no price), and that is unchanged.
+
+A manual run still counts failures differently from a Pi run. `check_listing` returns
+`"error"` for a fetch failure and `"unresolved"` for a page that fetched but yielded no
+price; one error out of four attempted makes a run `partial`, not `failed`, and the CLI
+exits 0. Only a run where **everything** errored, or where an alert could not be
+delivered, exits non-zero. The Pi adapters raise on a missing price, so for them a page
+that cannot be read is always an `error`.
 
 ## Running without Docker
 
@@ -901,7 +871,8 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 ```bash
 python -m app.price_watch                 # everything
 python -m app.price_watch --product 1     # one product
-python -m app.price_watch --no-alerts     # check prices, send nothing
+python -m app.price_watch --category Barkmarker   # one category only (what the timer runs)
+python -m app.price_watch --no-alerts     # check prices; events are queued, nothing is sent
 python -m app.price_watch --json          # machine-readable summary
 curl -X POST http://SERVER-IP:8477/api/price-watch/run -d '{}' \
      -H 'Content-Type: application/json'
@@ -917,10 +888,9 @@ when an alert could not be delivered. A run that exits 0 genuinely did something
 
 ### cron
 
-> ⚠ **Do not install this without reading "Scheduling the watch" above.** There is
-> deliberately no timer: a scheduled run pushes four `security-events` alerts on every
-> pass and they cannot be suppressed without weakening opti's egress allowlist. These
-> recipes are kept for the day that changes, or for a host with no egress monitoring.
+> These are generic recipes for a host with no systemd timers. On opti the Pi watch is
+> scheduled by the units in `deploy/` (see "The Pi watch"); do not add a second schedule
+> for the same category.
 
 ```cron
 # /etc/cron.d/shopwatch: twice a day, output captured, failures mailed
@@ -933,8 +903,6 @@ Set `MAILTO` or pipe to something that reads the exit code. A cron line that red
 everything to a logfile nobody reads is how a dead watcher stays dead.
 
 ### systemd timer
-
-> ⚠ Same warning as above: no timer is installed on opti on purpose.
 
 `/etc/systemd/system/shopwatch-watch.service`:
 
@@ -980,7 +948,9 @@ SHOPWATCH_ALERTS_ENABLED=true
 ```
 
 Console output always happens. A delivery failure is printed as `[ALERT-FAILURE]`, logged
-at ERROR, returned in the run summary, and makes the CLI exit non-zero. An ntfy 2xx means
+at ERROR, returned in the run summary, and makes the CLI exit non-zero. A rule is marked
+fired only once delivery is confirmed, so a failed push is offered again on the next run
+(it used to be marked fired either way, which swallowed the alert). An ntfy 2xx means
 ntfy accepted the publish, not that a device displayed it.
 
 Rules live in the `alert_rules` table, one row per rule:
@@ -992,6 +962,8 @@ Rules live in the `alert_rules` table, one row per rule:
 | `require_resolved` | ignore listings whose freight is unconfirmed (default on) |
 | `require_complete` | ignore listings with no recorded included components |
 | `min_change` | suppress a re-alert when the price moved less than this |
+| `kind` | `TARGET` (default, fixed `max_delivered`), `TRIGGER` (follows `products.trigger_price`), or an event kind: `BACK_IN_STOCK`, `PRICE_DROP`, `NEW_LOWEST` |
+| `min_drop_abs`, `min_drop_pct` | `PRICE_DROP` fires when the fall is at least the larger of the two (defaults $3 and 5%) |
 
 The seeded Q930H rules are *new stock ≤ $900 delivered* and *secondary stock ≤ $800
 delivered, complete systems only*. `POST /api/alerts/evaluate` is a dry run: it reports
@@ -1003,7 +975,8 @@ what would fire without sending anything.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/products` | every product with its assembled matrix |
+| `GET` | `/api/products` | every product with its assembled matrix. Each listing also carries `availability` (normalised enum), `availability_text` (the retailer's words), `unit_limit`, `previous_price`, `price_changed_at` and `last_checked_at` |
+| `GET` | `/api/pi-watch` | the Pi watch summary, read-only, see "The Pi watch" |
 | `POST` | `/api/products` | `{name, model, category, ...}` |
 | `GET` | `/api/products/{id}` | `?sort=delivered\|headline\|retailer\|stock\|condition\|verification\|diff` |
 | `PATCH` | `/api/products/{id}` | targets, specs, dimensions, verdict |
@@ -1033,17 +1006,161 @@ what would fire without sending anything.
 | `POST` | `/api/retailers/{listing_id}/ruled-out` | `{"ruled_out": true, "reason": "..."}`; stays visible, never the answer |
 | `DELETE` | `/api/retailers/{listing_id}` | deactivates the listing, which hides it |
 | `GET` | `/api/price-history/{product_id}` | observations, newest first |
-| `POST` | `/api/price-watch/run` | `{"product_id": 1, "send_alerts": true}` |
+| `POST` | `/api/price-watch/run` | `{"product_id": 1, "category": "Barkmarker", "send_alerts": true}` |
 | `GET` | `/api/price-watch/runs` | recent runs with per-listing results |
-| `POST` | `/api/alerts/evaluate` | dry run |
+| `POST` | `/api/alerts/evaluate` | dry run: `alerts` (target rules that would fire), `pending_events` (queued event alerts not yet delivered), `would_queue_new_lowest`. Sends and writes nothing |
 | `POST` | `/api/import` | findings, a list of findings, or a snapshot |
 | `GET` | `/api/export` / `/api/export.csv` | snapshot / flat comparison |
 | `POST` | `/api/backup` | server-side database snapshot |
-| `GET` | `/api/meta` | enums, categories, adapters |
-| `GET` | `/healthz` | touches the database, not just the port |
+| `GET` | `/api/meta` | enums, categories, adapters, and the `pi_watch` heartbeat |
+| `GET` | `/healthz` | touches the database, not just the port; carries the same `pi_watch` heartbeat. A stale watch never turns this red, because autoheal would restart a healthy app for nothing |
 
 `PATCH /api/retailers/{id}` accepts `{"manual": false}` to record a value without locking
 it, and `{"record_history": false}` to skip the history row.
+
+---
+
+## The Pi watch
+
+Bark Marker buys Raspberry Pis, and stock comes and goes. This watches the products in
+category `Barkmarker` (`SHOPWATCH_PI_CATEGORY`) across every retailer that has a page for
+them, **twice a day**, and tells you when one goes on sale, drops, or becomes available.
+
+### Retailers
+
+| Retailer | Status | Read from |
+|---|---|---|
+| Core Electronics | working | JSON-LD price; stock note `p.single-product-ship-note`; limit from the description |
+| PB Tech | working | JSON-LD price; stock label `.p_stock_title_dd`; "Buy Limit N Units Per Customer" |
+| Pakronics | working | Shopify JSON-LD |
+| Raspberry Pi Australia | working | Shopify JSON-LD, variant chosen by SKU/RAM; reads "is backordered" |
+| Zaitronics | working | Shopify JSON-LD; lead time on sold-out items |
+| Small Devices | working | Shopify JSON-LD, variant chosen by RAM |
+| Amazon AU | **unsupported, manual** | see below |
+
+Amazon AU is deliberately not automated. Its conditions of use forbid automated access, the
+price shown is the buy box (a marketplace reseller, not Amazon: $148 against $109 at the
+specialist shops for the same board), and its bot defences come and go. A price from there
+that is wrong is worse than none, so those listings stay hand-maintained and show as
+`automatic: false` in `/api/pi-watch`.
+
+All prices are GST inclusive. **Freight is never read**: every one of these shops quotes
+it at the cart by postcode, so it stays unresolved and alerts say "freight is quoted at the
+cart and is not included".
+
+### Politeness, as a rule
+
+* One page request per listing per run, never a crawl or a search.
+* An honest user agent, `shopwatch/1.0 (+https://github.com/rodlunt/shopwatch; personal
+  price watch)`, never a browser string. Do not add a `Mozilla`.
+* **robots.txt is honoured** (`app/robots.py`). It is read once per host per process and the
+  URL must be allowed for that agent. A missing file (404) allows; an unreadable one (5xx,
+  network error) **disallows**, because an unattended watcher that cannot read the rules
+  does not get to assume they say yes.
+* The politeness delay (`SHOPWATCH_REQUEST_DELAY`, 3 s) plus random jitter
+  (`SHOPWATCH_REQUEST_JITTER`, up to 2 s) before every request, and a timer jitter of up to
+  30 minutes on top.
+* A bot interstitial, a 403 or a 429 is a failure that stops the adapter for that run.
+  Nothing here defeats a CAPTCHA or an anti-bot measure.
+
+### What a failure means
+
+An adapter returns a reading or raises. No price, a zero price, a layout that has moved, a
+different RAM size or Pi generation on the page, or a variant that is not on the page all
+raise, and the watcher **keeps the last good value**, counts the failure, and shows it. A
+failure is never reported as "no change". Availability that cannot be placed is `unknown`
+and does not overwrite the last known availability.
+
+Prices and stock typed in by hand are locked `MANUAL`, and an adapter never overwrites a
+lock. Migration 0016 released the locks on the Pi listings that now have an adapter. If a
+price is locked later, the run reports it as `unresolved` instead of a green success.
+
+### Availability
+
+`availability` is one of `in_stock`, `limited` (with a numeric `unit_limit`),
+`dispatch_later`, `backorder`, `out_of_stock`, `unknown`; `availability_text` keeps the
+retailer's own words, including any dates ("Expect dispatch between Nov 02 and Nov 06").
+Out-of-stock wording wins over everything else ("Out of stock (5-10 day lead time)" is not
+buyable), and the visible words win over the schema.org value.
+
+### Alerts
+
+One ntfy message per event, with product, retailer, old and new price, availability, the
+unit limit and a link.
+
+| Alert | Fires when |
+|---|---|
+| BACK IN STOCK | availability goes from out of stock / backorder / dispatch later to in stock or limited |
+| PRICE DROP | a listing's delivered price falls by at least the larger of $3 and 5% since the previous run |
+| NEW LOWEST | the cheapest in-stock delivered price across retailers is a new low |
+| AT OR BELOW TARGET | an in-stock listing is at or below the product's `trigger_price` |
+
+"Previous" is the previous reading **taken by an adapter** at that listing. A hand-typed
+price is never the baseline, so the first automatic run records baselines and says nothing.
+The new-lowest record is set silently on first sight and only ever falls. The target alert
+needs the listing to be buyable: a price you cannot buy at does not wake anyone.
+
+The Pi category opts out of `require_complete` (a bare board has no components to list) and
+its rules are created with `require_resolved` off. Rules for the products on the board came
+from migration 0016, and `pi_events.ensure_rules()` gives any later `Barkmarker` product its
+four at the start of each run.
+
+Events are queued in `alert_events` the moment a change is seen, de-duplicated by key, and
+sent from there. A failed delivery stays `pending`, is reported loudly (`[ALERT-FAILURE]`,
+exit 1) and is retried next run; after 36 hours it is `expired` and reported again. Limits:
+the same kind for the same listing is suppressed inside a 6 hour cooldown (recorded as
+`suppressed`, not dropped), and at most 10 are sent per run, the rest waiting for the next.
+
+### Schedule and health
+
+Two systemd timers on opti, installed from `deploy/` the same way the mailwatch and
+research timers are (copy to `/etc/systemd/system/`, `daemon-reload`, `enable --now`).
+A host timer, not an in-container scheduler: it matches the other shopwatch timers, survives
+a container recreate, has `Persistent=true` for a missed run after a reboot, and its
+`OnFailure=ntfy-fail@` is the stack's existing loud-failure path.
+
+| Unit | Runs | What |
+|---|---|---|
+| `shopwatch-pi-watch.timer` | about 07:00 and 17:00 Brisbane, up to 30 min late | `docker exec shopwatch python -m app.price_watch --category Barkmarker` |
+| `shopwatch-pi-health.timer` | hourly | `docker exec shopwatch python -m app.pi_health`, exits 1 when unhealthy |
+
+The health check is its own timer so a dead watch cannot take its own alarm with it. It
+fails (and `ntfy-fail` pushes at high priority, hourly while it lasts) when:
+
+* there has been **no successful price check for any Pi product in 36 hours** (a missed
+  run and then some). "Successful" is derived from `price_history` rows written by an
+  adapter, which nothing but a real reading can create, never from a flag the wrapper sets;
+* an adapter has **failed three runs in a row**, which at two runs a day is a day and a
+  half. A run fails for an adapter when none of its listings produced a price; one dead
+  product URL shows as `last_error` on that listing instead.
+
+`GET /api/pi-watch` and the `pi_watch` block of `/healthz` and `/api/meta` expose the same
+verdict. **Stated gap:** if the health timer itself is removed, nothing notices. The watch
+timer is covered by it; the health timer is not covered by anything.
+
+### `GET /api/pi-watch`
+
+Read-only, additive. For menu-crm on opti: `curl -s http://127.0.0.1:8477/api/pi-watch`.
+
+```json
+{"category": "Barkmarker", "generated_at": "...",
+ "health": {"status": "ok", "reasons": [], "last_successful_check": "...",
+            "hours_since_success": 4.1, "stale_after_hours": 36.0,
+            "adapters": [{"adapter": "pb_tech", "healthy": true,
+                          "consecutive_failed_runs": 0, "last_error": null, "...": "..."}]},
+ "products": [{"id": 18, "name": "...", "trigger_price": null,
+               "cheapest_in_stock": {"retailer": "...", "price": 109.33,
+                                     "availability": "limited", "unit_limit": 1, "url": "..."},
+               "in_stock_count": 1, "last_successful_check": "...",
+               "listings": [{"retailer": "...", "price": 0.0, "previous_price": null,
+                             "availability": "...", "availability_text": "...",
+                             "automatic": true, "last_error": null}]}]}
+```
+
+Egress: the container's connections to the six retailer hostnames are allowlisted by
+hostname in egress-watch (see "Scheduling the watch"). If a retailer moves to a new host,
+the adapter fails with a connection error and the allowlist needs the new hostname; an
+unlisted host from this container still raises an egress alert, by design.
 
 ---
 
@@ -1197,7 +1314,7 @@ or add an entry to `CATEGORY_PROFILES` in `app/seed.py` and re-run `python -m ap
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest        # 144 tests
+.venv/bin/python -m pytest
 .venv/bin/python -m ruff check .
 ```
 

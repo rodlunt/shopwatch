@@ -1,0 +1,15 @@
+[Unit]
+Description=Check Raspberry Pi prices and stock, twice a day
+
+[Timer]
+# About 07:00 and 17:00 Brisbane (opti's clock is Australia/Brisbane), each pushed back by
+# up to 30 minutes at random so the requests never land on the dot. Twice a day is enough:
+# this is a personal watch on a handful of pages, and each run is a polite one request per
+# listing. Persistent=true runs a missed check after a reboot instead of skipping it.
+OnCalendar=*-*-* 07:00:00
+OnCalendar=*-*-* 17:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
