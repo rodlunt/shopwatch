@@ -6,6 +6,7 @@ from . import (  # noqa: F401  (import for side effect: registration)
     crowdshop,
     harvey_norman,
     jb_hifi,
+    little_bird,
     pb_tech,
     shopify_pi,
     the_good_guys,

@@ -57,6 +57,8 @@ class Candidate:
 _RAM_RE = re.compile(r"(?<![\d.])(\d{1,2})\s*gb\b", re.IGNORECASE)
 _GEN_RE = re.compile(r"\bpi\s*®?\s*(\d)\b", re.IGNORECASE)
 _CODE_RE = re.compile(r"^[A-Z]{1,3}\d{3,}$")
+# "Model B", "Model B+", "Model B plus". The group is the plus marker, empty for a plain B.
+_MODEL_B_RE = re.compile(r"\bmodel\s*b(?:\s*(\+|plus\b))?", re.IGNORECASE)
 
 
 def ram_of(*texts: str | None) -> str | None:
@@ -71,6 +73,14 @@ def ram_of(*texts: str | None) -> str | None:
 def generation_of(text: str | None) -> str | None:
     match = _GEN_RE.search((text or "").replace("\xa0", " "))
     return match.group(1) if match else None
+
+
+def model_b_plus(text: str | None) -> bool | None:
+    """True for "Model B+", False for a plain "Model B", None when the text names no Model B."""
+    match = _MODEL_B_RE.search((text or "").replace("\xa0", " "))
+    if match is None:
+        return None
+    return bool(match.group(1))
 
 
 def candidates_from_json_ld(html: str) -> list[Candidate]:
@@ -160,6 +170,22 @@ def check_identity(page_name: str | None, expected_model: str | None, product_na
     have_gen = generation_of(page_name)
     if want_gen and have_gen and want_gen != have_gen:
         raise ParseFailure(f"model mismatch: page is Pi {have_gen}, expected Pi {want_gen}")
+    # Pi 3 Model B and Pi 3 Model B+ are different boards (2016 and 2018) that share a
+    # generation digit, as does the 2014 "Model B+" that has no digit at all.
+    want_plus = model_b_plus(product_name)
+    if want_plus is None:
+        want_plus = model_b_plus(expected_model)
+    have_plus = model_b_plus(page_name)
+    if want_plus is not None and have_plus is not None and want_plus != have_plus:
+        raise ParseFailure(
+            "model mismatch: page is Model B" + ("+" if have_plus else "")
+            + ", expected Model B" + ("+" if want_plus else "")
+        )
+    if want_plus and have_plus and want_gen and have_gen is None:
+        raise ParseFailure(
+            f"model mismatch: page names a Model B+ with no Pi generation, expected Pi {want_gen}"
+            " (the 2014 Model B+ looks like this)"
+        )
 
 
 def _retry_after(response) -> float | None:
