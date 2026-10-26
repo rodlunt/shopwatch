@@ -162,6 +162,15 @@ def check_identity(page_name: str | None, expected_model: str | None, product_na
         raise ParseFailure(f"model mismatch: page is Pi {have_gen}, expected Pi {want_gen}")
 
 
+def _retry_after(response) -> float | None:
+    """Seconds from a Retry-After header given as a number, else None (dates are ignored)."""
+    try:
+        value = float(response.headers.get("Retry-After", ""))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 class PiAdapter(RetailerAdapter):
     """Base for the Pi retailers. Subclasses implement `read(html, ...)`."""
 
@@ -180,16 +189,27 @@ class PiAdapter(RetailerAdapter):
                 robots.check(url, agent, self.config.request_timeout)
             except robots.RobotsError as exc:
                 raise FetchError(str(exc)) from exc
-        jitter = random.uniform(0, max(self.config.request_jitter, 0))
-        time.sleep(max(self.config.request_delay, 0) + jitter)
-        try:
-            response = requests.get(
-                url,
-                timeout=self.config.request_timeout,
-                headers={"User-Agent": agent, "Accept-Language": "en-AU,en;q=0.9"},
-            )
-        except Exception as exc:
-            raise FetchError(f"{type(exc).__name__}: {exc}") from exc
+        # At most two attempts. The second happens only when the retailer says "slow down"
+        # (429 or 503) AND tells us how long to wait, and that wait is short enough to sit
+        # through. Shopify answered the first Pi runs with 429 and Retry-After: 60 on
+        # roughly every other request, then 200 once left alone.
+        for attempt in (1, 2):
+            jitter = random.uniform(0, max(self.config.request_jitter, 0))
+            time.sleep(max(self.config.request_delay, 0) + jitter)
+            try:
+                response = requests.get(
+                    url,
+                    timeout=self.config.request_timeout,
+                    headers={"User-Agent": agent, "Accept-Language": "en-AU,en;q=0.9"},
+                )
+            except Exception as exc:
+                raise FetchError(f"{type(exc).__name__}: {exc}") from exc
+            if response.status_code in (429, 503) and attempt == 1:
+                wait = _retry_after(response)
+                if wait is not None and wait <= self.config.pi_retry_after_max:
+                    time.sleep(wait)
+                    continue
+            break
         if response.status_code in (401, 403, 429):
             raise FetchError(f"HTTP {response.status_code}: retailer refused the request")
         if response.status_code != 200:

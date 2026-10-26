@@ -1057,9 +1057,14 @@ cart and is not included".
   URL must be allowed for that agent. A missing file (404) allows; an unreadable one (5xx,
   network error) **disallows**, because an unattended watcher that cannot read the rules
   does not get to assume they say yes.
-* The politeness delay (`SHOPWATCH_REQUEST_DELAY`, 3 s) plus random jitter
+* The politeness delay (`SHOPWATCH_REQUEST_DELAY`, 8 s on opti) plus random jitter
   (`SHOPWATCH_REQUEST_JITTER`, up to 2 s) before every request, and a timer jitter of up to
   30 minutes on top.
+* A 429 or 503 that carries a `Retry-After` of 90 seconds or less is waited out and tried
+  **once more**; anything longer, or a second refusal, is a failure. Shopify answered the
+  first live run with `429` and `Retry-After: 60` on about every other request from opti's
+  address while a plain `curl` from another machine on the same address got 200, so it
+  paces by more than IP.
 * A bot interstitial, a 403 or a 429 is a failure that stops the adapter for that run.
   Nothing here defeats a CAPTCHA or an anti-bot measure.
 

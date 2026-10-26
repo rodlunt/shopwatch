@@ -102,6 +102,10 @@ class Config:
     )
     # Random extra delay added to the politeness delay before every request, seconds.
     request_jitter: float = field(default_factory=lambda: _float("SHOPWATCH_REQUEST_JITTER", 2.0))
+    # Longest Retry-After the Pi adapters will sit through before one retry.
+    pi_retry_after_max: float = field(
+        default_factory=lambda: _float("SHOPWATCH_PI_RETRY_AFTER_MAX", 90.0)
+    )
     robots_enforced: bool = field(default_factory=lambda: _bool("SHOPWATCH_ROBOTS_ENFORCED", True))
     # Runs are twice a day, so 36 hours is "missed one run and then some".
     pi_stale_hours: float = field(default_factory=lambda: _float("SHOPWATCH_PI_STALE_HOURS", 36.0))
