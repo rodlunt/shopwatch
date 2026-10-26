@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any
 
-from . import pricing, provenance
+from . import availability, pricing, provenance
 from .config import load_config
 from .db import utcnow
 
@@ -284,6 +284,14 @@ def enrich_listing(
         listing["rebate"],
         listing["coupon_discount"],
     )
+    # Additive: the retailer's own words under their own name, and the normalised state.
+    # A listing never read by an adapter has no stored enum, so derive it from the words.
+    listing["availability_text"] = listing["stock_status"]
+    if not listing.get("availability"):
+        listing["availability"] = availability.normalise(listing["stock_status"]).state
+        listing["unit_limit"] = listing.get("unit_limit") or availability.unit_limit_from(
+            listing["stock_status"]
+        )
     listing["delivered"] = delivered
     listing["delivered_price"] = delivered.value
     listing["delivered_resolved"] = delivered.resolved

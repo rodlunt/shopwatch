@@ -2,9 +2,12 @@
 
 from . import (  # noqa: F401  (import for side effect: registration)
     appliance_central,
+    core_electronics,
     crowdshop,
     harvey_norman,
     jb_hifi,
+    pb_tech,
+    shopify_pi,
     the_good_guys,
 )
 from .base import (  # noqa: F401

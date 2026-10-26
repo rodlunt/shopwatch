@@ -23,10 +23,13 @@ from markupsafe import Markup, escape
 from . import (
     __version__,
     alerts,
+    availability,
     ingest,
     llm_jobs,
     mailwatch,
     offers,
+    pi_events,
+    pi_health,
     price_watch,
     pricing,
     provenance,
@@ -365,7 +368,12 @@ def retailers_page(request: Request) -> Any:
 def healthz() -> dict[str, Any]:
     with session() as conn:
         products = conn.execute("SELECT COUNT(*) c FROM products").fetchone()["c"]
-    return {"status": "ok", "version": __version__, "products": products, "at": utcnow()}
+        # The heartbeat of the Pi watch. Deliberately does not change `status`: a stale
+        # watch must not make the container unhealthy (autoheal would restart a healthy
+        # app for nothing), it must be loud somewhere that can act on it.
+        pi = pi_health.heartbeat(conn)
+    return {"status": "ok", "version": __version__, "products": products, "at": utcnow(),
+            "pi_watch": pi}
 
 
 @app.get("/tools/llm-helper.py")
@@ -1095,12 +1103,21 @@ def api_price_history(product_id: int, limit: int = Query(500, le=5000)) -> Any:
         return store.price_history(conn, product_id, limit)
 
 
+@app.get("/api/pi-watch")
+def api_pi_watch() -> Any:
+    """Bark Marker's Raspberry Pi watch: cheapest buyable price per product, availability
+    across retailers, last successful check and adapter health. Read-only."""
+    with session() as conn:
+        return jsonable(pi_health.summary(conn))
+
+
 @app.post("/api/price-watch/run")
 def api_price_watch(payload: dict = Body(default={})) -> Any:
     summary = price_watch.run(
         product_id=payload.get("product_id"),
         trigger=payload.get("trigger", "api"),
         send_alerts=payload.get("send_alerts", True),
+        category=payload.get("category"),
     )
     return jsonable(summary)
 
@@ -1358,7 +1375,23 @@ def api_evaluate_alerts(payload: dict = Body(default={})) -> Any:
     """Dry run of the alert rules: what would fire right now, without sending anything."""
     with session() as conn:
         raised = alerts.evaluate_all(conn)
-    return {"alerts": [a.to_dict() for a in raised]}
+        # Read-only view of the Pi event alerts: what is already queued to send, and
+        # what a new-lowest check would queue now. Nothing is written or sent.
+        cfg = load_config()
+        waiting = [a.to_dict() for a in pi_events.pending(conn)]
+        lowest = []
+        for row in conn.execute(
+            "SELECT id FROM products WHERE lower(category) = lower(?) AND status = 'ACTIVE'",
+            (cfg.pi_category,),
+        ).fetchall():
+            found = pi_events.evaluate_new_lowest(conn, cfg, row["id"], commit_baseline=False)
+            if found:
+                lowest.append(found)
+    return {
+        "alerts": [a.to_dict() for a in raised],
+        "pending_events": waiting,
+        "would_queue_new_lowest": lowest,
+    }
 
 
 @app.post("/api/import")
@@ -1482,6 +1515,7 @@ def api_update_retailer(retailer_id: int, payload: dict = Body(...)) -> Any:
 def api_meta() -> Any:
     with session() as conn:
         cats = store.categories(conn)
+        heartbeat = pi_health.heartbeat(conn)
     return {
         "version": __version__,
         "conditions": pricing.CONDITIONS,
@@ -1494,6 +1528,8 @@ def api_meta() -> Any:
         "categories": cats,
         "adapters": sorted(retailers.available_adapters()),
         "unresolved_freight_penalty": load_config().unresolved_freight_penalty,
+        "availability_states": list(availability.ALL),
+        "pi_watch": heartbeat,
     }
 
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Check the Raspberry Pi watch is alive, hourly
+
+[Timer]
+# Its own timer, not a step inside the watch: a watcher that checks itself dies with
+# itself (hardening rule 8). Hourly keeps the 36 hour limit honest to within an hour.
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

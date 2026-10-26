@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import availability as av
 from . import pricing, store
 from .config import Config, load_config
 from .db import utcnow
@@ -41,9 +42,12 @@ class Alert:
     reason: str
     stock: str | None = None
     resolved: bool = True
+    #: Overrides the classification wording in the title ("AT OR BELOW TARGET").
+    label: str | None = None
+    unit_limit: int | None = None
 
     def title(self) -> str:
-        return f"{pricing.CLASS_LABELS[self.classification]}: {self.product_name}"
+        return f"{self.label or pricing.CLASS_LABELS[self.classification]}: {self.product_name}"
 
     def body(self) -> str:
         lines = [
@@ -52,7 +56,10 @@ class Alert:
             f"Rule: {self.rule_name} ({self.reason})",
         ]
         if self.stock:
-            lines.append(f"Stock: {self.stock}")
+            stock = self.stock
+            if self.unit_limit and "limit" not in stock.lower():
+                stock += f" (limit {self.unit_limit} per customer)"
+            lines.append(f"Stock: {stock}")
         if not self.resolved:
             lines.append("WARNING: freight unresolved, delivered price is provisional")
         if self.url:
@@ -65,6 +72,7 @@ class Alert:
             "delivered": self.delivered, "classification": self.classification,
             "condition": self.condition, "rule": self.rule_name, "reason": self.reason,
             "stock": self.stock, "url": self.url, "listing_id": self.listing_id,
+            "unit_limit": self.unit_limit,
             "freight_resolved": self.resolved, "at": utcnow(),
         }
 
@@ -98,11 +106,21 @@ def evaluate_product(
             return _protection_alerts(conn, product)
         return []
 
+    # TARGET is a fixed ceiling; TRIGGER follows the product's trigger_price. The event
+    # kinds (back in stock, price drop, new lowest) are raised by pi_events, not here.
     rules = conn.execute(
-        "SELECT * FROM alert_rules WHERE product_id = ? AND enabled = 1", (product["id"],)
+        "SELECT * FROM alert_rules WHERE product_id = ? AND enabled = 1"
+        " AND kind IN ('TARGET', 'TRIGGER')",
+        (product["id"],),
     ).fetchall()
+    pi = (product.get("category") or "").strip().lower() == load_config().pi_category.lower()
     alerts: list[Alert] = []
     for rule in rules:
+        ceiling = rule["max_delivered"]
+        if rule["kind"] == "TRIGGER":
+            ceiling = product.get("trigger_price")
+            if ceiling is None:
+                continue
         allowed = _conditions(rule)
         for listing in product["listings"]:
             delivered = listing["delivered"]
@@ -119,9 +137,18 @@ def evaluate_product(
                 continue
             if rule["require_resolved"] and not delivered.resolved:
                 continue
-            if rule["require_complete"] and not (listing["included_components"] or "").strip():
+            # A bare Pi board has no "included components" to record, so the Pi category
+            # opts out of require_complete rather than being silenced by its default.
+            if (
+                rule["require_complete"]
+                and not pi
+                and not (listing["included_components"] or "").strip()
+            ):
                 continue
-            if delivered.value > rule["max_delivered"]:
+            state = listing.get("availability") or av.normalise(listing["stock_status"]).state
+            if pi and state not in av.BUYABLE:
+                continue  # a price you cannot buy at is not a reason to wake anyone
+            if delivered.value > ceiling:
                 continue
             last = rule["last_fired_price"]
             if last is not None and abs(last - delivered.value) < rule["min_change"]:
@@ -140,7 +167,9 @@ def evaluate_product(
                     listing_id=listing["id"],
                     stock=listing["stock_status"],
                     resolved=delivered.resolved,
-                    reason=f"delivered ${delivered.value:.0f} <= ${rule['max_delivered']:.0f}",
+                    reason=f"delivered ${delivered.value:.0f} <= ${ceiling:.0f}",
+                    label="AT OR BELOW TARGET" if rule["kind"] == "TRIGGER" else None,
+                    unit_limit=listing.get("unit_limit"),
                 )
             )
     return alerts
@@ -303,9 +332,12 @@ def dispatch(
             sent += 1
         else:
             failures.extend(report.failures)
-        # The rule is marked fired either way: a delivery failure is a notifier problem,
-        # and re-firing the same alert every run would bury the failure in noise.
-        record_fired(conn, alert)
+        # Marked fired only once delivery is confirmed. It used to be marked either way,
+        # which meant a push that failed was never tried again and the price that
+        # triggered it was swallowed. A failed delivery now leaves the rule armed, so the
+        # next run re-raises it (loudly: the failure is reported and the CLI exits 1).
+        if report.ok:
+            record_fired(conn, alert)
     return {
         "alerts": len(alerts),
         "sent": sent,
