@@ -1,3 +1,24 @@
+# Next session brief: 27/10/2026 (Pi price watch for Bark Marker)
+
+Written from the CRM and Pi watch session; the CRM side is in `smart-home/nextsession.md` (27 Oct). The sections below the rule are older and stand as history.
+
+## What shipped (PRs #128 to #131, all merged, VERIFIED via `gh pr list`)
+
+- **#128** scheduled Raspberry Pi price and stock watch for Bark Marker; **#129** honour a short Retry-After once and slow the request pace; **#130** retry Shopify `local_rate_limited` up to three times and commit per listing; **#131** Pi 3 Model B+ (product 20) with five listings (Core, Little Bird, Pi Australia, Pakronics, PB Tech), a Little Bird adapter and a B vs B+ guard.
+- **Five boards watched, twice daily:** Pi 3 A+, Pi 3 B+, Pi 4 1GB, Pi 4 2GB, Pi 5 1GB. App on `127.0.0.1:8477` on opti.
+- **Trigger prices set 27 Oct:** A+ $41, B+ $59, 4 1GB $58, 4 2GB $95, 5 1GB $75 (about 10% under normal in-stock price; the 4 2GB figure is a guess). Alerts only fire for in-stock listings.
+- **Consumer:** the CRM Units tab reads `GET /api/crm/pi-watch` (stale after 26 h) and edits triggers through `PATCH /api/crm/pi-watch/{id}/trigger`. That panel was verified by tests only, not on the live page (the endpoint needs Caddy's key).
+- Egress: `smart-home` allowlisted Little Bird (b68ebbc).
+
+## Open follow-ups
+
+- Confirm the four Shopify listings that returned 429 from opti (Pakronics, Pi Australia, Zaitronics, Small Devices) now read, and Little Bird as the fifth Shopify site. Not checked after #130.
+- Pi 3 B+ looks to be winding down (LIKELY: Pololu lists it discontinued, SparkFun dropped its kit Oct 2025, PB Tech and Pakronics out of stock); no official end of life notice found.
+- 12 month price history was thin (PriceSpy, CamelCamelCamel and Wayback blocked or sparse): prices flat or rising, official rises 1 Dec 2025, 2 Feb 2026, 1 Apr 2026 and 1 Oct 2026 (the last from one secondary source). The watch's own history is the anchor now.
+- Cosmetic: the Pi 3 A+ is named "Rasberry" in its product record.
+
+---
+
 # Next session brief: 27/09/2026 (second close of the day)
 Branch: main (this baton lands via chore/session-end-2026-09-27b)
 
