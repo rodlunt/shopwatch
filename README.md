@@ -1066,7 +1066,7 @@ Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to e
   price watch)`, never a browser string. Do not add a `Mozilla`.
 * **robots.txt is honoured** (`app/robots.py`). It is read once per host per process and the
   URL must be allowed for that agent. A missing file (404) allows; an unreadable one (5xx,
-  network error) **disallows**, because an unattended watcher that cannot read the rules
+  network error, a 429) **disallows**, because an unattended watcher that cannot read the rules
   does not get to assume they say yes.
 * The politeness delay (`SHOPWATCH_REQUEST_DELAY`, 8 s on opti) plus random jitter
   (`SHOPWATCH_REQUEST_JITTER`, up to 2 s) before every request, and a timer jitter of up to
