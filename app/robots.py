@@ -16,6 +16,8 @@ import time
 from urllib import robotparser
 from urllib.parse import urlsplit
 
+from . import http_client
+
 try:  # pragma: no cover
     import requests
 except ImportError:  # pragma: no cover
@@ -34,7 +36,7 @@ def _load(origin: str, user_agent: str, timeout: float) -> robotparser.RobotFile
     if requests is None:  # pragma: no cover
         raise RobotsError("requests is not installed")
     try:
-        response = requests.get(
+        response = http_client.get(
             origin + "/robots.txt", timeout=timeout, headers={"User-Agent": user_agent}
         )
     except Exception as exc:

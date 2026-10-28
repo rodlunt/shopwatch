@@ -291,11 +291,11 @@ def net(monkeypatch):
         return route.pop(0) if isinstance(route, list) else route
 
     import app.retailers.pi_base as pi_base
-    import app.robots as robots_mod
 
     monkeypatch.setattr(pi_base.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(pi_base.requests, "get", fake_get)
-    monkeypatch.setattr(robots_mod.requests, "get", fake_get)
+    import app.http_client as http_client
+
+    monkeypatch.setattr(http_client, "get", fake_get)
     yield routes, calls
     robots.clear_cache()
 
