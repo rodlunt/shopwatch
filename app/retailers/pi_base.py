@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import availability as av
-from .. import robots
+from .. import http_client, robots
 from .base import (
     BeautifulSoup,
     FetchError,
@@ -226,7 +226,7 @@ class PiAdapter(RetailerAdapter):
             jitter = random.uniform(0, max(self.config.request_jitter, 0))
             time.sleep(max(self.config.request_delay, 0) + jitter)
             try:
-                response = requests.get(
+                response = http_client.get(
                     url,
                     timeout=self.config.request_timeout,
                     headers={"User-Agent": agent, "Accept-Language": "en-AU,en;q=0.9"},
