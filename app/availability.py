@@ -34,6 +34,11 @@ class Availability:
 _OUT = re.compile(r"out of stock|sold out|unavailable|discontinued|no stock|not available")
 _IN = re.compile(r"\bin stock\b|\bavailable now\b|ships (?:today|same)|in-stock")
 _BACK = re.compile(r"back-?\s?order|pre-?order")
+# "In stock - no backorders accepted" names the word to say it does not apply.
+_NO_BACK = re.compile(
+    r"\b(?:no|without|not)\s+(?:\w+\s+)?(?:back-?\s?order|pre-?order)s?\b(?:\s+accepted)?"
+)
+_LOW = re.compile(r"low stock|few left|limited stock|limited availability|only a few")
 _LATER = re.compile(r"expect(?:ed)? dispatch|lead time|dispatch (?:between|in|from|on)|ships in")
 _LIMIT = re.compile(
     r"(?:limit(?:ed)?(?: to)?|max(?:imum)?)\s*(\d+)(?:\s*(?:units?|per customer|each))?"
@@ -65,12 +70,14 @@ def normalise(text: str | None, schema: str | None = None) -> Availability:
     limit = unit_limit_from(lowered)
     if _OUT.search(lowered):
         return Availability(OUT_OF_STOCK)
-    if _BACK.search(lowered):
+    if _BACK.search(_NO_BACK.sub(" ", lowered)):
         return Availability(BACKORDER)
     if _LATER.search(lowered) and not _IN.search(lowered):
         return Availability(DISPATCH_LATER)
     if _IN.search(lowered):
         return Availability(LIMITED, limit) if limit else Availability(IN_STOCK)
+    if _LOW.search(lowered):
+        return Availability(LIMITED, limit)
 
     key = (schema or "").split("/")[-1].lower().replace("_", "")
     if key == "instock":
