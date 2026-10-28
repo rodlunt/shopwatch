@@ -1,3 +1,25 @@
+# Next session brief: 28/10/2026 (Pi watch: 429 root cause, stock parsing, specs)
+
+Supersedes the 27 Oct brief below. The 27 Oct "429 from opti" follow-up and the "Rasberry" typo are done; the rest of that brief still stands as history.
+
+## What shipped (PRs #133 to #135, all merged with regular merges, CI green, deployed; VERIFIED via `gh pr view` and the container)
+
+- **#134** (7d74e4b) the 429s were the TLS handshake, not load or pace. The image's OpenSSL 3.5 offers a post-quantum key share by default; Shopify's edge scores that as a bot. Same URL, user agent and headers, six requests 8 s apart: opti host (OpenSSL 3.0) 6/6 ok, curl HTTP/1.1 and HTTP/2 6/6 ok, container default 6/6 refused, container X25519 only 6/6 ok. New `app/http_client.py` offers X25519 only (one fallback to the default if a server rejects it; `SHOPWATCH_TLS_CURVE` overrides, empty disables), used by the Pi page fetch and the robots.txt fetch. Live check after deploy: run 18 (Pi 4 1GB) all four retailers ok. README corrected.
+- **#133** (b8ed2d8) `availability.normalise`: "In stock - no backorders accepted" no longer reads as backorder; "Low Stock" (Little Bird's own status) reads as limited.
+- **#135** (dc478ae) a 429 on robots.txt now fails closed and is not cached (it used to count as "no file, allow everything").
+- **Data, not code:** products 16 to 20 renamed with an `(xG)` suffix (A+ 0.5G, B+ 1G, 4 1GB 1G, 4 2GB 2G, 5 1GB 1G), the "Rasberry" typo fixed, and each given a specs block (SoC, CPU, RAM, wifi, Bluetooth, Ethernet, USB, video, release year). Specs are from memory, not a retailer page: the Pi 5 1GB row is the one to check. The identity parsers (RAM, generation, B+) return the same values for the new names.
+
+## Open follow-ups
+
+- Read the 07:00 AEST scheduled run (and the 17:20 one): expect no `HTTP 429` and no "model mismatch". Runs 13 to 18 in `/api/price-watch/runs` are my manual checks (`manual-*` triggers, alerts off), not scheduled ones.
+- `app/retailers/base.py` (Core Electronics, PB Tech) still uses plain `requests.get`. They were not being refused; move it onto `http_client.get` only if that changes.
+- Restock alerts, not built: Little Bird has a "Notify Me" button on out-of-stock pages and a webhooks help page (VERIFIED from its help pages); PB Tech's wish list only emails sale price drops (LIKELY, NZ site); Core Electronics may have a notify button (LIKELY, unconfirmed); Pakronics and Pi Australia nothing found. Idea: ingest the restock emails as a second signal.
+- Little Bird's Pi 4 2GB product page (AF-4292) says "no longer available" (schema Discontinued); check whether that listing is still worth watching.
+- Pi 3 B+ winding down, price history thin: see the 27 Oct notes below, unchanged.
+- Gotchas met this session: run `uvx ruff check .` before opening a PR (CI lint failed #133 on a 109-character line); `httpx` is not installed locally, so a few `test_pi_watch` and TestClient tests fail here and pass in CI.
+
+---
+
 # Next session brief: 27/10/2026 (Pi price watch for Bark Marker)
 
 Written from the CRM and Pi watch session; the CRM side is in `smart-home/nextsession.md` (27 Oct). The sections below the rule are older and stand as history.
