@@ -1073,10 +1073,17 @@ Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to e
   30 minutes on top.
 * A 429 or 503 that carries a `Retry-After` of 90 seconds or less is waited out and tried
   again, up to three tries in all (`SHOPWATCH_PI_MAX_ATTEMPTS`); anything longer, or a third
-  refusal, is a failure. Shopify's shared edge answers storefront pages with `429
-  local_rate_limited`, `Retry-After: 60`, at random while busy: on 2026-10-26 about half of
-  the requests from opti got it, on any URL and at any pace, and the next try got 200. A bad
-  run is therefore slow (each refusal costs a minute), which is why the unit allows an hour.
+  refusal, is a failure. Shopify's edge answered storefront pages with `429
+  local_rate_limited`, `Retry-After: 60`, to about half of the requests from the container
+  (2026-10-26), on any URL and at any pace. That looked like random load but was the TLS
+  handshake: the image's OpenSSL 3.5 offers a post-quantum key share by default, and the
+  edge scores that handshake as a bot. The same URL and headers from the opti host
+  (OpenSSL 3.0) got 200 six times in six. `app/http_client.py` therefore offers X25519
+  alone for both page and robots.txt fetches (container went from 6/6 refused to 6/6 ok on
+  2026-10-28), retries once with the library default if a server rejects that, and
+  `SHOPWATCH_TLS_CURVE` overrides the curve (set it empty to turn the restriction off).
+  If refusals return after an image or OpenSSL upgrade, compare the handshake first, not
+  the pace.
 * A bot interstitial, a 403 or a 429 is a failure that stops the adapter for that run.
   Nothing here defeats a CAPTCHA or an anti-bot measure.
 
