@@ -41,7 +41,10 @@ def _load(origin: str, user_agent: str, timeout: float) -> robotparser.RobotFile
         )
     except Exception as exc:
         raise RobotsError(f"robots.txt unreachable ({type(exc).__name__}: {exc})") from exc
-    if response.status_code >= 500:
+    # 429 is "slow down", not "there is no file". Reading it as absent would turn a refused
+    # request into permission to fetch, so it fails closed like a 5xx. Not cached, so the
+    # next listing on the host asks again.
+    if response.status_code >= 500 or response.status_code == 429:
         raise RobotsError(f"robots.txt unreachable (HTTP {response.status_code})")
     if response.status_code != 200:
         return None

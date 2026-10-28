@@ -334,6 +334,18 @@ def test_unreadable_robots_fails_closed_but_a_missing_one_allows(net):
     assert get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
 
 
+def test_a_rate_limited_robots_fetch_fails_closed_and_is_asked_again(net):
+    """A 429 on robots.txt is a refusal, not an absent file, and is not cached as 'allowed'."""
+    routes, calls = net
+    routes[URL] = Resp(200, page("zaitronics_pi4_2gb_lead_time.html"))
+    routes[ROBOTS] = [Resp(429, headers={"Retry-After": "60"}), Resp(404)]
+    with pytest.raises(FetchError, match="unreachable.*429"):
+        get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert URL not in [c[0] for c in calls], "no page request after a refused robots.txt"
+    assert get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
+    assert [c[0] for c in calls].count(ROBOTS) == 2, "the refusal was not cached"
+
+
 def test_an_interstitial_and_an_http_error_are_failures(net):
     routes, _ = net
     routes[ROBOTS] = Resp(404)
