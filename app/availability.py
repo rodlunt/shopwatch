@@ -35,7 +35,9 @@ _OUT = re.compile(r"out of stock|sold out|unavailable|discontinued|no stock|not 
 _IN = re.compile(r"\bin stock\b|\bavailable now\b|ships (?:today|same)|in-stock")
 _BACK = re.compile(r"back-?\s?order|pre-?order")
 # "In stock - no backorders accepted" names the word to say it does not apply.
-_NO_BACK = re.compile(r"\b(?:no|without|not)\s+(?:\w+\s+)?(?:back-?\s?order|pre-?order)s?\b(?:\s+accepted)?")
+_NO_BACK = re.compile(
+    r"\b(?:no|without|not)\s+(?:\w+\s+)?(?:back-?\s?order|pre-?order)s?\b(?:\s+accepted)?"
+)
 _LOW = re.compile(r"low stock|few left|limited stock|limited availability|only a few")
 _LATER = re.compile(r"expect(?:ed)? dispatch|lead time|dispatch (?:between|in|from|on)|ships in")
 _LIMIT = re.compile(
