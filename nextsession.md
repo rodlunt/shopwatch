@@ -1,3 +1,32 @@
+# Next session brief: 29/10/2026 (label printer research)
+
+Supersedes the 28 Oct brief below for the top of the queue; the 28 Oct items still stand.
+
+## What happened
+
+Rodney wants one printer driven from the CRM (menu-crm on opti) for Australia Post labels and small QR stickers on Bark Marker boxes (bark-marker issue #353). Constraints, in the order they arrived: sticker rolls, not hundreds of dollars, labels must not fade (so no direct thermal), on a roll (so no A4 laser).
+
+- Four research rounds (Sonnet subagents) are filed in `docs/research/label-printer/` (README has the index and current position).
+- Brother QL-1110NWB: product 21, set to PARKED / IGNORE with the rejection reason in the notes (direct thermal fades, $570 to $600).
+- Zebra GK420t (used): product 22, ACTIVE, category `general`, specs block filled. Listing: reboot-it refurbished page, A$239 and SOLD OUT on 29 Oct. The listing reads as unread because there is no reboot-it adapter.
+- Both products sit in `general`, not `Barkmarker`, because the Pi timer sweeps that category.
+
+## Current recommendation (LIKELY, nothing bought)
+
+Used or refurbished Zebra GK420t (thermal transfer, USB), ceiling A$250 delivered with power supply and USB cable. Fallback: used TLP2844 (thermal transfer variant, not the direct-thermal LP2844) at A$130 or less. Rough first-year cost about A$440 with ribbons and labels (GUESSING).
+
+## Open follow-ups
+
+- Watch reboot-it for a GK420t restock, and eBay AU / Gumtree (eBay blocked the research fetch, so no real used listings were verified).
+- Ask reboot-it to confirm a ribbon spindle and platen are fitted.
+- Confirm 110mm x 74m, 0.5 inch core ribbon fits the GK420t; the PB Tech page lists only TLP2844 and TLP3842.
+- Untested: Ubuntu 24.04 printing over USB (CUPS or raw ZPL) from the menu-crm container.
+- Not researched: small QR sticker stock that lasts on a warm Pi case (polyester, thermal transfer), and a 50x25mm thermal transfer roll price.
+- Optional: adapters for Officeworks, Computer Alliance and reboot-it so those listings read. Officeworks and Computer Alliance are on product 21 and show unread.
+- Post the findings to bark-marker #353 (not done).
+
+---
+
 # Next session brief: 28/10/2026 (Pi watch: 429 root cause, stock parsing, specs)
 
 Supersedes the 27 Oct brief below. The 27 Oct "429 from opti" follow-up and the "Rasberry" typo are done; the rest of that brief still stands as history.
