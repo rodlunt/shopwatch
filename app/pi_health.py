@@ -72,6 +72,51 @@ def record_run(
             )
 
 
+def get_firecrawl_state(conn: sqlite3.Connection, adapter: str) -> str:
+    """'untried', 'working' or 'blocked'. A missing row is 'untried'."""
+    row = conn.execute(
+        "SELECT firecrawl_state FROM adapter_health WHERE adapter = ?", (adapter,)
+    ).fetchone()
+    return row["firecrawl_state"] if row else "untried"
+
+
+def record_firecrawl(
+    conn: sqlite3.Connection, adapter: str, outcome: str, note: str, now: str | None = None
+) -> None:
+    """Fold one Firecrawl attempt into adapter_health.
+
+    'working' and 'blocked' change the state; 'unavailable' deliberately changes nothing,
+    because Firecrawl being down says nothing about the retailer and must not be able to
+    switch the fallback off for good. A blocked adapter is never moved back by a later
+    'working' (it is not tried again), only by reset_firecrawl.
+    """
+    if outcome not in ("working", "blocked"):
+        return
+    conn.execute("INSERT OR IGNORE INTO adapter_health (adapter) VALUES (?)", (adapter,))
+    if outcome == "blocked":
+        conn.execute(
+            "UPDATE adapter_health SET firecrawl_state = 'blocked', firecrawl_blocked_at = ?,"
+            " firecrawl_note = ? WHERE adapter = ?",
+            (now or utcnow(), note[:300], adapter),
+        )
+    else:
+        conn.execute(
+            "UPDATE adapter_health SET firecrawl_state = 'working' WHERE adapter = ?"
+            " AND firecrawl_state != 'blocked'",
+            (adapter,),
+        )
+
+
+def reset_firecrawl(conn: sqlite3.Connection, adapter: str) -> bool:
+    """Forget a Firecrawl block so it is tried again. True if the adapter had a row."""
+    cur = conn.execute(
+        "UPDATE adapter_health SET firecrawl_state = 'untried', firecrawl_blocked_at = NULL,"
+        " firecrawl_note = NULL WHERE adapter = ?",
+        (adapter,),
+    )
+    return cur.rowcount > 0
+
+
 def _baseline(conn: sqlite3.Connection) -> datetime | None:
     """When the Pi watch came into existence, so "never succeeded" is not stale at once."""
     row = conn.execute(
@@ -136,6 +181,8 @@ def health(conn: sqlite3.Connection, config: Config | None = None) -> dict[str, 
                 "last_error": h["last_error"] if h else None,
                 "total_runs": h["total_runs"] if h else 0,
                 "total_failures": h["total_failures"] if h else 0,
+                "firecrawl_state": h["firecrawl_state"] if h else "untried",
+                "firecrawl_blocked_at": h["firecrawl_blocked_at"] if h else None,
             }
         )
         if broken:
@@ -143,6 +190,12 @@ def health(conn: sqlite3.Connection, config: Config | None = None) -> dict[str, 
                 f"adapter {slug} has failed {failures} runs in a row "
                 f"(roughly {failures / 2:g} days at two runs a day); "
                 f"last error: {h['last_error']}"
+                + (
+                    f"; Firecrawl was also refused on {h['firecrawl_blocked_at']} and is no "
+                    f"longer tried (reset with: python -m app.pi_health --reset-firecrawl {slug})"
+                    if h["firecrawl_state"] == "blocked"
+                    else ""
+                )
             )
 
     run = conn.execute(
@@ -243,8 +296,20 @@ def summary(conn: sqlite3.Connection, config: Config | None = None) -> dict[str,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.pi_health")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--reset-firecrawl", metavar="ADAPTER",
+        help="forget a Firecrawl block for this adapter so it is tried again, then exit",
+    )
     args = parser.parse_args(argv)
     migrate()
+    if args.reset_firecrawl:
+        with session() as conn:
+            found = reset_firecrawl(conn, args.reset_firecrawl)
+        print(
+            f"Firecrawl state reset for {args.reset_firecrawl}" if found
+            else f"no adapter_health row for {args.reset_firecrawl}; nothing to reset"
+        )
+        return 0 if found else 1
     with session() as conn:
         result = health(conn)
     if args.json:
@@ -255,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"  {adapter['adapter']}: {adapter['consecutive_failed_runs']} failed runs in a "
                 f"row, last success {adapter['last_success_at']}"
+                + (
+                    f", firecrawl {adapter['firecrawl_state']}"
+                    if adapter["firecrawl_state"] != "untried" else ""
+                )
             )
     for reason in result["reasons"]:
         print(f"[PI-WATCH-FAULT] {reason}", file=sys.stderr)

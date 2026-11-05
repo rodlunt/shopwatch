@@ -82,11 +82,21 @@ def check_listing(
         listing["rebate"], listing["coupon_discount"],
     )
 
+    if hasattr(adapter, "firecrawl_state"):
+        adapter.firecrawl_state = pi_health.get_firecrawl_state(conn, adapter.slug)
+
     try:
-        if getattr(adapter, "wants_product_name", False):
-            observation = adapter.check(listing["url"], product["model"], product["name"])
-        else:
-            observation = adapter.check(listing["url"], product["model"])
+        try:
+            if getattr(adapter, "wants_product_name", False):
+                observation = adapter.check(listing["url"], product["model"], product["name"])
+            else:
+                observation = adapter.check(listing["url"], product["model"])
+        finally:
+            # Recorded whatever the outcome: a Firecrawl block must stick even when the
+            # check as a whole failed, which is exactly when it happens.
+            outcome = getattr(adapter, "firecrawl_outcome", None)
+            if outcome:
+                pi_health.record_firecrawl(conn, adapter.slug, outcome[0], outcome[1])
     except retailers.FetchError as exc:
         # Deliberately leaves every stored value alone. The previous reading is still the
         # best information available; an error is not evidence that the price changed.

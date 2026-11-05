@@ -28,6 +28,12 @@ services:
       SHOPWATCH_STALE_AFTER_DAYS: "7"
       SHOPWATCH_REQUEST_DELAY: "8"
       SHOPWATCH_ALERTS_ENABLED: "true"
+      # Optional Firecrawl fallback for the Pi adapters (see README, "Politeness"). Leave
+      # unset to keep it off. Firecrawl is bound to opti's loopback and sits on its own
+      # docker network, so setting this needs a deliberate network change first; do not
+      # join the shopwatch container to firecrawl_backend, which also holds Redis,
+      # RabbitMQ and Postgres.
+      # SHOPWATCH_FIRECRAWL_URL: "http://<reachable-firecrawl-host>:3002"
     # Rendered from the SOPS vault at smart-home:opti-stacks/shopwatch/secrets.sops.env
     # by sops-render.sh. Carries the ntfy topic URL and publish token and nothing else.
     # Never written by hand: a hand-edited file is one nothing can rotate.

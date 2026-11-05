@@ -107,6 +107,13 @@ class Config:
         default_factory=lambda: _float("SHOPWATCH_PI_RETRY_AFTER_MAX", 90.0)
     )
     pi_max_attempts: int = field(default_factory=lambda: _int("SHOPWATCH_PI_MAX_ATTEMPTS", 3))
+    # Self-hosted Firecrawl, used by the Pi adapters only after the honest direct fetch is
+    # refused. Empty (the default) turns the fallback off. Firecrawl is not reachable from
+    # this container's network unless opti is wired for it, so this is opt-in.
+    firecrawl_url: str = field(default_factory=lambda: _str("SHOPWATCH_FIRECRAWL_URL", ""))
+    firecrawl_timeout: float = field(
+        default_factory=lambda: _float("SHOPWATCH_FIRECRAWL_TIMEOUT", 90.0)
+    )
     robots_enforced: bool = field(default_factory=lambda: _bool("SHOPWATCH_ROBOTS_ENFORCED", True))
     # Runs are twice a day, so 36 hours is "missed one run and then some".
     pi_stale_hours: float = field(default_factory=lambda: _float("SHOPWATCH_PI_STALE_HOURS", 36.0))

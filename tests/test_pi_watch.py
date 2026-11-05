@@ -559,3 +559,133 @@ def test_pi_watch_marks_a_manual_retailer_as_not_automatic(pi, db):
     amazon = [x for x in body["products"][0]["listings"] if x["retailer"] == "Amazon AU"][0]
     assert amazon["automatic"] is False and amazon["availability"] == "limited"
     assert amazon["unit_limit"] == 1
+
+
+# ------------------------------------------------------------ Firecrawl fallback state
+
+
+def fc_state(db_path, slug="core_electronics"):
+    with db_conn(db_path) as conn:
+        row = conn.execute("SELECT * FROM adapter_health WHERE adapter = ?", (slug,)).fetchone()
+        return dict(row) if row else None
+
+
+class FcScript(Script):
+    """A scripted adapter that also reports what its Firecrawl leg did, like PiAdapter."""
+
+    firecrawl_state = "untried"
+    firecrawl_outcome = None
+
+    def __init__(self):
+        super().__init__()
+        self.seen_state = []
+
+    def check(self, url, model=None):
+        self.seen_state.append(self.firecrawl_state)
+        return super().check(url, model)
+
+
+def test_firecrawl_state_defaults_to_untried_and_a_missing_row_is_untried(db):
+    with db_conn(db) as conn:
+        assert pi_health.get_firecrawl_state(conn, "nobody") == "untried"
+
+
+def test_working_is_recorded_and_blocked_sticks_until_reset(db):
+    with db_conn(db) as conn:
+        pi_health.record_firecrawl(conn, "zaitronics", "working", "")
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "working"
+        pi_health.record_firecrawl(conn, "zaitronics", "blocked", "the retailer answered 429")
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "blocked"
+        # A later 'working' (a stale call that raced) must not undo a block.
+        pi_health.record_firecrawl(conn, "zaitronics", "working", "")
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "blocked"
+        row = conn.execute(
+            "SELECT firecrawl_blocked_at, firecrawl_note FROM adapter_health"
+            " WHERE adapter = 'zaitronics'").fetchone()
+        assert row["firecrawl_blocked_at"] and "429" in row["firecrawl_note"]
+        assert pi_health.reset_firecrawl(conn, "zaitronics") is True
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "untried"
+        assert pi_health.reset_firecrawl(conn, "never_seen") is False
+
+
+def test_firecrawl_unavailable_changes_nothing(db):
+    with db_conn(db) as conn:
+        pi_health.record_firecrawl(conn, "zaitronics", "working", "")
+        pi_health.record_firecrawl(conn, "zaitronics", "unavailable", "connection refused")
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "working"
+        pi_health.record_firecrawl(conn, "small_devices", "unavailable", "connection refused")
+        assert pi_health.get_firecrawl_state(conn, "small_devices") == "untried"
+
+
+def test_the_watch_hands_the_stored_state_to_the_adapter_and_records_a_block(db, monkeypatch):
+    script = FcScript()
+    monkeypatch.setattr(retailers, "get_adapter", lambda slug: script if slug else None)
+    with db_conn(db) as conn:
+        retailer = store.ensure_retailer(conn, "Core Electronics", adapter="core_electronics")
+        product_id = store.create_product(
+            conn, {"name": "Raspberry Pi 4 Model B 2GB", "model": "SC0193",
+                   "category": "Barkmarker", "trigger_price": 100.0})
+        store.create_listing(conn, {"product_id": product_id, "retailer_id": retailer["id"],
+                                    "url": "https://example.test/pi4"})
+        pi_events.ensure_rules(conn)
+        pi_health.record_firecrawl(conn, "core_electronics", "working", "")
+        conn.commit()
+
+    def refused_both():
+        script.firecrawl_outcome = ("blocked", "the retailer answered Firecrawl with HTTP 429")
+        return FetchError("HTTP 429: retailer refused the request; Firecrawl was refused too")
+
+    script.queue = [refused_both()]
+    summary = go(db)
+    assert script.seen_state == ["working"], "the adapter was told the stored state"
+    assert summary["errors"] == 1
+    state = fc_state(db)
+    assert state["firecrawl_state"] == "blocked", "recorded even though the check failed"
+    assert state["consecutive_failures"] == 1, "a failed check still counts as a failed run"
+
+    script.firecrawl_outcome = None
+    script.queue = [reading(50.0)]
+    go(db)
+    assert script.seen_state[-1] == "blocked", "the next run starts from the stored block"
+
+
+def test_a_block_is_reported_in_the_health_reason_with_the_way_to_reset_it(db):
+    with db_conn(db) as conn:
+        retailer = store.ensure_retailer(conn, "Zaitronics", adapter="zaitronics")
+        product_id = store.create_product(
+            conn, {"name": "Raspberry Pi 4 Model B 2GB", "model": "SC0193",
+                   "category": "Barkmarker", "trigger_price": 100.0})
+        store.create_listing(conn, {"product_id": product_id, "retailer_id": retailer["id"],
+                                    "url": "https://example.test/pi4"})
+        for _ in range(load_config().pi_streak_limit):
+            pi_health.record_run(conn, {"zaitronics": {"ok": 0, "failed": 1, "error": "HTTP 429"}})
+        pi_health.record_firecrawl(conn, "zaitronics", "blocked", "429")
+        conn.commit()
+        result = pi_health.health(conn)
+    assert result["status"] == "unhealthy"
+    reason = next(r for r in result["reasons"] if "zaitronics" in r)
+    assert "Firecrawl was also refused" in reason
+    assert "--reset-firecrawl zaitronics" in reason
+    adapter = next(a for a in result["adapters"] if a["adapter"] == "zaitronics")
+    assert adapter["firecrawl_state"] == "blocked"
+
+
+def test_working_firecrawl_clears_the_failure_streak_but_stays_visible(db):
+    with db_conn(db) as conn:
+        for _ in range(3):
+            pi_health.record_run(conn, {"zaitronics": {"ok": 0, "failed": 1, "error": "HTTP 429"}})
+        pi_health.record_firecrawl(conn, "zaitronics", "working", "")
+        pi_health.record_run(conn, {"zaitronics": {"ok": 1, "failed": 0, "error": None}})
+        row = conn.execute("SELECT * FROM adapter_health WHERE adapter = 'zaitronics'").fetchone()
+    assert row["consecutive_failures"] == 0
+    assert row["firecrawl_state"] == "working", "healthy, but the dependence on Firecrawl shows"
+
+
+def test_reset_cli_clears_a_block_and_reports_an_unknown_adapter(db, capsys):
+    with db_conn(db) as conn:
+        pi_health.record_firecrawl(conn, "zaitronics", "blocked", "429")
+        conn.commit()
+    assert pi_health.main(["--reset-firecrawl", "zaitronics"]) == 0
+    assert fc_state(db, "zaitronics")["firecrawl_state"] == "untried"
+    assert pi_health.main(["--reset-firecrawl", "nobody"]) == 1
+    assert "nothing to reset" in capsys.readouterr().out

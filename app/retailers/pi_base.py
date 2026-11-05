@@ -26,6 +26,7 @@ from typing import Any
 
 from .. import availability as av
 from .. import http_client, robots
+from . import firecrawl_fetch
 from .base import (
     BeautifulSoup,
     FetchError,
@@ -37,6 +38,11 @@ from .base import (
     parse_price,
     requests,
 )
+
+
+class Refused(FetchError):
+    """The retailer refused the request (401/403/429 or a bot interstitial). The only
+    failure that may be retried through Firecrawl; a 404 or a 500 never is."""
 
 
 class ParseFailure(FetchError):
@@ -204,6 +210,15 @@ class PiAdapter(RetailerAdapter):
     wants_product_name = True
     notes = "Freight is quoted at the cart by postcode; left unresolved."
 
+    #: Set by the caller before check(): this adapter's stored Firecrawl state
+    #: ("untried", "working" or "blocked"). "blocked" means Firecrawl is never tried.
+    firecrawl_state = "untried"
+    #: Set by fetch(): what the Firecrawl leg did on the last call, as (outcome, note) with
+    #: outcome "working", "blocked" or "unavailable"; None when Firecrawl was not used.
+    firecrawl_outcome: tuple[str, str] | None = None
+    #: "direct" or "firecrawl": how the last page was actually obtained.
+    fetched_via = "direct"
+
     def fetch(self, url: str) -> str:
         if requests is None:  # pragma: no cover
             raise FetchError("requests is not installed")
@@ -215,13 +230,28 @@ class PiAdapter(RetailerAdapter):
                 robots.check(url, agent, self.config.request_timeout)
             except robots.RobotsError as exc:
                 raise FetchError(str(exc)) from exc
+        self.firecrawl_outcome = None
+        self.fetched_via = "direct"
+        try:
+            return self._fetch_direct(url, agent)
+        except Refused as refused:
+            if not self.config.firecrawl_url or self.firecrawl_state == "blocked":
+                raise
+            return self._fetch_firecrawl(url, refused)
+
+    def _fetch_direct(self, url: str, agent: str) -> str:
         # Up to pi_max_attempts tries. Another happens only when the retailer says "slow
         # down" (429 or 503) AND tells us how long to wait, and that wait is short enough
         # to sit through. Shopify's shared edge answers storefront requests with
         # "429 local_rate_limited, Retry-After: 60" at random while it is busy (observed
         # on opti 2026-10-26: roughly half of requests, any URL, any pace, 200 on the
         # next try), so one patient retry is not enough; three is.
-        attempts = max(self.config.pi_max_attempts, 1)
+        #
+        # Once Firecrawl has been needed for this retailer the direct fetch is still tried
+        # first on every run (a retailer that stops refusing us should be read honestly
+        # again), but only once: sitting through Retry-After three times for a refusal that
+        # has already been going on for days only hammers the retailer.
+        attempts = 1 if self.firecrawl_state == "working" else max(self.config.pi_max_attempts, 1)
         for attempt in range(1, attempts + 1):
             jitter = random.uniform(0, max(self.config.request_jitter, 0))
             time.sleep(max(self.config.request_delay, 0) + jitter)
@@ -240,13 +270,35 @@ class PiAdapter(RetailerAdapter):
                     continue
             break
         if response.status_code in (401, 403, 429):
-            raise FetchError(f"HTTP {response.status_code}: retailer refused the request")
+            raise Refused(f"HTTP {response.status_code}: retailer refused the request")
         if response.status_code != 200:
             raise FetchError(f"HTTP {response.status_code}")
         marker = detect_block(response.text)
         if marker:
-            raise FetchError(f"bot-protection interstitial (matched {marker!r})")
+            raise Refused(f"bot-protection interstitial (matched {marker!r})")
         return response.text
+
+    def _fetch_firecrawl(self, url: str, refused: Refused) -> str:
+        """The direct fetch was refused: try Firecrawl once and record what happened."""
+        jitter = random.uniform(0, max(self.config.request_jitter, 0))
+        time.sleep(max(self.config.request_delay, 0) + jitter)
+        try:
+            html = firecrawl_fetch.fetch(
+                url, self.config.firecrawl_url, self.config.firecrawl_timeout
+            )
+        except firecrawl_fetch.Blocked as exc:
+            self.firecrawl_outcome = ("blocked", str(exc))
+            raise FetchError(
+                f"{refused}; Firecrawl was refused too ({exc}), so it will not be tried "
+                "again for this retailer"
+            ) from exc
+        except firecrawl_fetch.Unavailable as exc:
+            # Says nothing about the retailer. Reported, never recorded as a block.
+            self.firecrawl_outcome = ("unavailable", str(exc))
+            raise FetchError(f"{refused}; Firecrawl is unavailable ({exc})") from exc
+        self.firecrawl_outcome = ("working", "")
+        self.fetched_via = "firecrawl"
+        return html
 
     # Subclasses override this; the signature carries the product name for variants.
     def read(

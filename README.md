@@ -1084,8 +1084,28 @@ Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to e
   `SHOPWATCH_TLS_CURVE` overrides the curve (set it empty to turn the restriction off).
   If refusals return after an image or OpenSSL upgrade, compare the handshake first, not
   the pace.
-* A bot interstitial, a 403 or a 429 is a failure that stops the adapter for that run.
-  Nothing here defeats a CAPTCHA or an anti-bot measure.
+* A bot interstitial, a 403 or a 429 is a failure for that listing. The honest direct
+  fetch always goes first. **Optional Firecrawl fallback** (off unless
+  `SHOPWATCH_FIRECRAWL_URL` is set): after a *refusal* (401, 403, 429 or an interstitial,
+  never a 404 or a 500) the Pi adapters make one more attempt through the self-hosted
+  Firecrawl instance. Firecrawl is a headless browser, so it presents as an ordinary visitor
+  and gets past a bot rule that rejects our declared client (measured on opti 2026-11-06:
+  `smalldevices.com.au` and `zaitronics.com.au` answered the direct fetch 429 and Firecrawl
+  200 with the full JSON-LD). That is a deliberate step away from "declare yourself and take
+  no for an answer", chosen for two retailers at one page per product per run. Rules that
+  keep it contained:
+  * robots.txt is checked before either path, exactly as before.
+  * If the retailer refuses Firecrawl too (a 401, 403 or 429 for the target, or an
+    interstitial), the adapter is recorded `blocked` in `adapter_health.firecrawl_state` and
+    Firecrawl is **never tried for it again**. The ordinary failure alert takes over. Undo it
+    with `python -m app.pi_health --reset-firecrawl <adapter>`.
+  * Firecrawl being down is *not* a block: it changes no state, is named in the error, and
+    the adapter's failure streak and alert behave as before.
+  * Once Firecrawl has worked for an adapter the direct fetch is still tried first on every
+    run, but once rather than three times, so a long refusal is not hammered.
+  * Firecrawl listens on opti's loopback and is not reachable from the container's network.
+    Turning this on needs a deliberate network change on opti; see
+    `deploy/docker-compose.opti.yml`. A failing CAPTCHA is still not solved or worked around.
 
 ### What a failure means
 

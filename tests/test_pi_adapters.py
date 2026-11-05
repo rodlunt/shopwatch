@@ -397,3 +397,166 @@ def test_it_keeps_trying_through_two_throttles_then_succeeds(net):
     routes[URL] = [throttled, throttled, Resp(200, page("zaitronics_pi4_2gb_lead_time.html"))]
     assert get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
     assert [c[0] for c in calls].count(URL) == 3
+
+
+# --------------------------------------------------------------- Firecrawl fallback
+#
+# The honest direct fetch always goes first. Firecrawl is a second try after a REFUSAL
+# (401/403/429 or an interstitial), never after a 404 or a 500, and only when a URL is
+# configured. A retailer that refuses Firecrawl too is recorded as blocked and not asked
+# again; Firecrawl being down is not a block. The response shapes below were observed on
+# opti on 2026-11-06 (target 429, 403 and 404 all come back HTTP 200 with the target's
+# status in metadata.statusCode).
+
+FC_URL = "http://firecrawl.test:3002"
+GOOD = page("zaitronics_pi4_2gb_lead_time.html")
+
+
+class FcResp:
+    def __init__(self, body, status=200):
+        self._body, self.status_code = body, status
+
+    def json(self):
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+def fc_body(html="", target=200):
+    return {"success": True, "data": {"rawHtml": html, "metadata": {"statusCode": target}}}
+
+
+@pytest.fixture()
+def fc(net, monkeypatch):
+    """Firecrawl switched on, with a fake that records every POST."""
+    monkeypatch.setenv("SHOPWATCH_FIRECRAWL_URL", FC_URL)
+    routes, calls = net
+    routes[ROBOTS] = Resp(404)
+    posts: list = []
+    replies: list = []
+
+    def fake_post(endpoint, json=None, timeout=None):
+        posts.append((endpoint, json))
+        item = replies.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    from app.retailers import firecrawl_fetch
+
+    monkeypatch.setattr(firecrawl_fetch.requests, "post", fake_post)
+    return routes, calls, posts, replies
+
+
+def refused(code=429):
+    return Resp(code, headers={"Retry-After": "3600"})
+
+
+def test_firecrawl_reads_the_page_after_the_direct_fetch_is_refused(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    replies.append(FcResp(fc_body(GOOD)))
+    adapter = get_adapter("zaitronics")
+    obs = adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert obs.advertised_price == 88.0, "the control: the fallback can produce a reading"
+    assert [c[0] for c in calls].count(URL) == 1, "the honest direct fetch went first"
+    assert posts == [(FC_URL + "/v1/scrape", {"url": URL, "formats": ["rawHtml"]})]
+    assert adapter.firecrawl_outcome == ("working", "")
+    assert adapter.fetched_via == "firecrawl"
+
+
+def test_no_firecrawl_url_means_the_fallback_is_off(net, monkeypatch):
+    routes, calls = net
+    monkeypatch.delenv("SHOPWATCH_FIRECRAWL_URL", raising=False)
+    routes[ROBOTS] = Resp(404)
+    routes[URL] = refused()
+    adapter = get_adapter("zaitronics")
+    with pytest.raises(FetchError, match="429"):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert adapter.firecrawl_outcome is None
+
+
+def test_a_blocked_adapter_never_calls_firecrawl_again(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    adapter = get_adapter("zaitronics")
+    adapter.firecrawl_state = "blocked"
+    with pytest.raises(FetchError, match="429"):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert posts == [], "blocked means Firecrawl is not asked, whatever the direct fetch says"
+    assert adapter.firecrawl_outcome is None
+
+
+@pytest.mark.parametrize("target", [429, 403, 401])
+def test_firecrawl_refused_by_the_retailer_is_recorded_as_blocked(fc, target):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    replies.append(FcResp(fc_body("<html><head></head><body></body></html>", target)))
+    adapter = get_adapter("zaitronics")
+    with pytest.raises(FetchError, match="will not be tried again"):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    outcome, note = adapter.firecrawl_outcome
+    assert outcome == "blocked" and str(target) in note
+
+
+def test_an_interstitial_served_to_firecrawl_counts_as_blocked(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused(403)
+    # The same marker the direct path already treats as a bot challenge.
+    replies.append(FcResp(fc_body("<html><title>Just a moment...</title>"
+                                  "<div id='cf-challenge-running'></div></html>")))
+    adapter = get_adapter("zaitronics")
+    with pytest.raises(FetchError):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert adapter.firecrawl_outcome[0] == "blocked"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        ConnectionError("connection refused"),
+        FcResp(ValueError("not json"), status=502),
+        FcResp({"success": False, "error": "scrape timed out"}),
+        FcResp(fc_body("")),
+    ],
+    ids=["down", "not-json", "api-error", "empty-page"],
+)
+def test_firecrawl_being_down_is_unavailable_not_blocked(fc, reply):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    replies.append(reply)
+    adapter = get_adapter("zaitronics")
+    with pytest.raises(FetchError, match="Firecrawl is unavailable"):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert adapter.firecrawl_outcome[0] == "unavailable", "an outage must never read as a block"
+
+
+def test_a_404_or_a_500_never_goes_to_firecrawl(fc):
+    routes, calls, posts, replies = fc
+    for status in (404, 500):
+        routes[URL] = Resp(status)
+        with pytest.raises(FetchError, match=str(status)):
+            get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert posts == [], "only a refusal is retried through Firecrawl"
+
+
+def test_a_404_from_the_retailer_via_firecrawl_is_an_ordinary_error(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    replies.append(FcResp(fc_body("<html></html>", 404)))
+    adapter = get_adapter("zaitronics")
+    with pytest.raises(FetchError, match="HTTP 404"):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert adapter.firecrawl_outcome is None, "a missing page is not a block"
+
+
+def test_once_firecrawl_works_the_direct_fetch_is_tried_once_not_three_times(fc):
+    routes, calls, posts, replies = fc
+    # Retry-After 60 is short enough that a fresh adapter WOULD wait and try again.
+    routes[URL] = [Resp(429, headers={"Retry-After": "60"})] * 3
+    replies.append(FcResp(fc_body(GOOD)))
+    adapter = get_adapter("zaitronics")
+    adapter.firecrawl_state = "working"
+    assert adapter.check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
+    assert [c[0] for c in calls].count(URL) == 1
+    assert 60.0 not in calls.sleeps, "no Retry-After sat through on a long-running refusal"
