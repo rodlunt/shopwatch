@@ -590,11 +590,16 @@ def test_firecrawl_state_defaults_to_untried_and_a_missing_row_is_untried(db):
         assert pi_health.get_firecrawl_state(conn, "nobody") == "untried"
 
 
+def refuse(conn, slug, run_id, note="the retailer answered 429", block_after=2):
+    pi_health.record_firecrawl(conn, slug, "refused", note, run_id=run_id, block_after=block_after)
+
+
 def test_working_is_recorded_and_blocked_sticks_until_reset(db):
     with db_conn(db) as conn:
         pi_health.record_firecrawl(conn, "zaitronics", "working", "")
         assert pi_health.get_firecrawl_state(conn, "zaitronics") == "working"
-        pi_health.record_firecrawl(conn, "zaitronics", "blocked", "the retailer answered 429")
+        refuse(conn, "zaitronics", 1)
+        refuse(conn, "zaitronics", 2)
         assert pi_health.get_firecrawl_state(conn, "zaitronics") == "blocked"
         # A later 'working' (a stale call that raced) must not undo a block.
         pi_health.record_firecrawl(conn, "zaitronics", "working", "")
@@ -606,6 +611,35 @@ def test_working_is_recorded_and_blocked_sticks_until_reset(db):
         assert pi_health.reset_firecrawl(conn, "zaitronics") is True
         assert pi_health.get_firecrawl_state(conn, "zaitronics") == "untried"
         assert pi_health.reset_firecrawl(conn, "never_seen") is False
+
+
+def test_one_refusal_does_not_block_and_a_success_clears_the_count(db):
+    with db_conn(db) as conn:
+        refuse(conn, "zaitronics", 1)
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "untried"
+        pi_health.record_firecrawl(conn, "zaitronics", "working", "")
+        refuse(conn, "zaitronics", 2)
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "working", (
+            "refused, worked, refused is not two in a row")
+        refuse(conn, "zaitronics", 3)
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "blocked"
+
+
+def test_two_refusals_in_the_same_run_are_one_refusal(db):
+    with db_conn(db) as conn:
+        refuse(conn, "zaitronics", 7)
+        refuse(conn, "zaitronics", 7)
+        refuse(conn, "zaitronics", 7)
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "untried", (
+            "one run's listings must not block on their own")
+        refuse(conn, "zaitronics", 8)
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "blocked"
+
+
+def test_block_after_one_restores_one_strike_blocking(db):
+    with db_conn(db) as conn:
+        refuse(conn, "zaitronics", 1, block_after=1)
+        assert pi_health.get_firecrawl_state(conn, "zaitronics") == "blocked"
 
 
 def test_firecrawl_unavailable_changes_nothing(db):
@@ -632,7 +666,7 @@ def test_the_watch_hands_the_stored_state_to_the_adapter_and_records_a_block(db,
         conn.commit()
 
     def refused_both():
-        script.firecrawl_outcome = ("blocked", "the retailer answered Firecrawl with HTTP 429")
+        script.firecrawl_outcome = ("refused", "the retailer answered Firecrawl with HTTP 429")
         return FetchError("HTTP 429: retailer refused the request; Firecrawl was refused too")
 
     script.queue = [refused_both()]
@@ -640,8 +674,15 @@ def test_the_watch_hands_the_stored_state_to_the_adapter_and_records_a_block(db,
     assert script.seen_state == ["working"], "the adapter was told the stored state"
     assert summary["errors"] == 1
     state = fc_state(db)
-    assert state["firecrawl_state"] == "blocked", "recorded even though the check failed"
+    assert state["firecrawl_state"] == "working", "one refusal is not enough to give up"
+    assert state["firecrawl_refusals"] == 1
     assert state["consecutive_failures"] == 1, "a failed check still counts as a failed run"
+
+    script.queue = [refused_both()]
+    go(db)
+    state = fc_state(db)
+    assert state["firecrawl_state"] == "blocked", "recorded even though the check failed"
+    assert state["consecutive_failures"] == 2
 
     script.firecrawl_outcome = None
     script.queue = [reading(50.0)]
@@ -659,7 +700,8 @@ def test_a_block_is_reported_in_the_health_reason_with_the_way_to_reset_it(db):
                                     "url": "https://example.test/pi4"})
         for _ in range(load_config().pi_streak_limit):
             pi_health.record_run(conn, {"zaitronics": {"ok": 0, "failed": 1, "error": "HTTP 429"}})
-        pi_health.record_firecrawl(conn, "zaitronics", "blocked", "429")
+        refuse(conn, "zaitronics", 1, "429")
+        refuse(conn, "zaitronics", 2, "429")
         conn.commit()
         result = pi_health.health(conn)
     assert result["status"] == "unhealthy"
@@ -683,8 +725,9 @@ def test_working_firecrawl_clears_the_failure_streak_but_stays_visible(db):
 
 def test_reset_cli_clears_a_block_and_reports_an_unknown_adapter(db, capsys):
     with db_conn(db) as conn:
-        pi_health.record_firecrawl(conn, "zaitronics", "blocked", "429")
+        refuse(conn, "zaitronics", 1, "429", block_after=1)
         conn.commit()
+    assert fc_state(db, "zaitronics")["firecrawl_state"] == "blocked", "the control: it was blocked"
     assert pi_health.main(["--reset-firecrawl", "zaitronics"]) == 0
     assert fc_state(db, "zaitronics")["firecrawl_state"] == "untried"
     assert pi_health.main(["--reset-firecrawl", "nobody"]) == 1
@@ -708,7 +751,7 @@ def test_a_database_error_while_recording_does_not_mask_the_fetch_error(db, monk
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(pi_health, "record_firecrawl", locked)
-    script.firecrawl_outcome = ("blocked", "429")
+    script.firecrawl_outcome = ("refused", "429")
     script.queue = [FetchError("HTTP 429: retailer refused the request; Firecrawl was refused too")]
     go(db)
     with db_conn(db) as conn:

@@ -492,18 +492,18 @@ def test_a_blocked_adapter_never_calls_firecrawl_again(fc):
 
 
 @pytest.mark.parametrize("target", [429, 403, 401])
-def test_firecrawl_refused_by_the_retailer_is_recorded_as_blocked(fc, target):
+def test_firecrawl_refused_by_the_retailer_is_reported_as_a_refusal(fc, target):
     routes, calls, posts, replies = fc
     routes[URL] = refused()
     replies.append(FcResp(fc_body("<html><head></head><body></body></html>", target)))
     adapter = get_adapter("zaitronics")
-    with pytest.raises(FetchError, match="will not be tried again"):
+    with pytest.raises(FetchError, match="Firecrawl was refused too"):
         adapter.check(URL, "SC0193", "Pi 4 2GB")
     outcome, note = adapter.firecrawl_outcome
-    assert outcome == "blocked" and str(target) in note
+    assert outcome == "refused" and str(target) in note
 
 
-def test_an_interstitial_served_to_firecrawl_counts_as_blocked(fc):
+def test_an_interstitial_served_to_firecrawl_counts_as_a_refusal(fc):
     routes, calls, posts, replies = fc
     routes[URL] = refused(403)
     # The same marker the direct path already treats as a bot challenge.
@@ -512,7 +512,7 @@ def test_an_interstitial_served_to_firecrawl_counts_as_blocked(fc):
     adapter = get_adapter("zaitronics")
     with pytest.raises(FetchError):
         adapter.check(URL, "SC0193", "Pi 4 2GB")
-    assert adapter.firecrawl_outcome[0] == "blocked"
+    assert adapter.firecrawl_outcome[0] == "refused"
 
 
 @pytest.mark.parametrize(

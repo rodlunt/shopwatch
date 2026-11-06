@@ -111,6 +111,11 @@ class Config:
     # refused. Empty (the default) turns the fallback off. Firecrawl is not reachable from
     # this container's network unless opti is wired for it, so this is opt-in.
     firecrawl_url: str = field(default_factory=lambda: _str("SHOPWATCH_FIRECRAWL_URL", ""))
+    # Runs in a row (counted once per run) on which a retailer must refuse Firecrawl before
+    # Firecrawl is given up on for that retailer for good. 1 restores one-strike blocking.
+    firecrawl_block_after: int = field(
+        default_factory=lambda: max(_int("SHOPWATCH_FIRECRAWL_BLOCK_AFTER", 2), 1)
+    )
     firecrawl_timeout: float = field(
         default_factory=lambda: _float("SHOPWATCH_FIRECRAWL_TIMEOUT", 90.0)
     )

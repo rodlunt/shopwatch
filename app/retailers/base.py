@@ -311,7 +311,8 @@ class RetailerAdapter:
     wants_product_name = False
     #: The Firecrawl fallback protocol (only the Pi adapters act on it). The watcher sets
     #: firecrawl_state from adapter_health before check(): "untried", "working" or
-    #: "blocked". fetch() leaves firecrawl_outcome as (outcome, note) when the Firecrawl
+    #: "blocked". fetch() leaves firecrawl_outcome as (outcome, note), outcome one of "fetched",
+    #: "working", "refused" or "unavailable", when the Firecrawl
     #: leg ran, and fetched_via as "direct" or "firecrawl".
     firecrawl_state = "untried"
     firecrawl_outcome: tuple[str, str] | None = None

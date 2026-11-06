@@ -1096,9 +1096,11 @@ Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to e
   keep it contained:
   * robots.txt is checked before either path, exactly as before.
   * If the retailer refuses Firecrawl too (a 401, 403 or 429 for the target, or an
-    interstitial), the adapter is recorded `blocked` in `adapter_health.firecrawl_state` and
-    Firecrawl is **never tried for it again**. The ordinary failure alert takes over. Undo it
-    with `python -m app.pi_health --reset-firecrawl <adapter>`.
+    interstitial) on **two runs in a row** (`SHOPWATCH_FIRECRAWL_BLOCK_AFTER`, default 2;
+    counted once per run, and any success clears the count), the adapter is recorded
+    `blocked` in `adapter_health.firecrawl_state` and Firecrawl is **never tried for it
+    again**. One transient 429 does not switch it off. The ordinary failure alert takes over.
+    Undo a block with `python -m app.pi_health --reset-firecrawl <adapter>`.
   * Firecrawl being down is *not* a block: it changes no state, is named in the error, and
     the adapter's failure streak and alert behave as before.
   * Once Firecrawl has worked for an adapter the direct fetch is still tried first on every

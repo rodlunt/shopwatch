@@ -289,11 +289,8 @@ class PiAdapter(RetailerAdapter):
                 url, self.config.firecrawl_url, self.config.firecrawl_timeout
             )
         except firecrawl_fetch.Blocked as exc:
-            self.firecrawl_outcome = ("blocked", str(exc))
-            raise FetchError(
-                f"{refused}; Firecrawl was refused too ({exc}), so it will not be tried "
-                "again for this retailer"
-            ) from exc
+            self.firecrawl_outcome = ("refused", str(exc))
+            raise FetchError(f"{refused}; Firecrawl was refused too ({exc})") from exc
         except firecrawl_fetch.Unavailable as exc:
             # Says nothing about the retailer. Reported, never recorded as a block.
             self.firecrawl_outcome = ("unavailable", str(exc))

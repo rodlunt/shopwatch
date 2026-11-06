@@ -84,30 +84,64 @@ def get_firecrawl_state(conn: sqlite3.Connection, adapter: str) -> str:
 
 
 def record_firecrawl(
-    conn: sqlite3.Connection, adapter: str, outcome: str, note: str, now: str | None = None
+    conn: sqlite3.Connection,
+    adapter: str,
+    outcome: str,
+    note: str,
+    run_id: int | None = None,
+    block_after: int = 2,
+    now: str | None = None,
 ) -> None:
     """Fold one Firecrawl attempt into adapter_health.
 
-    'working' and 'blocked' change the state; 'unavailable' deliberately changes nothing,
-    because Firecrawl being down says nothing about the retailer and must not be able to
-    switch the fallback off for good. A blocked adapter is never moved back by a later
-    'working' (it is not tried again), only by reset_firecrawl.
+    'working' clears the refusal count. 'refused' counts one refusal per run (a second
+    refused listing in the same run is the same refusal, so run_id keeps one run from
+    blocking on its own) and flips the state to 'blocked' at block_after of them. Nothing
+    else changes state: 'unavailable' and 'fetched' are ignored, because Firecrawl being
+    down says nothing about the retailer and must not be able to switch the fallback off
+    for good. A blocked adapter is never moved back by a later 'working' (it is not tried
+    again), only by reset_firecrawl.
     """
-    if outcome not in ("working", "blocked"):
+    if outcome not in ("working", "refused"):
         return
     conn.execute("INSERT OR IGNORE INTO adapter_health (adapter) VALUES (?)", (adapter,))
-    if outcome == "blocked":
-        log.warning("Firecrawl was refused by %s and will not be tried again: %s", adapter, note)
+    if outcome == "working":
+        conn.execute(
+            "UPDATE adapter_health SET firecrawl_state = 'working', firecrawl_refusals = 0,"
+            " firecrawl_refusal_run = NULL WHERE adapter = ? AND firecrawl_state != 'blocked'",
+            (adapter,),
+        )
+        return
+    row = conn.execute(
+        "SELECT firecrawl_state, firecrawl_refusals, firecrawl_refusal_run"
+        " FROM adapter_health WHERE adapter = ?",
+        (adapter,),
+    ).fetchone()
+    if row["firecrawl_state"] == "blocked":
+        return
+    refusals = row["firecrawl_refusals"]
+    if run_id is None or row["firecrawl_refusal_run"] != run_id:
+        refusals += 1
+    if refusals >= max(block_after, 1):
+        log.warning(
+            "Firecrawl was refused by %s on %d runs in a row and will not be tried again: %s",
+            adapter, refusals, note,
+        )
         conn.execute(
             "UPDATE adapter_health SET firecrawl_state = 'blocked', firecrawl_blocked_at = ?,"
-            " firecrawl_note = ? WHERE adapter = ?",
-            (now or utcnow(), note[:300], adapter),
+            " firecrawl_refusals = ?, firecrawl_refusal_run = ?, firecrawl_note = ?"
+            " WHERE adapter = ?",
+            (now or utcnow(), refusals, run_id, note[:300], adapter),
         )
     else:
+        log.warning(
+            "Firecrawl was refused by %s (%d of %d before it is given up on): %s",
+            adapter, refusals, block_after, note,
+        )
         conn.execute(
-            "UPDATE adapter_health SET firecrawl_state = 'working' WHERE adapter = ?"
-            " AND firecrawl_state != 'blocked'",
-            (adapter,),
+            "UPDATE adapter_health SET firecrawl_refusals = ?, firecrawl_refusal_run = ?,"
+            " firecrawl_note = ? WHERE adapter = ?",
+            (refusals, run_id, note[:300], adapter),
         )
 
 
@@ -115,7 +149,8 @@ def reset_firecrawl(conn: sqlite3.Connection, adapter: str) -> bool:
     """Forget a Firecrawl block so it is tried again. True if the adapter had a row."""
     cur = conn.execute(
         "UPDATE adapter_health SET firecrawl_state = 'untried', firecrawl_blocked_at = NULL,"
-        " firecrawl_note = NULL WHERE adapter = ?",
+        " firecrawl_note = NULL, firecrawl_refusals = 0, firecrawl_refusal_run = NULL"
+        " WHERE adapter = ?",
         (adapter,),
     )
     return cur.rowcount > 0

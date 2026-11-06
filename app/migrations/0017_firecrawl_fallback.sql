@@ -6,10 +6,14 @@
 -- asked again:
 --   untried  Firecrawl has not been needed yet (the default).
 --   working  Firecrawl has fetched a page this adapter's direct fetch was refused on.
---   blocked  Firecrawl was refused as well. It is never tried again for this adapter until
+--   blocked  Firecrawl was refused on separate runs, SHOPWATCH_FIRECRAWL_BLOCK_AFTER times in
+--            a row (default 2; one transient 429 must not switch the fallback off for good,
+--            and a success clears the count). It is never tried again for this adapter until
 --            someone resets it (python -m app.pi_health --reset-firecrawl <adapter>).
 -- Firecrawl being DOWN is not "blocked": it changes nothing here and is reported as an
 -- ordinary fetch error, so an outage cannot permanently switch the fallback off.
 ALTER TABLE adapter_health ADD COLUMN firecrawl_state TEXT NOT NULL DEFAULT 'untried';
 ALTER TABLE adapter_health ADD COLUMN firecrawl_blocked_at TEXT;
 ALTER TABLE adapter_health ADD COLUMN firecrawl_note TEXT;
+ALTER TABLE adapter_health ADD COLUMN firecrawl_refusals INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE adapter_health ADD COLUMN firecrawl_refusal_run INTEGER;
