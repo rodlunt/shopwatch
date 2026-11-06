@@ -58,6 +58,24 @@ def _record(
     )
 
 
+def _remember_firecrawl(conn: sqlite3.Connection, adapter) -> None:
+    """Store what the Firecrawl leg did. Runs in a finally, so it must not raise.
+
+    A database error here (a locked database is a real risk, see the per-listing commit
+    below) would replace the FetchError that is already propagating and be reported as an
+    adapter crash. It is logged with the traceback instead. The caller does not need to
+    know: nothing is lost that the next run cannot re-derive, because an unrecorded block
+    just means Firecrawl is asked once more and refused once more.
+    """
+    outcome = getattr(adapter, "firecrawl_outcome", None)
+    if not outcome:
+        return
+    try:
+        pi_health.record_firecrawl(conn, adapter.slug, outcome[0], outcome[1])
+    except sqlite3.Error:
+        log.exception("could not record the Firecrawl outcome for %s", adapter.slug)
+
+
 def check_listing(
     conn: sqlite3.Connection,
     listing: sqlite3.Row,
@@ -82,8 +100,7 @@ def check_listing(
         listing["rebate"], listing["coupon_discount"],
     )
 
-    if hasattr(adapter, "firecrawl_state"):
-        adapter.firecrawl_state = pi_health.get_firecrawl_state(conn, adapter.slug)
+    adapter.firecrawl_state = pi_health.get_firecrawl_state(conn, adapter.slug)
 
     try:
         try:
@@ -94,9 +111,7 @@ def check_listing(
         finally:
             # Recorded whatever the outcome: a Firecrawl block must stick even when the
             # check as a whole failed, which is exactly when it happens.
-            outcome = getattr(adapter, "firecrawl_outcome", None)
-            if outcome:
-                pi_health.record_firecrawl(conn, adapter.slug, outcome[0], outcome[1])
+            _remember_firecrawl(conn, adapter)
     except retailers.FetchError as exc:
         # Deliberately leaves every stored value alone. The previous reading is still the
         # best information available; an error is not evidence that the price changed.

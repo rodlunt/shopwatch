@@ -430,6 +430,10 @@ def fc_body(html="", target=200):
 def fc(net, monkeypatch):
     """Firecrawl switched on, with a fake that records every POST."""
     monkeypatch.setenv("SHOPWATCH_FIRECRAWL_URL", FC_URL)
+    from app.retailers import pi_base as _pb
+
+    # Shared across adapter instances by design, so one test must not leak into the next.
+    monkeypatch.setattr(_pb.PiAdapter, "_firecrawl_down_until", 0.0)
     routes, calls = net
     routes[ROBOTS] = Resp(404)
     posts: list = []
@@ -560,3 +564,56 @@ def test_once_firecrawl_works_the_direct_fetch_is_tried_once_not_three_times(fc)
     assert adapter.check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
     assert [c[0] for c in calls].count(URL) == 1
     assert 60.0 not in calls.sleeps, "no Retry-After sat through on a long-running refusal"
+
+
+def test_a_down_firecrawl_costs_one_attempt_not_one_per_listing(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = [refused(), refused()]
+    replies.append(ConnectionError("connection refused"))
+    first = get_adapter("zaitronics")
+    with pytest.raises(FetchError, match="Firecrawl is unavailable"):
+        first.check(URL, "SC0193", "Pi 4 2GB")
+    second = get_adapter("zaitronics")
+    with pytest.raises(FetchError, match="Firecrawl skipped"):
+        second.check(URL, "SC0193", "Pi 4 2GB")
+    assert len(posts) == 1, "the second refused listing did not wait on Firecrawl again"
+    assert second.firecrawl_outcome[0] == "unavailable", "and it is still not a block"
+
+
+def test_a_short_connect_timeout_with_a_long_read_timeout(fc, monkeypatch):
+    routes, calls, posts, replies = fc
+    seen = []
+    from app.retailers import firecrawl_fetch
+
+    def spy(endpoint, json=None, timeout=None):
+        seen.append(timeout)
+        return FcResp(fc_body(GOOD))
+
+    monkeypatch.setattr(firecrawl_fetch.requests, "post", spy)
+    routes[URL] = refused()
+    get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert seen == [(5.0, 90.0)]
+
+
+def test_working_is_only_claimed_once_the_page_has_parsed(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    replies.append(FcResp(fc_body("<html><body>no product data here</body></html>")))
+    adapter = get_adapter("zaitronics")
+    with pytest.raises(FetchError):
+        adapter.check(URL, "SC0193", "Pi 4 2GB")
+    assert adapter.firecrawl_outcome == ("fetched", ""), "HTML came back, nothing usable"
+    assert adapter.fetched_via == "firecrawl"
+
+
+def test_a_reading_that_came_through_firecrawl_says_so(fc):
+    routes, calls, posts, replies = fc
+    routes[URL] = refused()
+    replies.append(FcResp(fc_body(GOOD)))
+    obs = get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert "read through Firecrawl: the direct fetch was refused" in obs.warnings
+    # The control: a plain direct reading carries no such warning.
+    routes[URL] = Resp(200, GOOD)
+    robots.clear_cache()
+    direct = get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB")
+    assert not [w for w in direct.warnings if "Firecrawl" in w]

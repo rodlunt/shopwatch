@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sqlite3
 import sys
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ from .config import Config, load_config
 from .db import migrate, session, utcnow
 
 PI_MIGRATION = "0016_pi_watch.sql"
+
+log = logging.getLogger(__name__)
 
 
 def _parse(ts: str | None) -> datetime | None:
@@ -94,6 +97,7 @@ def record_firecrawl(
         return
     conn.execute("INSERT OR IGNORE INTO adapter_health (adapter) VALUES (?)", (adapter,))
     if outcome == "blocked":
+        log.warning("Firecrawl was refused by %s and will not be tried again: %s", adapter, note)
         conn.execute(
             "UPDATE adapter_health SET firecrawl_state = 'blocked', firecrawl_blocked_at = ?,"
             " firecrawl_note = ? WHERE adapter = ?",

@@ -24,6 +24,10 @@ from .base import FetchError, detect_block, requests
 #: Target statuses that mean "this retailer does not want to be fetched this way".
 REFUSAL_CODES = (401, 403, 429)
 
+#: Seconds to wait for a connection before calling Firecrawl unavailable. The scrape itself
+#: may take far longer (a headless browser), so only the read timeout is generous.
+CONNECT_TIMEOUT = 5.0
+
 
 class Blocked(FetchError):
     """The retailer refused Firecrawl as well."""
@@ -39,7 +43,7 @@ def fetch(url: str, base_url: str, timeout: float) -> str:
     endpoint = base_url.rstrip("/") + "/v1/scrape"
     try:
         response = requests.post(
-            endpoint, json={"url": url, "formats": ["rawHtml"]}, timeout=timeout
+            endpoint, json={"url": url, "formats": ["rawHtml"]}, timeout=(CONNECT_TIMEOUT, timeout)
         )
     except Exception as exc:  # connection refused, timeout, DNS: Firecrawl is not answering
         raise Unavailable(f"{type(exc).__name__}: {exc}") from exc

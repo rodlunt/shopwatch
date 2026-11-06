@@ -309,6 +309,13 @@ class RetailerAdapter:
     never_scrapable: tuple[str, ...] = ()
     #: True for adapters that need the product's name to pick a variant (the Pi adapters).
     wants_product_name = False
+    #: The Firecrawl fallback protocol (only the Pi adapters act on it). The watcher sets
+    #: firecrawl_state from adapter_health before check(): "untried", "working" or
+    #: "blocked". fetch() leaves firecrawl_outcome as (outcome, note) when the Firecrawl
+    #: leg ran, and fetched_via as "direct" or "firecrawl".
+    firecrawl_state = "untried"
+    firecrawl_outcome: tuple[str, str] | None = None
+    fetched_via = "direct"
 
     def __init__(self, config=None) -> None:
         self.config = config or load_config()

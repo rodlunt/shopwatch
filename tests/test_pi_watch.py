@@ -689,3 +689,31 @@ def test_reset_cli_clears_a_block_and_reports_an_unknown_adapter(db, capsys):
     assert fc_state(db, "zaitronics")["firecrawl_state"] == "untried"
     assert pi_health.main(["--reset-firecrawl", "nobody"]) == 1
     assert "nothing to reset" in capsys.readouterr().out
+
+
+def test_a_database_error_while_recording_does_not_mask_the_fetch_error(db, monkeypatch):
+    script = FcScript()
+    monkeypatch.setattr(retailers, "get_adapter", lambda slug: script if slug else None)
+    with db_conn(db) as conn:
+        retailer = store.ensure_retailer(conn, "Core Electronics", adapter="core_electronics")
+        product_id = store.create_product(
+            conn, {"name": "Raspberry Pi 4 Model B 2GB", "model": "SC0193",
+                   "category": "Barkmarker", "trigger_price": 100.0})
+        lid = store.create_listing(conn, {"product_id": product_id, "retailer_id": retailer["id"],
+                                          "url": "https://example.test/pi4"})
+        pi_events.ensure_rules(conn)
+        conn.commit()
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(pi_health, "record_firecrawl", locked)
+    script.firecrawl_outcome = ("blocked", "429")
+    script.queue = [FetchError("HTTP 429: retailer refused the request; Firecrawl was refused too")]
+    go(db)
+    with db_conn(db) as conn:
+        message = conn.execute(
+            "SELECT message FROM scrape_results WHERE listing_id = ? ORDER BY id DESC LIMIT 1",
+            (lid,)).fetchone()["message"]
+    assert "Firecrawl was refused too" in message, "the real fetch error is what gets reported"
+    assert "adapter crashed" not in message

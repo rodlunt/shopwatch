@@ -210,14 +210,11 @@ class PiAdapter(RetailerAdapter):
     wants_product_name = True
     notes = "Freight is quoted at the cart by postcode; left unresolved."
 
-    #: Set by the caller before check(): this adapter's stored Firecrawl state
-    #: ("untried", "working" or "blocked"). "blocked" means Firecrawl is never tried.
-    firecrawl_state = "untried"
-    #: Set by fetch(): what the Firecrawl leg did on the last call, as (outcome, note) with
-    #: outcome "working", "blocked" or "unavailable"; None when Firecrawl was not used.
-    firecrawl_outcome: tuple[str, str] | None = None
-    #: "direct" or "firecrawl": how the last page was actually obtained.
-    fetched_via = "direct"
+    #: Shared by every Pi adapter instance (the watcher makes a new one per listing):
+    #: time.monotonic() until which Firecrawl is skipped because it just failed to answer,
+    #: so a down Firecrawl costs one timeout per run, not one per refused listing.
+    _firecrawl_down_until = 0.0
+    _FIRECRAWL_BACKOFF_SECONDS = 600.0
 
     def fetch(self, url: str) -> str:
         if requests is None:  # pragma: no cover
@@ -237,6 +234,11 @@ class PiAdapter(RetailerAdapter):
         except Refused as refused:
             if not self.config.firecrawl_url or self.firecrawl_state == "blocked":
                 raise
+            if time.monotonic() < PiAdapter._firecrawl_down_until:
+                self.firecrawl_outcome = ("unavailable", "skipped: it failed to answer earlier")
+                raise FetchError(
+                    f"{refused}; Firecrawl skipped (it failed to answer earlier in this run)"
+                ) from refused
             return self._fetch_firecrawl(url, refused)
 
     def _fetch_direct(self, url: str, agent: str) -> str:
@@ -295,8 +297,11 @@ class PiAdapter(RetailerAdapter):
         except firecrawl_fetch.Unavailable as exc:
             # Says nothing about the retailer. Reported, never recorded as a block.
             self.firecrawl_outcome = ("unavailable", str(exc))
+            PiAdapter._firecrawl_down_until = time.monotonic() + self._FIRECRAWL_BACKOFF_SECONDS
             raise FetchError(f"{refused}; Firecrawl is unavailable ({exc})") from exc
-        self.firecrawl_outcome = ("working", "")
+        # Only "fetched": check() upgrades it to "working" once the page has parsed, so
+        # HTML Firecrawl returned but the adapter cannot read never counts as working.
+        self.firecrawl_outcome = ("fetched", "")
         self.fetched_via = "firecrawl"
         return html
 
@@ -347,4 +352,10 @@ class PiAdapter(RetailerAdapter):
     ) -> Observation:
         obs = self.parse(self.fetch(url), expected_model, product_name)
         obs.mark_unresolved(*self.never_scrapable)
+        if self.fetched_via == "firecrawl":
+            if self.firecrawl_outcome and self.firecrawl_outcome[0] == "fetched":
+                self.firecrawl_outcome = ("working", "")
+            # Provenance records only the adapter slug, so say here that this reading did
+            # not come from the honest direct fetch. Shown with the run's other warnings.
+            obs.warnings.append("read through Firecrawl: the direct fetch was refused")
         return obs
