@@ -1108,8 +1108,10 @@ closed unmerged) holds that fallback if it is ever wanted.
   "Copy prompt for Claude in Chrome" copies text for a Claude Code session that has Claude in
   Chrome; it never runs by itself, and it tells Claude to confirm the browser first.
 * After `SHOPWATCH_MANUAL_STALE_HOURS` (168, a week) the Pi-watch health check raises a fault,
-  so the hourly ntfy fires until someone records a check. Age runs from the listing's last
-  check, or from when the retailer went manual if it has never been checked.
+  so the hourly ntfy fires until someone records a check. The alarm clock runs from the later
+  of the listing's last check and the moment the retailer went manual, so flipping the flag
+  gives a full week for a first check; the banner still shows the data's real age. Products
+  bought inside an open price-protection window are covered, as the scraper covered them.
 * `GET /api/manual-retailers` lists them with each listing's age.
 
 A check is recorded with `POST /api/retailers/{listing_id}/manual-check`, body
@@ -1119,8 +1121,10 @@ scraper may update it if the retailer goes back to automatic), and goes through 
 history, price-change and Pi alert events as a scraper reading, so a back-in-stock or a price
 drop still alerts. The first manual reading is a baseline and says nothing, as for a scraper.
 A manual check never counts as a successful scraper check, so it cannot make the watch look
-healthy. If a person has hand-locked the price, the check is refused rather than overwriting
-it.
+healthy. The check is refused for a listing that is switched off, for a retailer the scraper
+still owns, and for a hand-locked price, rather than writing over any of them. The response
+reports alert delivery (`alerts.failed`, `alerts.expired`), and the banner says so when an
+alert could not be sent.
 
 ### What a failure means
 

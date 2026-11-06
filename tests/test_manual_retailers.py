@@ -239,7 +239,8 @@ def test_bad_input_is_refused_and_writes_nothing(shop, db, price, stock):
 
 
 def test_a_hand_locked_price_refuses_the_check_and_leaves_everything_alone(shop, db):
-    _, _, _, lid = shop
+    _, rid, _, lid = shop
+    set_manual(db, rid)
     with dbmod.session(db) as conn:
         provenance.set_field(conn, lid, "advertised_price", 70.0, state=provenance.MANUAL,
                              source="ui", lock=True)
@@ -315,3 +316,110 @@ def test_pages_carry_the_banner_container_and_the_retailers_page_the_toggle(clie
     client.patch(f"/api/retailer/{r['id']}", json={"manual": True, "manual_reason": "429"})
     page = client.get("/retailers").text
     assert "Back to automatic" in page and "checked by hand" in page
+
+
+# -------------------------------------------------------------------- review follow-ups
+
+
+def test_going_manual_gives_a_full_grace_period_for_the_first_check(shop, db):
+    """Data that was already old when the flag was set must not alarm at once."""
+    _, rid, _, lid = shop
+    checked_at(db, lid, ago(24 * 10))
+    set_manual(db, rid)  # manual_since = now
+    with dbmod.session(db) as conn:
+        row = pi_health.manual_retailers(conn)[0]["listings"][0]
+        health = pi_health.health(conn)
+    assert row["due"] and row["age_hours"] > 200, "the banner still shows the data's real age"
+    assert not row["overdue"], "but the alarm clock starts when it went manual"
+    assert not any("manual retailer" in r for r in health["reasons"])
+    # The control: a week after going manual with no check, it does alarm.
+    set_manual(db, rid, since=ago(24 * 8))
+    with dbmod.session(db) as conn:
+        assert pi_health.manual_retailers(conn)[0]["listings"][0]["overdue"]
+
+
+def buy(db, pid, lid, protection_until):
+    with dbmod.session(db) as conn:
+        conn.execute("UPDATE products SET status = 'PURCHASED' WHERE id = ?", (pid,))
+        conn.execute(
+            "INSERT INTO purchases (product_id, listing_id, purchased_at, price_paid,"
+            " price_protection_until) VALUES (?, ?, ?, 60.0, ?)",
+            (pid, lid, ago(24), protection_until),
+        )
+
+
+def test_a_bought_pi_inside_its_protection_window_is_still_watched(shop, db):
+    _, rid, pid, lid = shop
+    set_manual(db, rid, since=ago(24 * 20))
+    buy(db, pid, lid, (datetime.now(UTC) + timedelta(days=5)).strftime("%Y-%m-%d"))
+    with dbmod.session(db) as conn:
+        names = [r["name"] for r in pi_health.manual_retailers(conn)]
+    assert names == ["Zaitronics"], "the scraper used to cover this; the banner must now"
+
+
+def test_a_bought_pi_outside_any_window_is_not_nagged_about(shop, db):
+    _, rid, pid, lid = shop
+    set_manual(db, rid, since=ago(24 * 20))
+    buy(db, pid, lid, (datetime.now(UTC) - timedelta(days=5)).strftime("%Y-%m-%d"))
+    with dbmod.session(db) as conn:
+        assert pi_health.manual_retailers(conn) == []
+
+
+def test_a_manual_check_is_refused_for_a_retailer_the_scraper_owns(shop, db):
+    _, rid, _, lid = shop
+    with pytest.raises(price_watch.ManualCheckError, match="checked by the scraper"):
+        check(db, lid)
+    set_manual(db, rid)
+    assert check(db, lid)["price"] == 59.95, "the control: once marked manual it is accepted"
+
+
+def test_a_manual_check_is_refused_for_a_switched_off_listing(shop, db):
+    _, rid, _, lid = shop
+    set_manual(db, rid)
+    with dbmod.session(db) as conn:
+        conn.execute("UPDATE listings SET active = 0 WHERE id = ?", (lid,))
+    with pytest.raises(price_watch.ManualCheckError, match="switched off"):
+        check(db, lid)
+
+
+def test_a_retailer_with_no_scraper_needs_no_flag(db):
+    with dbmod.session(db) as conn:
+        retailer = store.ensure_retailer(conn, "Some Shop")  # no adapter
+        pid = store.create_product(
+            conn, {"name": "Raspberry Pi 4 Model B 2GB", "model": "SC0193",
+                   "category": "Barkmarker", "trigger_price": 100.0})
+        lid = store.create_listing(
+            conn, {"product_id": pid, "retailer_id": retailer["id"], "url": "https://s.test/p"})
+    assert check(db, lid)["price"] == 59.95
+
+
+def test_the_manual_flag_must_be_a_real_boolean(client, db):
+    with dbmod.session(db) as conn:
+        rid = store.ensure_retailer(conn, "Zaitronics", adapter="zaitronics")["id"]
+    for bad in ("false", "true", 0, 1, None):
+        assert client.patch(f"/api/retailer/{rid}", json={"manual": bad}).status_code == 400, bad
+    with dbmod.session(db) as conn:
+        assert conn.execute("SELECT manual_since FROM retailers WHERE id = ?",
+                            (rid,)).fetchone()["manual_since"] is None, "nothing changed"
+    assert client.patch(f"/api/retailer/{rid}", json={"manual": True}).status_code == 200
+
+
+def test_alert_delivery_problems_are_reported_not_dropped(client, db, monkeypatch):
+    with dbmod.session(db) as conn:
+        retailer = store.ensure_retailer(conn, "Zaitronics", adapter="zaitronics")
+        pid = store.create_product(
+            conn, {"name": "Raspberry Pi 4 Model B 2GB", "model": "SC0193",
+                   "category": "Barkmarker", "trigger_price": 100.0})
+        lid = store.create_listing(conn, {"product_id": pid, "retailer_id": retailer["id"],
+                                          "url": "https://z.test/pi4"})
+        store.set_retailer_manual(conn, retailer["id"], True, "429")
+    body = {"price": 61.5, "availability": "in_stock"}
+    quiet = client.post(f"/api/retailers/{lid}/manual-check", json=body).json()
+    assert quiet["alerts"] == {"sent": 0, "failed": 0, "expired": 0, "deferred": 0}
+
+    monkeypatch.setenv("SHOPWATCH_ALERTS_ENABLED", "true")
+    monkeypatch.setattr(pi_events, "deliver_pending", lambda conn, config=None: {
+        "sent": 0, "failed": 2, "expired": 1, "deferred": 0, "failures": ["ntfy down"],
+        "payload": []})
+    loud = client.post(f"/api/retailers/{lid}/manual-check", json=body).json()
+    assert (loud["alerts"]["failed"], loud["alerts"]["expired"]) == (2, 1)

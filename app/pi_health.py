@@ -102,10 +102,14 @@ def manual_retailers(
 ) -> list[dict[str, Any]]:
     """Retailers marked manual, with each active listing's age since its last check.
 
-    Age runs from the listing's last check, or from when the retailer went manual if it
-    has never been checked, so flipping a retailer to manual does not raise an alarm at
-    once. `due` means the dashboard should ask for a check (manual_nudge_hours);
-    `overdue` means the Pi-watch fault should fire (manual_stale_hours).
+    `age_hours` is the real age of the data: from the listing's last check, or from when
+    the retailer went manual if it was never checked. `due` uses it, so a banner appears as
+    soon as data is a day old, whatever the cause. `overdue` (the Pi-watch fault, hourly
+    ntfy) is measured from the LATER of the last check and the moment the retailer went
+    manual, so flipping a retailer to manual gives a person a full manual_stale_hours to
+    make a first check instead of alarming at once over a scraper reading that was already
+    old. Products bought inside an open price-protection window are covered, as the scraper
+    covered them before the retailer went manual.
     """
     config = config or load_config()
     now = datetime.now(UTC)
@@ -118,16 +122,25 @@ def manual_retailers(
             "SELECT l.id, l.product_id, l.url, l.advertised_price, l.stock_status,"
             " l.availability, l.last_checked_at, p.name AS product_name, p.model"
             " FROM listings l JOIN products p ON p.id = l.product_id"
-            " WHERE l.retailer_id = ? AND l.active = 1 AND p.status = 'ACTIVE'"
+            " WHERE l.retailer_id = ? AND l.active = 1 AND ("
+            "  p.status = 'ACTIVE'"
+            "  OR (p.status = 'PURCHASED' AND EXISTS ("
+            "       SELECT 1 FROM purchases pu WHERE pu.product_id = p.id"
+            "         AND pu.price_protection_until IS NOT NULL"
+            "         AND substr(pu.price_protection_until, 1, 10) >= ?)))"
         )
-        args: list[Any] = [r["id"]]
+        args: list[Any] = [r["id"], utcnow()[:10]]
         if category:
             sql += " AND lower(p.category) = lower(?)"
             args.append(category)
         listings = []
         for row in conn.execute(sql + " ORDER BY p.name", args):
-            anchor = _parse(row["last_checked_at"]) or _parse(r["manual_since"])
+            checked = _parse(row["last_checked_at"])
+            since = _parse(r["manual_since"])
+            anchor = checked or since
             hours = round((now - anchor).total_seconds() / 3600, 1) if anchor else None
+            grace = max((t for t in (checked, since) if t), default=None)
+            overdue_hours = (now - grace).total_seconds() / 3600 if grace else None
             listings.append(
                 {
                     "listing_id": row["id"],
@@ -141,7 +154,7 @@ def manual_retailers(
                     "last_checked_at": row["last_checked_at"],
                     "age_hours": hours,
                     "due": hours is None or hours >= config.manual_nudge_hours,
-                    "overdue": hours is None or hours >= config.manual_stale_hours,
+                    "overdue": overdue_hours is None or overdue_hours >= config.manual_stale_hours,
                 }
             )
         if listings:

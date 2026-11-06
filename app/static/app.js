@@ -2308,10 +2308,16 @@ function manualRow(item, reload) {
     if (!(value > 0)) { toast('Enter the price first.', 'bad'); return; }
     save.disabled = true;
     try {
-      await api(`/api/retailers/${item.listing_id}/manual-check`, {
+      const out = await api(`/api/retailers/${item.listing_id}/manual-check`, {
         method: 'POST', body: { price: value, availability: stock.value }
       });
-      toast(`Recorded ${item.product_name}.`, 'good');
+      const unsent = out.alerts ? out.alerts.failed + out.alerts.expired : 0;
+      if (unsent) {
+        toast(`Recorded ${item.product_name}, but ${unsent} alert(s) could not be sent. `
+          + 'They are retried on the next run; expired ones are lost.', 'bad');
+      } else {
+        toast(`Recorded ${item.product_name}.`, 'good');
+      }
       reload();
     } catch (err) {
       toast(`Could not record it: ${err.message}`, 'bad');
@@ -2338,12 +2344,15 @@ async function loadManualBanner() {
     toast(`Could not load the list of retailers to check by hand: ${err.message}`, 'bad');
     return;
   }
+  // Saving a row rebuilds the banner; keep it open if the person had it open, or they
+  // would have to reopen it after every price.
+  const wasOpen = Boolean(box.querySelector('details[open]'));
   box.replaceChildren();
   if (!retailers.length) { box.hidden = true; return; }
   const count = retailers.reduce((n, r) => n + r.listings.filter(x => x.due).length, 0);
   const overdue = retailers.some(r => r.overdue);
   const details = h('details', { class: overdue ? 'overdue' : '' });
-  if (overdue) details.setAttribute('open', '');
+  if (overdue || wasOpen) details.setAttribute('open', '');
   details.append(h('summary', {
     text: `${count} price${count === 1 ? '' : 's'} to check by hand at `
       + retailers.map(r => r.name).join(' and ')

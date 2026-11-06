@@ -1486,7 +1486,9 @@ def api_retailers() -> Any:
 
 @app.patch("/api/retailer/{retailer_id}")
 def api_update_retailer(retailer_id: int, payload: dict = Body(...)) -> Any:
-    """Toggle a retailer-level flag - currently only `excluded` (issue #112).
+    """Toggle a retailer-level flag: `excluded` (issue #112) or `manual` (checked by a
+    person, not the scraper; migration 0017). `manual` must be a real JSON boolean:
+    bool("false") is True, which would switch the scraper off when asked to switch it on.
 
     Deliberately `/api/retailer/{retailer_id}` (singular), not another route nested
     under `/api/retailers/{id}` - that shape is already taken, and taken to mean
@@ -1503,6 +1505,8 @@ def api_update_retailer(retailer_id: int, payload: dict = Body(...)) -> Any:
     """
     if "excluded" not in payload and "manual" not in payload:
         raise HTTPException(400, "excluded or manual is required")
+    if "manual" in payload and not isinstance(payload["manual"], bool):
+        raise HTTPException(400, "manual must be true or false")
     with session() as conn:
         row = None
         if "excluded" in payload:
@@ -1540,8 +1544,12 @@ def api_manual_check(listing_id: int, payload: dict = Body(...)) -> Any:
             result = price_watch.record_manual_check(
                 conn, listing_id, payload.get("price"), str(payload.get("availability")), config
             )
+            alerts = {"sent": 0, "failed": 0, "expired": 0, "deferred": 0}
             if config.alerts_enabled:
-                pi_events.deliver_pending(conn, config)
+                delivered = pi_events.deliver_pending(conn, config)
+                alerts = {k: delivered[k] for k in alerts}
+            # Reported, not dropped: "Recorded" must not read as "and the alert went out".
+            result["alerts"] = alerts
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except price_watch.ManualCheckError as exc:

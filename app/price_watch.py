@@ -373,9 +373,10 @@ def record_manual_check(
     scraper may update them. The Pi-watch "last successful check" counts only adapter
     sources, so a manual check never makes the scraper look healthy.
 
-    Raises LookupError for an unknown listing and ManualCheckError for unusable input or
-    a field a person has locked by hand (nothing is written in either case: the caller's
-    session rolls back).
+    Raises LookupError for an unknown listing and ManualCheckError for unusable input, a
+    switched-off listing, a retailer the scraper owns, or a field a person has locked by
+    hand (nothing is written in any case: the caller's session rolls back). A retailer with
+    no adapter at all is manual by nature and needs no flag.
     """
     config = config or load_config()
     if availability not in _MANUAL_STOCK_WORDS:
@@ -385,7 +386,8 @@ def record_manual_check(
     if isinstance(price, bool) or not isinstance(price, (int, float)) or not 0 < price < 1e6:
         raise ManualCheckError("price must be a positive number")
     listing = conn.execute(
-        "SELECT l.*, r.name AS retailer_name, p.name AS product_name,"
+        "SELECT l.*, r.name AS retailer_name, r.adapter AS retailer_adapter,"
+        " r.manual_since AS retailer_manual_since, p.name AS product_name,"
         " p.category AS product_category FROM listings l"
         " JOIN retailers r ON r.id = l.retailer_id JOIN products p ON p.id = l.product_id"
         " WHERE l.id = ?",
@@ -393,6 +395,15 @@ def record_manual_check(
     ).fetchone()
     if listing is None:
         raise LookupError("no such listing")
+    # A mistyped id or a stale banner must not put a hand-typed price into the history of a
+    # listing the scraper owns, or of one that has been switched off.
+    if not listing["active"]:
+        raise ManualCheckError("this listing is switched off")
+    if listing["retailer_adapter"] and not listing["retailer_manual_since"]:
+        raise ManualCheckError(
+            f"{listing['retailer_name']} is checked by the scraper; mark it 'Check by hand' "
+            "on the Retailers page first"
+        )
 
     previous = pi_events.previous_observation(conn, listing_id, MANUAL_CHECK_SOURCE)
     before = pricing.delivered_price(
