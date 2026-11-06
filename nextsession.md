@@ -1,3 +1,45 @@
+# Next session brief: 6/11/2026 (Pi watch: four retailers checked by hand)
+
+Supersedes the 28 Oct brief below. Its "429 root cause" (TLS handshake, #134) may have been a symptom of the rule described here; the rest stands as history. **Start from the live system, not this page** (this is what was true on the evening of 6 Nov):
+
+```
+git status -sb && gh pr list --state open
+ssh opti 'docker exec shopwatch python -m app.pi_health; echo exit $?'
+ssh opti "curl -s localhost:8477/api/manual-retailers"
+ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_SHA'))\""
+```
+
+## What shipped (VERIFIED on opti: container on 1484a59, health `ok` exit 0, `shopwatch-pi-health.service` inactive)
+
+- **#140** (178accd) retailers can be marked **checked by hand** (`retailers.manual_since`, migration 0017). The scraper and the adapter-health check skip them. A banner under the header on every page appears after 24 h without a check, with price and stock boxes and a "Copy prompt for Claude in Chrome" button (text only, nothing runs by itself). A manual listing unchecked for 168 h raises the Pi-watch fault (hourly ntfy); the clock runs from the later of the last check and the moment it went manual. `POST /api/retailers/{listing_id}/manual-check` records price and stock as source `manual-check`, unlocked, through the usual history and Pi alert events; it never counts as a scraper success. Retailers page has "Check by hand" / "Back to automatic".
+- **#141** (1484a59) wording: the cause is Shopify's bot protection, not Cloudflare. Migration 0018 rewrote the stored reason.
+- **#139 closed unmerged.** Firecrawl fallback (direct 429, then Firecrawl). It works but needs a network path from the container to Firecrawl, which binds opti's `127.0.0.1:3002` (container timed out reaching it). Branch `feat/pi-firecrawl-fallback` is kept. Do not join the container to `firecrawl_backend` (it also holds Redis, RabbitMQ and Postgres). If wanted, the least-privilege design is a separate compose project: a Caddy gate (`caddy-cloudflare:2.11` is already on opti) forwarding only `POST /v1/scrape` to `api:3002`, with a private network shared with shopwatch only. Rodney does not want his content-generator Firecrawl stack touched.
+- **Data, not code:** Pakronics and Raspberry Pi Australia were marked manual by `PATCH /api/retailer/{id}` at deploy, so they have no migration row. Small Devices and Zaitronics were marked by 0017.
+
+## State
+
+- Scraped: Core Electronics, Little Bird, PB Tech (healthy). Checked by hand: Pakronics, Raspberry Pi Australia, Small Devices, Zaitronics.
+- Cause, **VERIFIED on opti 6 Nov:** the 429 body is the text `local_rate_limited` with Shopify's `x-dc` and `x-request-id` headers (`server: cloudflare` is only the CDN). 6 of 6 spaced requests refused; a browser User-Agent alone still 429; Firecrawl's headless browser 200 from the same IP. So it is the client being judged, not the pace, the User-Agent or the IP. Third parties report Shopify began this around July 2026 and is still tuning it; the sanctioned way past is Web Bot Auth signed headers, generated per store by the merchant. **UNKNOWN:** why it worsened on 3 Nov; why Little Bird and PB Tech still work. Zaitronics got through once (5 Nov 21:16 run), so retailers may recover.
+
+## Open follow-ups
+
+- Record the first manual checks: Pakronics (4 listings), Raspberry Pi Australia (3) and Small Devices (1) were due on the evening of 6 Nov. If none is recorded, the fault returns from about 13 Nov (evening AEST).
+- Back-in-stock and price-drop alerts for those four retailers now only fire when a check is recorded.
+- Try "Back to automatic" on Zaitronics now and then, and watch `/api/price-watch/runs` for a 200.
+- UNVERIFIED review findings on code outside #140 (the reviewer read a stale base): `_MODEL_B_RE` in `pi_base.py` has no word boundary after `b`; `availability._LOW` runs after `_IN` so "In stock - only a few left" stays in stock; `tools/add_pi3_bplus.py` hardcodes the category "Barkmarker". Confirm before fixing.
+- Pre-existing: the header nav overflows sideways at 390 px (layout width 470 px), with or without the banner.
+- Gotchas met: CI pins `ruff==0.8.6` and lints `.`; run `uv run --no-project --with ruff==0.8.6 ruff check .` before pushing (a newer local ruff passed UP038 and CI failed #140). Tests: `uv run --no-project --with-requirements requirements.txt --with-requirements requirements-dev.txt python -m pytest`. The startup seed re-adds an adapter to any retailer without one, which is why "manual" is its own flag.
+
+## Also from this session, not shopwatch: supplier research for Bark Marker (belongs in the bark-marker-business repo)
+
+Sonnet research agent, 6 Nov. **Only two pages were read directly** (Raspberry Pi reseller list, one Little Bird page); Core Electronics, raspberrypi.com and RS blocked fetches, so every price below is UNVERIFIED search-summary data. Recheck before ordering.
+
+- **Shortlist for quotes:** RS Components AU (only published volume break: Pi 4 4GB about A$99 ex GST at 10+), Core Electronics, Little Bird (Net 30 on approved accounts, quotes page), PB Tech business, DigiKey AU (franchised, for pSLC cards), Raspberry Pi Ltd sales (the reseller page says business buyers can buy some products direct).
+- **microSD 64GB:** SanDisk MAX Endurance about A$29 to A$35 inc GST at PB Tech, Techbuy and VTech Industries (PB Tech out of stock when seen). Industrial pSLC (Kingston, ATP, Delkin, Transcend) quoted A$183 to A$340 each, which looks too high. Marketplaces (Amazon, MyDeal, Reebelo) are a counterfeit risk. Whether pSLC is worth 5 to 10 times the price depends on the logger's write rate, which has not been measured.
+- **Pi:** Little Bird's Pi 4 4GB page says "no longer stock"; check whether Pi 4 is still a product to build on before committing a run. Compute Module is not worth it at 10 to 100 units (PiShop sells CM4 in 250s). No current official OEM page found. Pakronics, Altronics, element14 AU and PiShop AU were not checked.
+
+---
+
 # Next session brief: 28/10/2026 (Pi watch: 429 root cause, stock parsing, specs)
 
 Supersedes the 27 Oct brief below. The 27 Oct "429 from opti" follow-up and the "Rasberry" typo are done; the rest of that brief still stands as history.
