@@ -18,10 +18,16 @@
     <tr><th>Name</th><th>Homepage</th><th class="r">Active listings</th><th></th></tr>
     {% for r in retailers %}
     <tr data-retailer-row="{{ r.id }}"{% if r.excluded %} class="muted"{% endif %}>
-      <td>{{ r.name }}{% if r.excluded %} <span class="tag ruled-out">excluded</span>{% endif %}</td>
+      <td>{{ r.name }}{% if r.excluded %} <span class="tag ruled-out">excluded</span>{% endif %}{% if r.manual_since %} <span class="tag close" title="{{ r.manual_reason or 'Checked by hand' }}">checked by hand</span>{% endif %}</td>
       <td class="small">{% if r.homepage|safe_url %}<a href="{{ r.homepage|safe_url }}" target="_blank" rel="noopener noreferrer">{{ r.homepage }}</a>{% else %}-{% endif %}</td>
       <td class="r num">{{ r.listing_count }}</td>
       <td class="r">
+        {% if r.adapter %}
+        <button type="button" class="small" data-retailer-manual="{{ r.id }}" data-manual="{{ 1 if r.manual_since else 0 }}"
+                title="A retailer checked by hand is skipped by the scraper. The dashboard asks for a check after a day, and the Pi-watch alarm fires after a week without one.">
+          {{ 'Back to automatic' if r.manual_since else 'Check by hand' }}
+        </button>
+        {% endif %}
         <button type="button" class="small" data-retailer-toggle="{{ r.id }}" data-excluded="{{ 1 if r.excluded else 0 }}">
           {{ 'Un-exclude' if r.excluded else 'Exclude' }}
         </button>

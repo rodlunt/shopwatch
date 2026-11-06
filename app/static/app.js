@@ -340,6 +340,29 @@ document.addEventListener('click', async event => {
     return;
   }
 
+  const manualToggle = event.target.closest('[data-retailer-manual]');
+  if (manualToggle) {
+    const id = manualToggle.dataset.retailerManual;
+    const next = manualToggle.dataset.manual !== '1';
+    if (next && !confirm(
+      'Check this retailer by hand? The scraper stops fetching its pages. The dashboard '
+      + 'will ask for a check after a day without one, and the Pi-watch alarm fires '
+      + 'after a week.'
+    )) return;
+    manualToggle.disabled = true;
+    try {
+      await api(`/api/retailer/${id}`, {
+        method: 'PATCH',
+        body: { manual: next, manual_reason: next ? 'Marked by hand from the Retailers page' : null }
+      });
+      location.reload();
+    } catch (err) {
+      toast(`Could not update retailer: ${err.message}`, 'bad');
+      manualToggle.disabled = false;
+    }
+    return;
+  }
+
   const detailBtn = event.target.closest('[data-toggle-detail]');
   if (detailBtn) {
     const region = document.getElementById(`detail-${detailBtn.dataset.toggleDetail}`);
@@ -2212,3 +2235,140 @@ wire('cd-save', async () => {
     location.reload();
   } catch (err) { toast(`Could not add candidate: ${err.message}`, 'bad'); }
 });
+
+
+/* ------------------------------------------- retailers checked by hand: the banner */
+
+const MANUAL_STOCK = [
+  ['in_stock', 'In stock'], ['limited', 'Limited stock'], ['dispatch_later', 'Dispatch later'],
+  ['backorder', 'Backorder'], ['out_of_stock', 'Out of stock']
+];
+
+function ageWords(hours) {
+  if (hours === null || hours === undefined) return 'never checked';
+  if (hours < 1) return 'checked just now';
+  if (hours < 48) return `checked ${Math.round(hours)} hours ago`;
+  return `checked ${Math.round(hours / 24)} days ago`;
+}
+
+function h(tag, props = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'text') node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const kid of kids) if (kid) node.append(kid);
+  return node;
+}
+
+/* The text to paste into a Claude Code session that has Claude in Chrome. Written for the
+   person to read before they send it: it names the browser question, the pages, and the
+   exact call that records each reading. Nothing here runs by itself. */
+function manualCheckPrompt(retailers) {
+  const lines = [
+    'Use Claude in Chrome to check these retailer pages for me. Before the first action, '
+    + 'list the connected browsers and confirm which one to use with me (my personal home '
+    + 'machine only).',
+    '',
+    'For each page: read the GST-inclusive price and whether it can be bought now '
+    + '(in_stock, limited, dispatch_later, backorder or out_of_stock). Read the page text, '
+    + 'not a screenshot. If a page will not load or the price is not there, say so and do '
+    + 'not guess.',
+    ''
+  ];
+  for (const retailer of retailers) {
+    for (const item of retailer.listings.filter(x => x.due)) {
+      lines.push(`${retailer.name} | ${item.product_name} | ${item.url || '(no URL)'}`);
+      lines.push(
+        `  record: ssh opti 'curl -s -X POST http://127.0.0.1:8477/api/retailers/${item.listing_id}`
+        + `/manual-check -H "Content-Type: application/json" `
+        + `-d "{\\"price\\": <price>, \\"availability\\": \\"<state>\\"}"'`
+      );
+    }
+  }
+  lines.push('', 'Then tell me what you recorded for each, one line each.');
+  return lines.join('\n');
+}
+
+function manualRow(item, reload) {
+  const price = h('input', {
+    type: 'number', step: '0.01', min: '0.01', name: `price-${item.listing_id}`, 'aria-label': 'Price',
+    placeholder: 'Price, GST incl.'
+  });
+  if (item.price) price.value = item.price;
+  const stock = h('select', { name: `stock-${item.listing_id}`, 'aria-label': 'Stock' });
+  for (const [value, label] of MANUAL_STOCK) {
+    const opt = h('option', { value, text: label });
+    if (value === item.availability) opt.selected = true;
+    stock.append(opt);
+  }
+  const save = h('button', { type: 'button', class: 'small', text: 'Save' });
+  save.addEventListener('click', async () => {
+    const value = Number(price.value);
+    if (!(value > 0)) { toast('Enter the price first.', 'bad'); return; }
+    save.disabled = true;
+    try {
+      await api(`/api/retailers/${item.listing_id}/manual-check`, {
+        method: 'POST', body: { price: value, availability: stock.value }
+      });
+      toast(`Recorded ${item.product_name}.`, 'good');
+      reload();
+    } catch (err) {
+      toast(`Could not record it: ${err.message}`, 'bad');
+      save.disabled = false;
+    }
+  });
+  const open = /^https?:\/\//i.test(item.url || '')
+    ? h('a', { href: item.url, target: '_blank', rel: 'noopener noreferrer', text: 'Open page' })
+    : h('span', { class: 'muted', text: 'no link' });
+  return h('tr', {},
+    h('td', { text: item.product_name }),
+    h('td', { class: 'age', text: ageWords(item.age_hours) }),
+    h('td', {}, open), h('td', {}, price), h('td', {}, stock), h('td', {}, save));
+}
+
+async function loadManualBanner() {
+  const box = document.getElementById('manual-banner');
+  if (!box) return;
+  let retailers;
+  try {
+    retailers = (await api('/api/manual-retailers')).filter(r => r.due);
+  } catch (err) {
+    console.error('manual banner', err);
+    toast(`Could not load the list of retailers to check by hand: ${err.message}`, 'bad');
+    return;
+  }
+  box.replaceChildren();
+  if (!retailers.length) { box.hidden = true; return; }
+  const count = retailers.reduce((n, r) => n + r.listings.filter(x => x.due).length, 0);
+  const overdue = retailers.some(r => r.overdue);
+  const details = h('details', { class: overdue ? 'overdue' : '' });
+  if (overdue) details.setAttribute('open', '');
+  details.append(h('summary', {
+    text: `${count} price${count === 1 ? '' : 's'} to check by hand at `
+      + retailers.map(r => r.name).join(' and ')
+      + (overdue ? ' (overdue: the Pi-watch alarm is firing)' : '')
+  }));
+  for (const retailer of retailers) {
+    details.append(h('h4', {
+      text: retailer.name + (retailer.reason ? ` - ${retailer.reason}` : '')
+    }));
+    const table = h('table');
+    for (const item of retailer.listings.filter(x => x.due)) {
+      table.append(manualRow(item, loadManualBanner));
+    }
+    details.append(table);
+  }
+  const copy = h('button', { type: 'button', class: 'small', text: 'Copy prompt for Claude in Chrome' });
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(manualCheckPrompt(retailers));
+      toast('Copied. Paste it into a Claude Code session with Claude in Chrome.', 'good');
+    } catch (err) { toast(`Could not copy: ${err.message}`, 'bad'); }
+  });
+  details.append(h('div', { class: 'actions' }, copy));
+  box.append(details);
+  box.hidden = false;
+}
+
+loadManualBanner();

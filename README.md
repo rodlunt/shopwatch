@@ -1087,6 +1087,41 @@ Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to e
 * A bot interstitial, a 403 or a 429 is a failure that stops the adapter for that run.
   Nothing here defeats a CAPTCHA or an anti-bot measure.
 
+### Retailers checked by hand
+
+A retailer can be marked **checked by hand** (Retailers page, "Check by hand"; or
+`PATCH /api/retailer/{id}` with `{"manual": true}`). The scraper skips it and the
+adapter-health check ignores it. It is its own flag, `retailers.manual_since`, and not
+`adapter = NULL`, because the startup seed puts an adapter back on any retailer that has
+none.
+
+Migration 0017 marks `small_devices` and `zaitronics` this way. Cloudflare has answered the
+honest direct fetch with HTTP 429 since 3 Nov 2026 (opti, 2026-11-06: direct 429, a headless
+browser 200, same IP), and at two retailers and a few pages a day a headless browser and the
+network path to it were not worth building. The branch `feat/pi-firecrawl-fallback` (PR #139,
+closed unmerged) holds that fallback if it is ever wanted.
+
+**Going manual never means going unwatched.**
+
+* After `SHOPWATCH_MANUAL_NUDGE_HOURS` (24) without a check the dashboard shows a banner under
+  the header, on every page, with an "Open page" link and a price and stock box per listing.
+  "Copy prompt for Claude in Chrome" copies text for a Claude Code session that has Claude in
+  Chrome; it never runs by itself, and it tells Claude to confirm the browser first.
+* After `SHOPWATCH_MANUAL_STALE_HOURS` (168, a week) the Pi-watch health check raises a fault,
+  so the hourly ntfy fires until someone records a check. Age runs from the listing's last
+  check, or from when the retailer went manual if it has never been checked.
+* `GET /api/manual-retailers` lists them with each listing's age.
+
+A check is recorded with `POST /api/retailers/{listing_id}/manual-check`, body
+`{"price": 59.95, "availability": "in_stock"}` (`in_stock`, `limited`, `dispatch_later`,
+`backorder` or `out_of_stock`). It is stored as source `manual-check`, **not locked** (the
+scraper may update it if the retailer goes back to automatic), and goes through the same
+history, price-change and Pi alert events as a scraper reading, so a back-in-stock or a price
+drop still alerts. The first manual reading is a baseline and says nothing, as for a scraper.
+A manual check never counts as a successful scraper check, so it cannot make the watch look
+healthy. If a person has hand-locked the price, the check is refused rather than overwriting
+it.
+
 ### What a failure means
 
 An adapter returns a reading or raises. No price, a zero price, a layout that has moved, a

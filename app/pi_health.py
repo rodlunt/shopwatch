@@ -97,6 +97,70 @@ def last_success(conn: sqlite3.Connection, category: str) -> str | None:
     return row["t"] if row else None
 
 
+def manual_retailers(
+    conn: sqlite3.Connection, config: Config | None = None, category: str | None = None
+) -> list[dict[str, Any]]:
+    """Retailers marked manual, with each active listing's age since its last check.
+
+    Age runs from the listing's last check, or from when the retailer went manual if it
+    has never been checked, so flipping a retailer to manual does not raise an alarm at
+    once. `due` means the dashboard should ask for a check (manual_nudge_hours);
+    `overdue` means the Pi-watch fault should fire (manual_stale_hours).
+    """
+    config = config or load_config()
+    now = datetime.now(UTC)
+    out: list[dict[str, Any]] = []
+    for r in conn.execute(
+        "SELECT id, name, adapter, homepage, manual_since, manual_reason FROM retailers"
+        " WHERE manual_since IS NOT NULL ORDER BY name"
+    ).fetchall():
+        sql = (
+            "SELECT l.id, l.product_id, l.url, l.advertised_price, l.stock_status,"
+            " l.availability, l.last_checked_at, p.name AS product_name, p.model"
+            " FROM listings l JOIN products p ON p.id = l.product_id"
+            " WHERE l.retailer_id = ? AND l.active = 1 AND p.status = 'ACTIVE'"
+        )
+        args: list[Any] = [r["id"]]
+        if category:
+            sql += " AND lower(p.category) = lower(?)"
+            args.append(category)
+        listings = []
+        for row in conn.execute(sql + " ORDER BY p.name", args):
+            anchor = _parse(row["last_checked_at"]) or _parse(r["manual_since"])
+            hours = round((now - anchor).total_seconds() / 3600, 1) if anchor else None
+            listings.append(
+                {
+                    "listing_id": row["id"],
+                    "product_id": row["product_id"],
+                    "product_name": row["product_name"],
+                    "model": row["model"],
+                    "url": row["url"],
+                    "price": row["advertised_price"],
+                    "stock_status": row["stock_status"],
+                    "availability": row["availability"],
+                    "last_checked_at": row["last_checked_at"],
+                    "age_hours": hours,
+                    "due": hours is None or hours >= config.manual_nudge_hours,
+                    "overdue": hours is None or hours >= config.manual_stale_hours,
+                }
+            )
+        if listings:
+            out.append(
+                {
+                    "retailer_id": r["id"],
+                    "name": r["name"],
+                    "adapter": r["adapter"],
+                    "homepage": r["homepage"],
+                    "manual_since": r["manual_since"],
+                    "reason": r["manual_reason"],
+                    "listings": listings,
+                    "due": any(x["due"] for x in listings),
+                    "overdue": any(x["overdue"] for x in listings),
+                }
+            )
+    return out
+
+
 def health(conn: sqlite3.Connection, config: Config | None = None) -> dict[str, Any]:
     config = config or load_config()
     now = datetime.now(UTC)
@@ -118,7 +182,8 @@ def health(conn: sqlite3.Connection, config: Config | None = None) -> dict[str, 
     for row in conn.execute(
         "SELECT DISTINCT r.adapter FROM listings l JOIN retailers r ON r.id = l.retailer_id"
         " JOIN products p ON p.id = l.product_id"
-        " WHERE l.active = 1 AND r.adapter IS NOT NULL AND lower(p.category) = lower(?)"
+        " WHERE l.active = 1 AND r.adapter IS NOT NULL AND r.manual_since IS NULL"
+        "   AND lower(p.category) = lower(?)"
         " ORDER BY r.adapter",
         (config.pi_category,),
     ):
@@ -145,6 +210,17 @@ def health(conn: sqlite3.Connection, config: Config | None = None) -> dict[str, 
                 f"last error: {h['last_error']}"
             )
 
+    manual = manual_retailers(conn, config, config.pi_category)
+    for retailer in manual:
+        late = [x for x in retailer["listings"] if x["overdue"]]
+        if late:
+            oldest = max(x["age_hours"] or 0 for x in late)
+            reasons.append(
+                f"manual retailer {retailer['name']}: {len(late)} listing(s) not checked for "
+                f"up to {oldest:.0f} hours (limit {config.manual_stale_hours:.0f}); open the "
+                "dashboard and record a check"
+            )
+
     run = conn.execute(
         "SELECT started_at, finished_at, status, trigger FROM scrape_runs"
         " WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1"
@@ -157,6 +233,7 @@ def health(conn: sqlite3.Connection, config: Config | None = None) -> dict[str, 
         "stale_after_hours": config.pi_stale_hours,
         "last_run": dict(run) if run else None,
         "adapters": adapters,
+        "manual_retailers": manual,
         "checked_at": utcnow(),
     }
 
@@ -195,7 +272,8 @@ def summary(conn: sqlite3.Connection, config: Config | None = None) -> dict[str,
                     "listing_id": listing["id"],
                     "retailer": listing["retailer_name"],
                     "adapter": listing.get("retailer_adapter"),
-                    "automatic": bool(listing.get("retailer_adapter")),
+                    "automatic": bool(listing.get("retailer_adapter"))
+                    and not listing.get("retailer_manual_since"),
                     "price": listing["delivered_price"],
                     "freight_resolved": listing["delivered_resolved"],
                     "previous_price": listing.get("previous_price"),
@@ -256,6 +334,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"  {adapter['adapter']}: {adapter['consecutive_failed_runs']} failed runs in a "
                 f"row, last success {adapter['last_success_at']}"
             )
+    for retailer in result["manual_retailers"]:
+        oldest = max((x["age_hours"] or 0 for x in retailer["listings"]), default=0)
+        print(f"  {retailer['name']} (manual): oldest check {oldest:.0f} hours ago")
     for reason in result["reasons"]:
         print(f"[PI-WATCH-FAULT] {reason}", file=sys.stderr)
     return 0 if result["status"] == "ok" else 1

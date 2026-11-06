@@ -1501,14 +1501,52 @@ def api_update_retailer(retailer_id: int, payload: dict = Body(...)) -> Any:
     deactivation of that retailer's listings) and what un-excluding deliberately does
     not do (reactivate them).
     """
-    if "excluded" not in payload:
-        raise HTTPException(400, "excluded is required")
+    if "excluded" not in payload and "manual" not in payload:
+        raise HTTPException(400, "excluded or manual is required")
     with session() as conn:
-        row = store.set_retailer_excluded(conn, retailer_id, bool(payload["excluded"]))
+        row = None
+        if "excluded" in payload:
+            row = store.set_retailer_excluded(conn, retailer_id, bool(payload["excluded"]))
+        if "manual" in payload:
+            # Checked by a person instead of the scraper (see migration 0017).
+            row = store.set_retailer_manual(
+                conn, retailer_id, bool(payload["manual"]), payload.get("manual_reason")
+            )
         if row is None:
             raise HTTPException(404, "no such retailer")
     row["excluded"] = bool(row["excluded"])
     return row
+
+
+@app.get("/api/manual-retailers")
+def api_manual_retailers() -> Any:
+    """Retailers checked by a person, with each listing's age. The dashboard banner reads
+    this; `due` listings want a check now, `overdue` ones are also a Pi-watch fault."""
+    with session() as conn:
+        return jsonable(pi_health.manual_retailers(conn))
+
+
+@app.post("/api/retailers/{listing_id}/manual-check")
+def api_manual_check(listing_id: int, payload: dict = Body(...)) -> Any:
+    """Record a price and stock level a person read off a manual retailer's page.
+
+    Body: {"price": 59.95, "availability": "in_stock|limited|dispatch_later|backorder|
+    out_of_stock"}. Written as source "manual-check", not locked, and fed through the same
+    Pi alert events as a scraper reading (a back-in-stock or price drop still alerts).
+    """
+    config = load_config()
+    try:
+        with session() as conn:
+            result = price_watch.record_manual_check(
+                conn, listing_id, payload.get("price"), str(payload.get("availability")), config
+            )
+            if config.alerts_enabled:
+                pi_events.deliver_pending(conn, config)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except price_watch.ManualCheckError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
 
 
 @app.get("/api/meta")
