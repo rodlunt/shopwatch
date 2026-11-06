@@ -30,13 +30,9 @@ ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_
 - Pre-existing: the header nav overflows sideways at 390 px (layout width 470 px), with or without the banner.
 - Gotchas met: CI pins `ruff==0.8.6` and lints `.`; run `uv run --no-project --with ruff==0.8.6 ruff check .` before pushing (a newer local ruff passed UP038 and CI failed #140). Tests: `uv run --no-project --with-requirements requirements.txt --with-requirements requirements-dev.txt python -m pytest`. The startup seed re-adds an adapter to any retailer without one, which is why "manual" is its own flag.
 
-## Also from this session, not shopwatch: supplier research for Bark Marker (belongs in the bark-marker-business repo)
+## Also from this session, not shopwatch: supplier research for Bark Marker
 
-Sonnet research agent, 6 Nov. **Only two pages were read directly** (Raspberry Pi reseller list, one Little Bird page); Core Electronics, raspberrypi.com and RS blocked fetches, so every price below is UNVERIFIED search-summary data. Recheck before ordering.
-
-- **Shortlist for quotes:** RS Components AU (only published volume break: Pi 4 4GB about A$99 ex GST at 10+), Core Electronics, Little Bird (Net 30 on approved accounts, quotes page), PB Tech business, DigiKey AU (franchised, for pSLC cards), Raspberry Pi Ltd sales (the reseller page says business buyers can buy some products direct).
-- **microSD 64GB:** SanDisk MAX Endurance about A$29 to A$35 inc GST at PB Tech, Techbuy and VTech Industries (PB Tech out of stock when seen). Industrial pSLC (Kingston, ATP, Delkin, Transcend) quoted A$183 to A$340 each, which looks too high. Marketplaces (Amazon, MyDeal, Reebelo) are a counterfeit risk. Whether pSLC is worth 5 to 10 times the price depends on the logger's write rate, which has not been measured.
-- **Pi:** Little Bird's Pi 4 4GB page says "no longer stock"; check whether Pi 4 is still a product to build on before committing a run. Compute Module is not worth it at 10 to 100 units (PiShop sells CM4 in 250s). No current official OEM page found. Pakronics, Altronics, element14 AU and PiShop AU were not checked.
+Filed in the private repo `rodlunt/bark-marker-business` at `docs/sourcing/oem-supply-research-2026-11.md` (PR #9, merged as `95a6cb5`). Only two pages were read directly, so every price in it is UNVERIFIED. Recheck before ordering.
 
 ---
 
