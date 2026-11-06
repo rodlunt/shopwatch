@@ -1095,11 +1095,22 @@ adapter-health check ignores it. It is its own flag, `retailers.manual_since`, a
 `adapter = NULL`, because the startup seed puts an adapter back on any retailer that has
 none.
 
-Migration 0017 marks `small_devices` and `zaitronics` this way. Cloudflare has answered the
-honest direct fetch with HTTP 429 since 3 Nov 2026 (opti, 2026-11-06: direct 429, a headless
-browser 200, same IP), and at two retailers and a few pages a day a headless browser and the
-network path to it were not worth building. The branch `feat/pi-firecrawl-fallback` (PR #139,
-closed unmerged) holds that fallback if it is ever wanted.
+Migration 0017 marked `small_devices` and `zaitronics` this way, and `pakronics` and
+`raspberry_pi_australia` were marked at deploy (6 Nov 2026) for the same reason: **Shopify's
+bot protection**. Their storefronts answer the honest direct fetch with HTTP 429 and the body
+`local_rate_limited` (Shopify's own `x-dc` and `x-request-id` headers; `server: cloudflare` is
+only the CDN in front). Measured on opti on 2026-11-06: 6 of 6 spaced requests refused, a
+browser User-Agent string alone still refused (so it is not the User-Agent), and a headless
+browser got 200 from the same IP (so it is not an IP ban). Third parties report Shopify began
+doing this to unrecognised automated clients from about July 2026; the sanctioned way past it
+is signed Web Bot Auth headers, which each store's merchant generates, so it is not open to
+us. Why it worsened on 3 Nov, and why Little Bird and PB Tech still work, is not known.
+Zaitronics got through once on 5 Nov, so a retailer may recover: "Back to automatic" on the
+Retailers page undoes the flag.
+
+At a few pages a day a headless browser, and the network path to it, were not worth building.
+The branch `feat/pi-firecrawl-fallback` (PR #139, closed unmerged) holds that fallback if it
+is ever wanted.
 
 **Going manual never means going unwatched.**
 

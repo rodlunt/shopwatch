@@ -61,7 +61,7 @@ def shop(db, monkeypatch):
 
 def set_manual(db, retailer_id, on=True, since=None):
     with dbmod.session(db) as conn:
-        store.set_retailer_manual(conn, retailer_id, on, "Cloudflare 429")
+        store.set_retailer_manual(conn, retailer_id, on, "Shopify 429")
         if on and since:
             conn.execute("UPDATE retailers SET manual_since = ? WHERE id = ?", (since, retailer_id))
 
@@ -423,3 +423,22 @@ def test_alert_delivery_problems_are_reported_not_dropped(client, db, monkeypatc
         "payload": []})
     loud = client.post(f"/api/retailers/{lid}/manual-check", json=body).json()
     assert (loud["alerts"]["failed"], loud["alerts"]["expired"]) == (2, 1)
+
+
+def test_migration_0018_rewrites_only_the_old_cloudflare_wording(db):
+    sql = (Path(__file__).parents[1] / "app/migrations/0018_manual_reason_wording.sql").read_text()
+    old = "Cloudflare refuses the automatic fetch (HTTP 429) since 3 Nov 2026"
+    with dbmod.session(db) as conn:
+        ids = {}
+        for name, adapter, reason in (("A", "zaitronics", old), ("B", "pakronics", old),
+                                      ("C", "pb_tech", "I typed this myself"), ("D", "core_electronics", None)):
+            r = store.ensure_retailer(conn, name, adapter=adapter)
+            ids[name] = r["id"]
+            conn.execute("UPDATE retailers SET manual_reason = ? WHERE id = ?", (reason, r["id"]))
+        conn.executescript(sql[sql.index("UPDATE retailers"):])
+        got = {n: conn.execute("SELECT manual_reason FROM retailers WHERE id = ?", (i,)).fetchone()[0]
+               for n, i in ids.items()}
+    assert "Shopify bot protection" in got["A"] and got["A"] == got["B"]
+    assert got["C"] == "I typed this myself", "a person's own wording is never overwritten"
+    assert got["D"] is None
+    assert "Cloudflare" not in "".join(v or "" for v in got.values())
