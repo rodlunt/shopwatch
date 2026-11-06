@@ -383,7 +383,7 @@ def record_manual_check(
         raise ManualCheckError(
             f"availability must be one of {', '.join(_MANUAL_STOCK_WORDS)}, not {availability!r}"
         )
-    if isinstance(price, bool) or not isinstance(price, (int, float)) or not 0 < price < 1e6:
+    if isinstance(price, bool) or not isinstance(price, int | float) or not 0 < price < 1e6:
         raise ManualCheckError("price must be a positive number")
     listing = conn.execute(
         "SELECT l.*, r.name AS retailer_name, r.adapter AS retailer_adapter,"
