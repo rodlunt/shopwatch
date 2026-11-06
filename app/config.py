@@ -107,6 +107,14 @@ class Config:
         default_factory=lambda: _float("SHOPWATCH_PI_RETRY_AFTER_MAX", 90.0)
     )
     pi_max_attempts: int = field(default_factory=lambda: _int("SHOPWATCH_PI_MAX_ATTEMPTS", 3))
+    # A manual retailer (checked by a person) is nudged on the dashboard after this many hours
+    # without a check, and raises the Pi-watch fault (hourly ntfy) after manual_stale_hours.
+    manual_nudge_hours: float = field(
+        default_factory=lambda: _float("SHOPWATCH_MANUAL_NUDGE_HOURS", 24.0)
+    )
+    manual_stale_hours: float = field(
+        default_factory=lambda: _float("SHOPWATCH_MANUAL_STALE_HOURS", 168.0)
+    )
     robots_enforced: bool = field(default_factory=lambda: _bool("SHOPWATCH_ROBOTS_ENFORCED", True))
     # Runs are twice a day, so 36 hours is "missed one run and then some".
     pi_stale_hours: float = field(default_factory=lambda: _float("SHOPWATCH_PI_STALE_HOURS", 36.0))

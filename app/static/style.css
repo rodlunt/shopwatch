@@ -850,3 +850,31 @@ details.menu[open] > summary { border-color: var(--muted); }
 }
 .lead > span { flex: 1; min-width: 0; }
 .lead details.more { flex: none; }
+
+
+/* Retailers checked by hand: a banner under the header when a check is due. */
+/* Same width and gutter as main and the breadcrumbs (1180px, 24px), so the banner lines
+ * up with the cards below it. */
+.manual-banner {
+  width: 100%; max-width: 1180px; margin: 12px auto 0; padding: 0 24px;
+}
+.manual-banner[hidden] { display: none; }
+.manual-banner details {
+  background: var(--close-bg); border: 1px solid var(--close); border-radius: var(--radius-card);
+  padding: 10px 16px;
+}
+.manual-banner details.overdue { background: var(--fault-bg); border-color: var(--fault); }
+.manual-banner summary { cursor: pointer; font-weight: 600; }
+.manual-banner h4 { margin: 14px 0 4px; font-size: 13.5px; }
+.manual-banner table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.manual-banner td { padding: 5px 8px 5px 0; vertical-align: middle; font-size: 13px; }
+.manual-banner td.age { white-space: nowrap; color: var(--ink-soft); }
+.manual-banner input[type=number] { width: 7.5em; }
+.manual-banner .actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 720px) {
+  .manual-banner { padding: 0 12px; }  /* main's gutter at this width */
+}
+@media (max-width: 640px) {
+  .manual-banner td { display: block; padding: 2px 0; }
+  .manual-banner tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+}
