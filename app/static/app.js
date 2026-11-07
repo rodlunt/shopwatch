@@ -2290,7 +2290,10 @@ function manualCheckPrompt(retailers) {
   return lines.join('\n');
 }
 
-function manualRow(item, reload) {
+/* One row of the banner. Saving it records that listing only and leaves every other row, and
+   whatever has been typed into it, exactly as it was. `save()` resolves to 'saved', 'failed'
+   or 'skipped' (no price typed) so a Save all can total them up. */
+function manualRow(item, onChange) {
   const price = h('input', {
     type: 'number', step: '0.01', min: '0.01', name: `price-${item.listing_id}`, 'aria-label': 'Price',
     placeholder: 'Price, GST incl.'
@@ -2302,35 +2305,66 @@ function manualRow(item, reload) {
     if (value === item.availability) opt.selected = true;
     stock.append(opt);
   }
-  const save = h('button', { type: 'button', class: 'small', text: 'Save' });
-  save.addEventListener('click', async () => {
+  const button = h('button', { type: 'button', class: 'small', text: 'Save' });
+  const status = h('span', { class: 'manual-status small muted' });
+  const row = h('tr', { 'data-listing': String(item.listing_id) });
+  row.manualSaved = false;
+  // Editing a saved row makes it unsaved again, so the count and Save all stay honest.
+  const edited = () => {
+    if (!row.manualSaved) return;
+    row.manualSaved = false;
+    row.classList.remove('saved');
+    status.textContent = '';
+    button.textContent = 'Save';
+    onChange();
+  };
+  price.addEventListener('input', edited);
+  stock.addEventListener('change', edited);
+
+  row.save = async (quiet = false) => {
     const value = Number(price.value);
-    if (!(value > 0)) { toast('Enter the price first.', 'bad'); return; }
-    save.disabled = true;
+    if (!(value > 0)) {
+      if (!quiet) toast('Enter the price first.', 'bad');
+      return { result: 'skipped', unsent: 0 };
+    }
+    button.disabled = true;
     try {
       const out = await api(`/api/retailers/${item.listing_id}/manual-check`, {
         method: 'POST', body: { price: value, availability: stock.value }
       });
       const unsent = out.alerts ? out.alerts.failed + out.alerts.expired : 0;
-      if (unsent) {
-        toast(`Recorded ${item.product_name}, but ${unsent} alert(s) could not be sent. `
-          + 'They are retried on the next run; expired ones are lost.', 'bad');
-      } else {
-        toast(`Recorded ${item.product_name}.`, 'good');
+      row.manualSaved = true;
+      row.classList.add('saved');
+      status.textContent = unsent ? 'Recorded, alert not sent' : 'Recorded';
+      button.textContent = 'Saved';
+      button.disabled = false;
+      onChange();
+      if (!quiet) {
+        if (unsent) {
+          toast(`Recorded ${item.product_name}, but ${unsent} alert(s) could not be sent. `
+            + 'They are retried on the next run; expired ones are lost.', 'bad');
+        } else {
+          toast(`Recorded ${item.product_name}.`, 'good');
+        }
       }
-      reload();
+      return { result: 'saved', unsent };
     } catch (err) {
-      toast(`Could not record it: ${err.message}`, 'bad');
-      save.disabled = false;
+      status.textContent = 'Not recorded';
+      button.disabled = false;
+      if (!quiet) toast(`Could not record ${item.product_name}: ${err.message}`, 'bad');
+      return { result: 'failed', unsent: 0, error: err.message };
     }
-  });
+  };
+  button.addEventListener('click', () => row.save());
+
   const open = /^https?:\/\//i.test(item.url || '')
     ? h('a', { href: item.url, target: '_blank', rel: 'noopener noreferrer', text: 'Open page' })
     : h('span', { class: 'muted', text: 'no link' });
-  return h('tr', {},
+  row.append(
     h('td', { text: item.product_name }),
     h('td', { class: 'age', text: ageWords(item.age_hours) }),
-    h('td', {}, open), h('td', {}, price), h('td', {}, stock), h('td', {}, save));
+    h('td', {}, open), h('td', {}, price), h('td', {}, stock), h('td', {}, button, status));
+  return row;
 }
 
 async function loadManualBanner() {
@@ -2344,30 +2378,55 @@ async function loadManualBanner() {
     toast(`Could not load the list of retailers to check by hand: ${err.message}`, 'bad');
     return;
   }
-  // Saving a row rebuilds the banner; keep it open if the person had it open, or they
-  // would have to reopen it after every price.
-  const wasOpen = Boolean(box.querySelector('details[open]'));
   box.replaceChildren();
   if (!retailers.length) { box.hidden = true; return; }
-  const count = retailers.reduce((n, r) => n + r.listings.filter(x => x.due).length, 0);
   const overdue = retailers.some(r => r.overdue);
+  const names = retailers.map(r => r.name).join(' and ');
   const details = h('details', { class: overdue ? 'overdue' : '' });
-  if (overdue || wasOpen) details.setAttribute('open', '');
-  details.append(h('summary', {
-    text: `${count} price${count === 1 ? '' : 's'} to check by hand at `
-      + retailers.map(r => r.name).join(' and ')
-      + (overdue ? ' (overdue: the Pi-watch alarm is firing)' : '')
-  }));
+  if (overdue) details.setAttribute('open', '');
+  const summary = h('summary');
+  details.append(summary);
+  const rows = [];
   for (const retailer of retailers) {
     details.append(h('h4', {
       text: retailer.name + (retailer.reason ? ` - ${retailer.reason}` : '')
     }));
     const table = h('table');
     for (const item of retailer.listings.filter(x => x.due)) {
-      table.append(manualRow(item, loadManualBanner));
+      const row = manualRow(item, () => refresh());
+      rows.push(row);
+      table.append(row);
     }
     details.append(table);
   }
+  // The banner is only rebuilt on page load. Saving a row changes that row and this line,
+  // nothing else, so prices typed into other rows are never lost.
+  function refresh() {
+    const left = rows.filter(r => !r.manualSaved).length;
+    summary.textContent = left
+      ? `${left} price${left === 1 ? '' : 's'} to check by hand at ${names}`
+        + (overdue ? ' (overdue: the Pi-watch alarm is firing)' : '')
+      : `All ${rows.length} recorded. This clears on the next page load.`;
+    saveAll.disabled = !left;
+  }
+  const saveAll = h('button', { type: 'button', class: 'primary small', text: 'Save all' });
+  saveAll.addEventListener('click', async () => {
+    const todo = rows.filter(r => !r.manualSaved);
+    saveAll.disabled = true;
+    let saved = 0, failed = 0, skipped = 0, unsent = 0;
+    for (const row of todo) {
+      const out = await row.save(true);
+      if (out.result === 'saved') { saved += 1; unsent += out.unsent; }
+      else if (out.result === 'failed') failed += 1;
+      else skipped += 1;
+    }
+    const parts = [`Recorded ${saved}`];
+    if (skipped) parts.push(`${skipped} left blank`);
+    if (failed) parts.push(`${failed} failed`);
+    if (unsent) parts.push(`${unsent} alert(s) not sent`);
+    toast(parts.join(', ') + '.', failed || unsent ? 'bad' : 'good');
+    refresh();
+  });
   const copy = h('button', { type: 'button', class: 'small', text: 'Copy prompt for Claude in Chrome' });
   copy.addEventListener('click', async () => {
     try {
@@ -2375,7 +2434,8 @@ async function loadManualBanner() {
       toast('Copied. Paste it into a Claude Code session with Claude in Chrome.', 'good');
     } catch (err) { toast(`Could not copy: ${err.message}`, 'bad'); }
   });
-  details.append(h('div', { class: 'actions' }, copy));
+  details.append(h('div', { class: 'actions' }, saveAll, copy));
+  refresh();
   box.append(details);
   box.hidden = false;
 }

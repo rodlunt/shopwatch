@@ -1,6 +1,6 @@
-# Next session brief: 6/11/2026 (Pi watch: four retailers checked by hand)
+# Next session brief: 7/11/2026 (Pi watch: four retailers checked by hand)
 
-Supersedes the 28 Oct brief below. Its "429 root cause" (TLS handshake, #134) may have been a symptom of the rule described here; the rest stands as history. **Start from the live system, not this page** (this is what was true on the evening of 6 Nov):
+Supersedes the 28 Oct brief below. Its "429 root cause" (TLS handshake, #134) may have been a symptom of the rule described here; the rest stands as history. **Start from the live system, not this page** (this is what was true on 7 Nov):
 
 ```
 git status -sb && gh pr list --state open
@@ -9,7 +9,9 @@ ssh opti "curl -s localhost:8477/api/manual-retailers"
 ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_SHA'))\""
 ```
 
-## What shipped (VERIFIED on opti: container on 1484a59, health `ok` exit 0, `shopwatch-pi-health.service` inactive)
+## What shipped (VERIFIED on opti 7 Nov: container on c31d5be, healthy, health `ok` exit 0, `shopwatch-pi-health.service` inactive)
+
+- **7 Nov follow-ups, all merged with regular merges and deployed:** #144 baton points at the supplier research filed in `rodlunt/bark-marker-business` (`docs/sourcing/oem-supply-research-2026-11.md`, PR #9). #145 two review findings reproduced then fixed, with tests that fail on the old code: `availability.normalise` now checks low-stock wording before in-stock (so "In stock - only a few left" is limited), and `_MODEL_B_RE` needs a word boundary after `b` ("Model Bluetooth" is no longer a plain Model B). #146 the header nav wraps, so 390 px no longer overflows (page 390 wide; 470 with wrapping off; 1280 px stays one row). #148 (c31d5be) banner Save records that row only and marks it Recorded in place (before, it rebuilt the banner, dropping the saved row and wiping prices typed into the others), plus a Save all that records every row with a price and reports recorded, blank, failed and unsent-alert counts. The banner JS has no automated tests; it was checked by hand in a browser.
 
 - **#140** (178accd) retailers can be marked **checked by hand** (`retailers.manual_since`, migration 0017). The scraper and the adapter-health check skip them. A banner under the header on every page appears after 24 h without a check, with price and stock boxes and a "Copy prompt for Claude in Chrome" button (text only, nothing runs by itself). A manual listing unchecked for 168 h raises the Pi-watch fault (hourly ntfy); the clock runs from the later of the last check and the moment it went manual. `POST /api/retailers/{listing_id}/manual-check` records price and stock as source `manual-check`, unlocked, through the usual history and Pi alert events; it never counts as a scraper success. Retailers page has "Check by hand" / "Back to automatic".
 - **#141** (1484a59) wording: the cause is Shopify's bot protection, not Cloudflare. Migration 0018 rewrote the stored reason.
@@ -23,20 +25,16 @@ ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_
 
 ## Open follow-ups
 
-- Record the first manual checks: Pakronics (4 listings), Raspberry Pi Australia (3) and Small Devices (1) were due on the evening of 6 Nov. If none is recorded, the fault returns from about 13 Nov (evening AEST).
+- **First manual checks recorded 7 Nov 02:04Z (12:04 AEST)** by Rodney using Claude in Chrome: nine `manual-check` rows in one batch (Pakronics 51, 66, 53, 56; Raspberry Pi Australia 65, 54, 57; Small Devices 59; Zaitronics 58), plus listing 51 again at 02:08:58Z. Every price and stock status equals the previous scraper reading (all out of stock except Pi Australia's Pi 3 B+ in stock); plausible, but not independently checked against the pages. That reset the staleness clock, so the Pi-watch fault now returns about **14 Nov (evening AEST)** unless the next checks are recorded. Banner: `curl -s localhost:8477/api/manual-retailers` on opti lists listing ids and URLs.
 - Back-in-stock and price-drop alerts for those four retailers now only fire when a check is recorded.
 - Try "Back to automatic" on Zaitronics now and then, and watch `/api/price-watch/runs` for a 200.
-- UNVERIFIED review findings on code outside #140 (the reviewer read a stale base): `_MODEL_B_RE` in `pi_base.py` has no word boundary after `b`; `availability._LOW` runs after `_IN` so "In stock - only a few left" stays in stock; `tools/add_pi3_bplus.py` hardcodes the category "Barkmarker". Confirm before fixing.
-- Pre-existing: the header nav overflows sideways at 390 px (layout width 470 px), with or without the banner.
+- **Amazon AU is ignored on purpose (Rodney, 7 Nov).** Listing 61 (Raspberry Pi 2GB) has no scraper (`no adapter for this retailer`, so the run reports it as skipped), is not marked manual, and has never been checked. It has no staleness alarm. The CRM Units page shows it as "Needs a hand check", which is accurate. Do not raise it again unless he asks.
+- The three review findings are settled: two were real and fixed in #145; `tools/add_pi3_bplus.py` hardcoding "Barkmarker" is not a bug (it equals the `SHOPWATCH_PI_CATEGORY` default), so it was left alone.
 - Gotchas met: CI pins `ruff==0.8.6` and lints `.`; run `uv run --no-project --with ruff==0.8.6 ruff check .` before pushing (a newer local ruff passed UP038 and CI failed #140). Tests: `uv run --no-project --with-requirements requirements.txt --with-requirements requirements-dev.txt python -m pytest`. The startup seed re-adds an adapter to any retailer without one, which is why "manual" is its own flag.
 
-## Also from this session, not shopwatch: supplier research for Bark Marker (belongs in the bark-marker-business repo)
+## Also from this session, not shopwatch: supplier research for Bark Marker
 
-Sonnet research agent, 6 Nov. **Only two pages were read directly** (Raspberry Pi reseller list, one Little Bird page); Core Electronics, raspberrypi.com and RS blocked fetches, so every price below is UNVERIFIED search-summary data. Recheck before ordering.
-
-- **Shortlist for quotes:** RS Components AU (only published volume break: Pi 4 4GB about A$99 ex GST at 10+), Core Electronics, Little Bird (Net 30 on approved accounts, quotes page), PB Tech business, DigiKey AU (franchised, for pSLC cards), Raspberry Pi Ltd sales (the reseller page says business buyers can buy some products direct).
-- **microSD 64GB:** SanDisk MAX Endurance about A$29 to A$35 inc GST at PB Tech, Techbuy and VTech Industries (PB Tech out of stock when seen). Industrial pSLC (Kingston, ATP, Delkin, Transcend) quoted A$183 to A$340 each, which looks too high. Marketplaces (Amazon, MyDeal, Reebelo) are a counterfeit risk. Whether pSLC is worth 5 to 10 times the price depends on the logger's write rate, which has not been measured.
-- **Pi:** Little Bird's Pi 4 4GB page says "no longer stock"; check whether Pi 4 is still a product to build on before committing a run. Compute Module is not worth it at 10 to 100 units (PiShop sells CM4 in 250s). No current official OEM page found. Pakronics, Altronics, element14 AU and PiShop AU were not checked.
+Filed in the private repo `rodlunt/bark-marker-business` at `docs/sourcing/oem-supply-research-2026-11.md` (PR #9, merged as `95a6cb5`). Only two pages were read directly, so every price in it is UNVERIFIED. Recheck before ordering.
 
 ---
 
