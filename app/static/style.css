@@ -870,6 +870,8 @@ details.menu[open] > summary { border-color: var(--muted); }
 .manual-banner td { padding: 5px 8px 5px 0; vertical-align: middle; font-size: 13px; }
 .manual-banner td.age { white-space: nowrap; color: var(--ink-soft); }
 .manual-banner input[type=number] { width: 7.5em; }
+.manual-banner tr.saved { opacity: 0.7; }
+.manual-banner .manual-status { margin-left: 8px; }
 .manual-banner .actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 720px) {
   .manual-banner { padding: 0 12px; }  /* main's gutter at this width */
