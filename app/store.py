@@ -106,6 +106,35 @@ def list_retailers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def set_retailer_manual(
+    conn: sqlite3.Connection, retailer_id: int, manual: bool, reason: str | None = None
+) -> dict[str, Any] | None:
+    """Mark a retailer as checked by a person (True) or back to its scraper (False).
+
+    A manual retailer is skipped by the watcher and the adapter-health check, and is
+    covered by the manual staleness alarm instead. Going back to automatic clears the
+    flag only: the retailer's listings, prices and history are untouched. Returns the
+    updated row, or None if retailer_id does not exist. Idempotent: marking an already
+    manual retailer keeps its original manual_since, so the staleness clock is not reset
+    by a repeated click.
+    """
+    row = conn.execute("SELECT * FROM retailers WHERE id = ?", (retailer_id,)).fetchone()
+    if row is None:
+        return None
+    if manual:
+        if row["manual_since"] is None:
+            conn.execute(
+                "UPDATE retailers SET manual_since = ?, manual_reason = ? WHERE id = ?",
+                (utcnow(), (reason or "").strip()[:300] or None, retailer_id),
+            )
+    else:
+        conn.execute(
+            "UPDATE retailers SET manual_since = NULL, manual_reason = NULL WHERE id = ?",
+            (retailer_id,),
+        )
+    return dict(conn.execute("SELECT * FROM retailers WHERE id = ?", (retailer_id,)).fetchone())
+
+
 def set_retailer_excluded(
     conn: sqlite3.Connection, retailer_id: int, excluded: bool
 ) -> dict[str, Any] | None:
@@ -342,7 +371,7 @@ def listings_for_product(
     where = "WHERE l.product_id = ?" + ("" if include_inactive else " AND l.active = 1")
     rows = conn.execute(
         "SELECT l.*, r.name AS retailer_name, r.slug AS retailer_slug,"
-        " r.adapter AS retailer_adapter"
+        " r.adapter AS retailer_adapter, r.manual_since AS retailer_manual_since"
         " FROM listings l JOIN retailers r ON r.id = l.retailer_id "
         + where,
         (product["id"],),
