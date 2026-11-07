@@ -101,9 +101,10 @@ def test_marking_manual_twice_keeps_the_original_clock(db):
     with dbmod.session(db) as conn:
         r = store.ensure_retailer(conn, "Zaitronics", adapter="zaitronics")
         store.set_retailer_manual(conn, r["id"], True, "first")
-        conn.execute("UPDATE retailers SET manual_since = ? WHERE id = ?", (ago(100), r["id"]))
+        original = ago(100)  # once: two calls can straddle a clock second and differ
+        conn.execute("UPDATE retailers SET manual_since = ? WHERE id = ?", (original, r["id"]))
         again = store.set_retailer_manual(conn, r["id"], True, "second")
-    assert again["manual_since"] == ago(100) and again["manual_reason"] == "first"
+    assert again["manual_since"] == original and again["manual_reason"] == "first"
 
 
 # ---------------------------------------------------------- the scraper and the health check
