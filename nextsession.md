@@ -1,3 +1,43 @@
+# Next session brief: 7/11/2026 (Pi watch: four retailers checked by hand)
+
+Supersedes the 28 Oct brief below. Its "429 root cause" (TLS handshake, #134) may have been a symptom of the rule described here; the rest stands as history. **Start from the live system, not this page** (this is what was true on 7 Nov):
+
+```
+git status -sb && gh pr list --state open
+ssh opti 'docker exec shopwatch python -m app.pi_health; echo exit $?'
+ssh opti "curl -s localhost:8477/api/manual-retailers"
+ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_SHA'))\""
+```
+
+## What shipped (VERIFIED on opti 7 Nov: container on c31d5be, healthy, health `ok` exit 0, `shopwatch-pi-health.service` inactive)
+
+- **7 Nov follow-ups, all merged with regular merges and deployed:** #144 baton points at the supplier research filed in `rodlunt/bark-marker-business` (`docs/sourcing/oem-supply-research-2026-11.md`, PR #9). #145 two review findings reproduced then fixed, with tests that fail on the old code: `availability.normalise` now checks low-stock wording before in-stock (so "In stock - only a few left" is limited), and `_MODEL_B_RE` needs a word boundary after `b` ("Model Bluetooth" is no longer a plain Model B). #146 the header nav wraps, so 390 px no longer overflows (page 390 wide; 470 with wrapping off; 1280 px stays one row). #148 (c31d5be) banner Save records that row only and marks it Recorded in place (before, it rebuilt the banner, dropping the saved row and wiping prices typed into the others), plus a Save all that records every row with a price and reports recorded, blank, failed and unsent-alert counts. The banner JS has no automated tests; it was checked by hand in a browser.
+
+- **#140** (178accd) retailers can be marked **checked by hand** (`retailers.manual_since`, migration 0017). The scraper and the adapter-health check skip them. A banner under the header on every page appears after 24 h without a check, with price and stock boxes and a "Copy prompt for Claude in Chrome" button (text only, nothing runs by itself). A manual listing unchecked for 168 h raises the Pi-watch fault (hourly ntfy); the clock runs from the later of the last check and the moment it went manual. `POST /api/retailers/{listing_id}/manual-check` records price and stock as source `manual-check`, unlocked, through the usual history and Pi alert events; it never counts as a scraper success. Retailers page has "Check by hand" / "Back to automatic".
+- **#141** (1484a59) wording: the cause is Shopify's bot protection, not Cloudflare. Migration 0018 rewrote the stored reason.
+- **#139 closed unmerged.** Firecrawl fallback (direct 429, then Firecrawl). It works but needs a network path from the container to Firecrawl, which binds opti's `127.0.0.1:3002` (container timed out reaching it). Branch `feat/pi-firecrawl-fallback` is kept. Do not join the container to `firecrawl_backend` (it also holds Redis, RabbitMQ and Postgres). If wanted, the least-privilege design is a separate compose project: a Caddy gate (`caddy-cloudflare:2.11` is already on opti) forwarding only `POST /v1/scrape` to `api:3002`, with a private network shared with shopwatch only. Rodney does not want his content-generator Firecrawl stack touched.
+- **Data, not code:** Pakronics and Raspberry Pi Australia were marked manual by `PATCH /api/retailer/{id}` at deploy, so they have no migration row. Small Devices and Zaitronics were marked by 0017.
+
+## State
+
+- Scraped: Core Electronics, Little Bird, PB Tech (healthy). Checked by hand: Pakronics, Raspberry Pi Australia, Small Devices, Zaitronics.
+- Cause, **VERIFIED on opti 6 Nov:** the 429 body is the text `local_rate_limited` with Shopify's `x-dc` and `x-request-id` headers (`server: cloudflare` is only the CDN). 6 of 6 spaced requests refused; a browser User-Agent alone still 429; Firecrawl's headless browser 200 from the same IP. So it is the client being judged, not the pace, the User-Agent or the IP. Third parties report Shopify began this around July 2026 and is still tuning it; the sanctioned way past is Web Bot Auth signed headers, generated per store by the merchant. **UNKNOWN:** why it worsened on 3 Nov; why Little Bird and PB Tech still work. Zaitronics got through once (5 Nov 21:16 run), so retailers may recover.
+
+## Open follow-ups
+
+- **First manual checks recorded 7 Nov 02:04Z (12:04 AEST)** by Rodney using Claude in Chrome: nine `manual-check` rows in one batch (Pakronics 51, 66, 53, 56; Raspberry Pi Australia 65, 54, 57; Small Devices 59; Zaitronics 58), plus listing 51 again at 02:08:58Z. Every price and stock status equals the previous scraper reading (all out of stock except Pi Australia's Pi 3 B+ in stock); plausible, but not independently checked against the pages. That reset the staleness clock, so the Pi-watch fault now returns about **14 Nov (evening AEST)** unless the next checks are recorded. Banner: `curl -s localhost:8477/api/manual-retailers` on opti lists listing ids and URLs.
+- Back-in-stock and price-drop alerts for those four retailers now only fire when a check is recorded.
+- Try "Back to automatic" on Zaitronics now and then, and watch `/api/price-watch/runs` for a 200.
+- **Amazon AU is ignored on purpose (Rodney, 7 Nov).** Listing 61 (Raspberry Pi 2GB) has no scraper (`no adapter for this retailer`, so the run reports it as skipped), is not marked manual, and has never been checked. It has no staleness alarm. The CRM Units page shows it as "Needs a hand check", which is accurate. Do not raise it again unless he asks.
+- The three review findings are settled: two were real and fixed in #145; `tools/add_pi3_bplus.py` hardcoding "Barkmarker" is not a bug (it equals the `SHOPWATCH_PI_CATEGORY` default), so it was left alone.
+- Gotchas met: CI pins `ruff==0.8.6` and lints `.`; run `uv run --no-project --with ruff==0.8.6 ruff check .` before pushing (a newer local ruff passed UP038 and CI failed #140). Tests: `uv run --no-project --with-requirements requirements.txt --with-requirements requirements-dev.txt python -m pytest`. The startup seed re-adds an adapter to any retailer without one, which is why "manual" is its own flag.
+
+## Also from this session, not shopwatch: supplier research for Bark Marker
+
+Filed in the private repo `rodlunt/bark-marker-business` at `docs/sourcing/oem-supply-research-2026-11.md` (PR #9, merged as `95a6cb5`). Only two pages were read directly, so every price in it is UNVERIFIED. Recheck before ordering.
+
+---
+
 # Next session brief: 28/10/2026 (Pi watch: 429 root cause, stock parsing, specs)
 
 Supersedes the 27 Oct brief below. The 27 Oct "429 from opti" follow-up and the "Rasberry" typo are done; the rest of that brief still stands as history.

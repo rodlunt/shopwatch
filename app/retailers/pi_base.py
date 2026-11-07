@@ -58,7 +58,7 @@ _RAM_RE = re.compile(r"(?<![\d.])(\d{1,2})\s*gb\b", re.IGNORECASE)
 _GEN_RE = re.compile(r"\bpi\s*®?\s*(\d)\b", re.IGNORECASE)
 _CODE_RE = re.compile(r"^[A-Z]{1,3}\d{3,}$")
 # "Model B", "Model B+", "Model B plus". The group is the plus marker, empty for a plain B.
-_MODEL_B_RE = re.compile(r"\bmodel\s*b(?:\s*(\+|plus\b))?", re.IGNORECASE)
+_MODEL_B_RE = re.compile(r"\bmodel\s*b(?![a-z0-9])(?:\s*(\+|plus\b))?", re.IGNORECASE)
 
 
 def ram_of(*texts: str | None) -> str | None:

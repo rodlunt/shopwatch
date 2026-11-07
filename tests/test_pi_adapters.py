@@ -397,3 +397,19 @@ def test_it_keeps_trying_through_two_throttles_then_succeeds(net):
     routes[URL] = [throttled, throttled, Resp(200, page("zaitronics_pi4_2gb_lead_time.html"))]
     assert get_adapter("zaitronics").check(URL, "SC0193", "Pi 4 2GB").advertised_price == 88.0
     assert [c[0] for c in calls].count(URL) == 3
+
+
+def test_in_stock_with_low_stock_wording_is_limited():
+    from app.availability import LIMITED, normalise
+
+    assert normalise("In stock - only a few left").state == LIMITED
+    assert normalise("In stock").state != LIMITED
+
+
+def test_model_b_needs_a_word_boundary():
+    from app.retailers.pi_base import model_b_plus
+
+    assert model_b_plus("Raspberry Pi 3 Model B+") is True
+    assert model_b_plus("Raspberry Pi 3 Model B plus") is True
+    assert model_b_plus("Raspberry Pi 3 Model B") is False
+    assert model_b_plus("Pi Model Bluetooth kit") is None

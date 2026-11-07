@@ -1087,6 +1087,56 @@ Pi 3 B+ board, so they have no listing. Little Bird's hostname needs adding to e
 * A bot interstitial, a 403 or a 429 is a failure that stops the adapter for that run.
   Nothing here defeats a CAPTCHA or an anti-bot measure.
 
+### Retailers checked by hand
+
+A retailer can be marked **checked by hand** (Retailers page, "Check by hand"; or
+`PATCH /api/retailer/{id}` with `{"manual": true}`). The scraper skips it and the
+adapter-health check ignores it. It is its own flag, `retailers.manual_since`, and not
+`adapter = NULL`, because the startup seed puts an adapter back on any retailer that has
+none.
+
+Migration 0017 marked `small_devices` and `zaitronics` this way, and `pakronics` and
+`raspberry_pi_australia` were marked at deploy (6 Nov 2026) for the same reason: **Shopify's
+bot protection**. Their storefronts answer the honest direct fetch with HTTP 429 and the body
+`local_rate_limited` (Shopify's own `x-dc` and `x-request-id` headers; `server: cloudflare` is
+only the CDN in front). Measured on opti on 2026-11-06: 6 of 6 spaced requests refused, a
+browser User-Agent string alone still refused (so it is not the User-Agent), and a headless
+browser got 200 from the same IP (so it is not an IP ban). Third parties report Shopify began
+doing this to unrecognised automated clients from about July 2026; the sanctioned way past it
+is signed Web Bot Auth headers, which each store's merchant generates, so it is not open to
+us. Why it worsened on 3 Nov, and why Little Bird and PB Tech still work, is not known.
+Zaitronics got through once on 5 Nov, so a retailer may recover: "Back to automatic" on the
+Retailers page undoes the flag.
+
+At a few pages a day a headless browser, and the network path to it, were not worth building.
+The branch `feat/pi-firecrawl-fallback` (PR #139, closed unmerged) holds that fallback if it
+is ever wanted.
+
+**Going manual never means going unwatched.**
+
+* After `SHOPWATCH_MANUAL_NUDGE_HOURS` (24) without a check the dashboard shows a banner under
+  the header, on every page, with an "Open page" link and a price and stock box per listing.
+  "Copy prompt for Claude in Chrome" copies text for a Claude Code session that has Claude in
+  Chrome; it never runs by itself, and it tells Claude to confirm the browser first.
+* After `SHOPWATCH_MANUAL_STALE_HOURS` (168, a week) the Pi-watch health check raises a fault,
+  so the hourly ntfy fires until someone records a check. The alarm clock runs from the later
+  of the listing's last check and the moment the retailer went manual, so flipping the flag
+  gives a full week for a first check; the banner still shows the data's real age. Products
+  bought inside an open price-protection window are covered, as the scraper covered them.
+* `GET /api/manual-retailers` lists them with each listing's age.
+
+A check is recorded with `POST /api/retailers/{listing_id}/manual-check`, body
+`{"price": 59.95, "availability": "in_stock"}` (`in_stock`, `limited`, `dispatch_later`,
+`backorder` or `out_of_stock`). It is stored as source `manual-check`, **not locked** (the
+scraper may update it if the retailer goes back to automatic), and goes through the same
+history, price-change and Pi alert events as a scraper reading, so a back-in-stock or a price
+drop still alerts. The first manual reading is a baseline and says nothing, as for a scraper.
+A manual check never counts as a successful scraper check, so it cannot make the watch look
+healthy. The check is refused for a listing that is switched off, for a retailer the scraper
+still owns, and for a hand-locked price, rather than writing over any of them. The response
+reports alert delivery (`alerts.failed`, `alerts.expired`), and the banner says so when an
+alert could not be sent.
+
 ### What a failure means
 
 An adapter returns a reading or raises. No price, a zero price, a layout that has moved, a

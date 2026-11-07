@@ -74,10 +74,11 @@ def normalise(text: str | None, schema: str | None = None) -> Availability:
         return Availability(BACKORDER)
     if _LATER.search(lowered) and not _IN.search(lowered):
         return Availability(DISPATCH_LATER)
+    if _LOW.search(lowered):
+        # Before _IN: "In stock - only a few left" is low stock, not plain in stock.
+        return Availability(LIMITED, limit)
     if _IN.search(lowered):
         return Availability(LIMITED, limit) if limit else Availability(IN_STOCK)
-    if _LOW.search(lowered):
-        return Availability(LIMITED, limit)
 
     key = (schema or "").split("/")[-1].lower().replace("_", "")
     if key == "instock":
