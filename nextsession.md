@@ -9,7 +9,7 @@ ssh opti "curl -s localhost:8477/api/manual-retailers"
 ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_SHA'))\""
 ```
 
-## What shipped (VERIFIED on opti 7 Nov: container on c31d5be, healthy, health `ok` exit 0, `shopwatch-pi-health.service` inactive)
+## What shipped (VERIFIED on opti 7 Nov: container on 0b0c40d, healthy, health `ok` exit 0, `shopwatch-pi-health.service` inactive)
 
 - **7 Nov follow-ups, all merged with regular merges and deployed:** #144 baton points at the supplier research filed in `rodlunt/bark-marker-business` (`docs/sourcing/oem-supply-research-2026-11.md`, PR #9). #145 two review findings reproduced then fixed, with tests that fail on the old code: `availability.normalise` now checks low-stock wording before in-stock (so "In stock - only a few left" is limited), and `_MODEL_B_RE` needs a word boundary after `b` ("Model Bluetooth" is no longer a plain Model B). #146 the header nav wraps, so 390 px no longer overflows (page 390 wide; 470 with wrapping off; 1280 px stays one row). #148 (c31d5be) banner Save records that row only and marks it Recorded in place (before, it rebuilt the banner, dropping the saved row and wiping prices typed into the others), plus a Save all that records every row with a price and reports recorded, blank, failed and unsent-alert counts. The banner JS has no automated tests; it was checked by hand in a browser.
 
@@ -25,6 +25,7 @@ ssh opti "docker exec shopwatch python -c \"import os;print(os.environ.get('GIT_
 
 ## Open follow-ups
 
+- **Also merged 7 Nov:** #151 fixed a flaky test of mine (`test_marking_manual_twice_keeps_the_original_clock` called `ago(100)` twice, which differs when a clock second ticks; CI failed a docs-only PR on it). Dependabot #137 (`setup-python` 7.1.0, SHA verified as the v7.1.0 tag commit), #138 (`starlette>=1.10.0`) and #143 (`python-multipart>=0.0.33`) merged; the floors only match what the container already ran (starlette 1.10.0, python-multipart 0.0.33, fastapi 0.162.0). No open PRs or issues remain. Local branch `feat/pi3-b-plus-watch` has no upstream but is merged into main (left alone).
 - **First manual checks recorded 7 Nov 02:04Z (12:04 AEST)** by Rodney using Claude in Chrome: nine `manual-check` rows in one batch (Pakronics 51, 66, 53, 56; Raspberry Pi Australia 65, 54, 57; Small Devices 59; Zaitronics 58), plus listing 51 again at 02:08:58Z. Every price and stock status equals the previous scraper reading (all out of stock except Pi Australia's Pi 3 B+ in stock); plausible, but not independently checked against the pages. That reset the staleness clock, so the Pi-watch fault now returns about **14 Nov (evening AEST)** unless the next checks are recorded. Banner: `curl -s localhost:8477/api/manual-retailers` on opti lists listing ids and URLs.
 - Back-in-stock and price-drop alerts for those four retailers now only fire when a check is recorded.
 - Try "Back to automatic" on Zaitronics now and then, and watch `/api/price-watch/runs` for a 200.
